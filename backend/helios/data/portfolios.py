@@ -238,7 +238,8 @@ MORTGAGE = PortfolioSpec(
     lgd_zero_intercept=0.25,
     expected_signs={
         "current_ltv": 1, "original_ltv": 1, "fico_orig": -1, "dti": 1,
-        "annual_income": -1, "hpi_yoy": -1, "unemployment_rate": 1, "mortgage_rate": 1,
+        "annual_income": -1, "hpi_yoy": -1, "unemployment_rate": 1,
+        "mortgage_rate": 1, "hpi": -1,
     },
     dynamics=mortgage_dynamics,
 )

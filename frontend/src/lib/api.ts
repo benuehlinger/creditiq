@@ -250,6 +250,7 @@ export interface FitRequest {
   oot_from?: string
   downsample_rows?: number | null
   label?: string | null
+  parent_hash?: string | null
 }
 
 export interface EclScenario {
@@ -291,6 +292,46 @@ export interface EclRequest extends FitRequest {
   fixed_ccf?: number | null
   cpr?: number
   cap_to_fitted_range?: boolean
+}
+
+export interface VersionRecord {
+  hash: string; name: string; portfolio: string; created_at: string
+  spec: Record<string, any>; metrics: Record<string, any>; ecl: Record<string, any>
+  status: 'champion' | 'challenger' | 'archived'
+  starred: boolean; tags: string[]; notes: string
+  parent_hash: string | null; author: string
+}
+
+export interface CompareResult {
+  versions: VersionRecord[]
+  metrics: { key: string; label: string; better: 'up' | 'down'; values: (number | null)[] }[]
+  variables: {
+    all: string[]; shared: string[]
+    per_version: Record<string, string[]>
+    added: Record<string, string[]>; missing: Record<string, string[]>
+  }
+  coefficients: { variable: string; values: (number | null)[]; sign_flip: boolean }[]
+}
+
+export interface RollUpResponse {
+  scenarios: string[]
+  portfolios: {
+    portfolio: PortfolioKey; label: string; accent_slot: number
+    model_name: string; model_hash: string; from_champion: boolean
+    ead_method: string; ead_ccf: number | null
+    n_accounts: number; exposure: number
+    by_scenario: Record<string, { ecl: number; ecl_bps: number; pd_12m: number; lgd: number }>
+    capped: boolean; extrapolation_flags: string[]
+  }[]
+  totals: Record<string, { ecl: number; exposure: number; ecl_bps: number
+                           weighted_pd_12m: number; weighted_lgd: number }>
+  monthly: Record<string, any>[]
+  tornado: { portfolio: string; mev: string; prior: number; direction: string
+             base_ecl: number; shocked_ecl: number; delta_ecl: number; delta_pct: number }[]
+  concentration: Record<string, { band: string; exposure: number; share: number }[]>
+  champions: Record<string, VersionRecord | null>
+  timings: Record<string, number>
+  note: string
 }
 
 export const api = {
@@ -361,4 +402,29 @@ export const api = {
     fetch(`/api/scenarios/${name}/editable?keys=${keys.join(',')}`).then((r) => r.json()) as
       Promise<{ scenario: string; published: boolean; note: string
                 series: Record<string, { quarter: string; value: number }[]> }>,
+  versions: (portfolio?: string) =>
+    get<VersionRecord[]>('/versions', { portfolio }),
+  saveVersion: async (req: EclRequest & { notes?: string; tags?: string[]; with_ecl?: boolean }) => {
+    const r = await fetch('/api/versions', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(req),
+    })
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? r.statusText)
+    return r.json() as Promise<VersionRecord>
+  },
+  compareVersions: (hashes: string[]) =>
+    get<CompareResult>('/versions/compare', { hashes: hashes.join(',') }),
+  lineage: (portfolio: string) =>
+    get<{ nodes: { hash: string; name: string; status: string; created_at: string
+                   starred: boolean; auc: number | null; n_variables: number }[]
+          edges: { from: string; to: string }[] }>('/versions/lineage', { portfolio }),
+  patchVersion: (hash: string, params: Record<string, string | boolean>) =>
+    fetch(`/api/versions/${hash}?` + new URLSearchParams(
+      Object.entries(params).map(([k, v]) => [k, String(v)])).toString(),
+      { method: 'PATCH' }).then((r) => r.json()) as Promise<VersionRecord>,
+  promoteVersion: (hash: string) =>
+    fetch(`/api/versions/${hash}/promote`, { method: 'POST' }).then((r) => r.json()) as Promise<VersionRecord>,
+  deleteVersion: (hash: string) =>
+    fetch(`/api/versions/${hash}`, { method: 'DELETE' }).then((r) => r.json()),
+  rollup: () => get<RollUpResponse>('/rollup'),
 }

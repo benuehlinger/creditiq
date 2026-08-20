@@ -14,7 +14,7 @@ import { month, num, pct, usd } from '../lib/format'
 
 const DEFAULT_MEVS: Record<string, string[]> = {
   consumer: ['unemployment_rate', 'real_disp_income_growth'],
-  mortgage: ['hpi_yoy', 'unemployment_rate'],
+  mortgage: ['unemployment_rate'],
   cre: ['cre_price_index_yoy', 'bbb_yield'],
 }
 const ORDER = ['baseline', 'adverse', 'severely_adverse']

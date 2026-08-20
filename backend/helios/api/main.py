@@ -679,3 +679,151 @@ def editable_scenario(name: str, keys: str = Query(...)):
                          for d, v in q[base].items()]
     return _jsonable({"scenario": name, "published": sc[name].published,
                       "note": sc[name].note, "series": out})
+
+
+# ── versions ─────────────────────────────────────────────────────────────────
+from ..models import versions as vstore                                 # noqa: E402
+
+
+class SaveVersionRequest(EclRequest):
+    notes: str = ""
+    tags: list[str] = []
+    with_ecl: bool = False
+
+
+def _metrics_for(r) -> dict:
+    d = r.diagnostics
+    cal = d.get("calibration", {}).get("bins", [])
+    err = (sum(abs(b["predicted"] - b["observed"]) for b in cal) / len(cal)) if cal else None
+    return {
+        "auc_test": (d.get("test") or {}).get("auc"),
+        "auc_oot": (d.get("oot") or {}).get("auc"),
+        "ks_test": (d.get("test") or {}).get("ks"),
+        "gini_test": (d.get("test") or {}).get("gini"),
+        "log_loss_test": (d.get("test") or {}).get("log_loss"),
+        "brier_test": (d.get("test") or {}).get("brier"),
+        "calibration_error": err,
+        "mcfadden_r2": d.get("mcfadden_r2"),
+        "n_variables": len(r.spec.variables),
+        "n_mevs": len(r.spec.mevs),
+        "estimator": r.spec.estimator,
+        "coefficients": {c.name: c.estimate for c in r.fit.coefficients},
+    }
+
+
+@app.post("/api/versions")
+def save_version(req: SaveVersionRequest):
+    spec = req.to_spec()
+    run = modelsvc.run(spec)
+    ecl_summary: dict = {}
+    if req.with_ecl:
+        try:
+            sr = scensvc.run(spec, cap_to_fitted_range=req.cap_to_fitted_range)
+            ecl_summary = {f"ecl_{k}": v.ecl for k, v in sr.results.items()}
+            ecl_summary |= {f"ecl_bps_{k}": v.ecl_bps for k, v in sr.results.items()}
+            ecl_summary["weighted_ecl"] = sr.weighted_ecl
+        except Exception as e:                                          # noqa: BLE001
+            ecl_summary = {"error": f"{type(e).__name__}: {e}"}
+    v = vstore.save(spec, _metrics_for(run), ecl_summary, label=req.label,
+                    notes=req.notes, tags=req.tags, parent_hash=req.parent_hash)
+    return _jsonable(v.to_dict())
+
+
+@app.get("/api/versions")
+def list_versions(portfolio: str | None = None):
+    return _jsonable([v.to_dict() for v in vstore.list_all(portfolio)])
+
+
+@app.get("/api/versions/compare")
+def compare_versions(hashes: str = Query(...)):
+    hs = [h.strip() for h in hashes.split(",") if h.strip()][:4]
+    if len(hs) < 2:
+        raise HTTPException(400, "select at least two versions to compare")
+    return _jsonable(vstore.compare(hs))
+
+
+@app.get("/api/versions/lineage")
+def version_lineage(portfolio: str = Query(...)):
+    return _jsonable(vstore.lineage(portfolio))
+
+
+@app.patch("/api/versions/{hash_}")
+def patch_version(hash_: str, name: str | None = None, notes: str | None = None,
+                  starred: bool | None = None, status: str | None = None):
+    v = vstore.update(hash_, name=name, notes=notes, starred=starred, status=status)
+    if v is None:
+        raise HTTPException(404, "unknown version")
+    return _jsonable(v.to_dict())
+
+
+@app.post("/api/versions/{hash_}/promote")
+def promote_version(hash_: str):
+    v = vstore.promote(hash_)
+    if v is None:
+        raise HTTPException(404, "unknown version")
+    return _jsonable(v.to_dict())
+
+
+@app.delete("/api/versions/{hash_}")
+def delete_version(hash_: str):
+    return {"deleted": vstore.delete(hash_)}
+
+
+@app.get("/api/versions/{hash_}/export")
+def export_version(hash_: str):
+    v = vstore.load(hash_)
+    if v is None:
+        raise HTTPException(404, "unknown version")
+    return _jsonable(v.to_dict())
+
+
+@app.post("/api/versions/import")
+def import_version(payload: dict):
+    """Re-run an imported configuration and confirm it reproduces.
+
+    This is the reproducibility claim, checked rather than asserted: the imported
+    spec is refitted from scratch and the metrics are compared with the ones
+    stored in the file.
+    """
+    try:
+        spec = ModelSpec.from_dict(payload["spec"])
+    except Exception as e:                                              # noqa: BLE001
+        raise HTTPException(400, f"not a valid version file: {e}") from e
+    run = modelsvc.run(spec)
+    fresh = _metrics_for(run)
+    stored = payload.get("metrics", {})
+    checks = []
+    for k in ("auc_test", "auc_oot", "ks_test", "gini_test"):
+        a, b = stored.get(k), fresh.get(k)
+        if a is None or b is None:
+            continue
+        checks.append({"metric": k, "stored": a, "refitted": b,
+                       "matches": abs(a - b) < 1e-9})
+    v = vstore.save(spec, fresh, payload.get("ecl", {}),
+                    label=payload.get("name"), notes=payload.get("notes", ""),
+                    tags=payload.get("tags", []),
+                    parent_hash=payload.get("parent_hash"))
+    return _jsonable({
+        "version": v.to_dict(), "reproduction_checks": checks,
+        "reproduced": all(c["matches"] for c in checks) if checks else None,
+        "hash_matches": payload.get("hash") == v.hash,
+    })
+
+
+# ── roll-up ──────────────────────────────────────────────────────────────────
+from ..models import rollup as rollupsvc                                # noqa: E402
+
+
+@app.get("/api/rollup")
+def rollup(tornado: bool = True):
+    r = rollupsvc.run(with_tornado=tornado)
+    champs = {p: vstore.champion(p) for p in store.available()}
+    return _jsonable({
+        "scenarios": r.scenarios, "portfolios": r.portfolios, "totals": r.totals,
+        "monthly": r.monthly, "tornado": r.tornado,
+        "concentration": r.concentration, "timings": r.timings,
+        "champions": {k: (v.to_dict() if v else None) for k, v in champs.items()},
+        "note": ("Each book is projected with its promoted champion model where one "
+                 "exists, and with a documented default specification where none "
+                 "does. The source is shown per portfolio."),
+    })

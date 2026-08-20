@@ -163,6 +163,13 @@ export interface BinningResult {
   supports_continuous: boolean
   n_levels_raw: number
   shrinkage: number
+  shape: {
+    recommendation: Treatment; confidence: string; reason: string
+    linear_r2: number | null; smooth_r2?: number
+    monotone: boolean; curvature: number | null
+  }
+  knots: number[]
+  n_knots: number
 }
 
 export type Treatment = 'woe' | 'bins' | 'continuous' | 'spline' 
@@ -364,9 +371,10 @@ export const api = {
       floors: Record<string, number>; sample_note: string; null_note: string
       bands: { upto: number | null; label: string }[]
     }>(`/portfolios/${k}/screen`),
-  binning: (k: string, col: string, edges?: number[], maxBins = 8) =>
+  binning: (k: string, col: string, edges?: number[], maxBins = 8, nKnots = 4) =>
     get<BinningResult>(`/portfolios/${k}/binning/${encodeURIComponent(col)}`, {
-      max_bins: maxBins, edges: edges?.length ? edges.join(',') : undefined,
+      max_bins: maxBins, n_knots: nKnots,
+      edges: edges?.length ? edges.join(',') : undefined,
     }),
   bivariate: (k: string, col: string, edges?: number[]) =>
     get<{

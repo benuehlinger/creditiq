@@ -1,0 +1,130 @@
+{
+  "hash": "6083148d2cb43e43",
+  "name": "clement-quarry-43",
+  "portfolio": "consumer",
+  "created_at": "2026-08-20T22:04:54+00:00",
+  "spec": {
+    "portfolio": "consumer",
+    "variables": [
+      {
+        "column": "fico_orig",
+        "treatment": "bins",
+        "edges": null,
+        "groups": null,
+        "knots": null,
+        "shrinkage": 0.0
+      },
+      {
+        "column": "revolving_utilization",
+        "treatment": "woe",
+        "edges": null,
+        "groups": null,
+        "knots": null,
+        "shrinkage": 0.0
+      },
+      {
+        "column": "annual_income",
+        "treatment": "woe",
+        "edges": null,
+        "groups": null,
+        "knots": null,
+        "shrinkage": 0.0
+      },
+      {
+        "column": "interest_rate",
+        "treatment": "woe",
+        "edges": null,
+        "groups": null,
+        "knots": null,
+        "shrinkage": 0.0
+      },
+      {
+        "column": "prior_delinq_count",
+        "treatment": "woe",
+        "edges": null,
+        "groups": null,
+        "knots": null,
+        "shrinkage": 0.0
+      }
+    ],
+    "mevs": [
+      {
+        "key": "unemployment_rate",
+        "transform": "level",
+        "lag_months": 0
+      },
+      {
+        "key": "real_disp_income_growth",
+        "transform": "level",
+        "lag_months": 0
+      }
+    ],
+    "estimator": "logistic",
+    "regularization": 1.0,
+    "seasoning_spline": true,
+    "vintage_effect": false,
+    "sample": {
+      "test_fraction": 0.3,
+      "oot_from": "2023-01-01",
+      "seed": 42,
+      "downsample_rows": null
+    },
+    "target_column": "default_flag",
+    "label": null,
+    "parent_hash": null,
+    "notes": "",
+    "hash": "6083148d2cb43e43"
+  },
+  "metrics": {
+    "auc_test": 0.7956021702381121,
+    "auc_oot": 0.7665797761964934,
+    "ks_test": 0.447058905512605,
+    "gini_test": 0.5912043404762242,
+    "log_loss_test": 0.023294339956991168,
+    "brier_test": 0.003948528759577792,
+    "calibration_error": 0.000235725886868685,
+    "mcfadden_r2": 0.11350956600636475,
+    "n_variables": 5,
+    "n_mevs": 2,
+    "estimator": "logistic",
+    "coefficients": {
+      "intercept": -6.2936086075279745,
+      "fico_orig=[634, 658)": -0.042121867477348744,
+      "fico_orig=[658, 690)": -0.1480015104233345,
+      "fico_orig=[690, 712)": -0.24530855191886816,
+      "fico_orig=[712, 746)": -0.39431931125059627,
+      "fico_orig=[746, 776)": -0.5447528047505223,
+      "fico_orig=[776, 796)": -0.5808703060858162,
+      "fico_orig=>= 796": -0.6329508523289822,
+      "revolving_utilization_woe": 0.3752792142649437,
+      "annual_income_woe": 0.06186011859967979,
+      "interest_rate_woe": 0.21694604758822142,
+      "prior_delinq_count_woe": 0.2393393618682601,
+      "seasoning_basis1": 0.13031896300821624,
+      "seasoning_basis2": -0.7476772765836274,
+      "seasoning_basis3": -0.07155664143887695,
+      "seasoning_basis4": -0.111144598427215,
+      "seasoning_basis5": 0.05272786395044291,
+      "seasoning_basis6": 0.022566580780772005,
+      "seasoning_basis7": -0.008726408602752743,
+      "mev:unemployment_rate": 0.4393751594288943,
+      "mev:real_disp_income_growth": -0.2792625507967563
+    }
+  },
+  "ecl": {
+    "ecl_baseline": 5924271.408707477,
+    "ecl_adverse": 9361321.221847935,
+    "ecl_severely_adverse": 14518494.488922313,
+    "ecl_bps_baseline": 431.10170814897697,
+    "ecl_bps_adverse": 681.211458904175,
+    "ecl_bps_severely_adverse": 1056.4924092988942,
+    "weighted_ecl": 8674230.968692582
+  },
+  "status": "challenger",
+  "starred": false,
+  "tags": [],
+  "notes": "",
+  "parent_hash": null,
+  "author": "Helios",
+  "schema_version": 1
+}

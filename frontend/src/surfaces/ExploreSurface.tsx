@@ -22,6 +22,7 @@ export default function ExploreSurface() {
   const [column, setColumn] = useState<string | null>(null)
   const [edges, setEdges] = useState<number[] | undefined>(undefined)
   const [maxBins, setMaxBins] = useState(8)
+  const [nKnots, setNKnots] = useState(4)
 
   const screen = useQuery({ queryKey: ['screen', portfolio], queryFn: () => api.screen(portfolio) })
 
@@ -36,8 +37,8 @@ export default function ExploreSurface() {
   useEffect(() => { setEdges(undefined) }, [column, portfolio])
 
   const binning = useQuery({
-    queryKey: ['binning', portfolio, column, edges?.join(','), maxBins],
-    queryFn: () => api.binning(portfolio, column!, edges, maxBins),
+    queryKey: ['binning', portfolio, column, edges?.join(','), maxBins, nKnots],
+    queryFn: () => api.binning(portfolio, column!, edges, maxBins, nKnots),
     enabled: !!column,
     placeholderData: (prev) => prev,      // hold the previous render while refitting
   })
@@ -110,7 +111,8 @@ export default function ExploreSurface() {
                     value={treatments[binning.data.column] ?? 'woe'}
                     result={binning.data}
                     onChange={(t) => setTreatment(portfolio as PortfolioKey,
-                                                  binning.data!.column, t)} />
+                                                  binning.data!.column, t)}
+                    nKnots={nKnots} onKnots={setNKnots} />
                   {binning.data.kind === 'numeric' && binning.data.domain ? (
                     <BinningEditor result={binning.data} pending={binning.isFetching}
                                    onEdgesChange={(e) => setEdges(e)} />

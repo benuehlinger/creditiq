@@ -249,8 +249,14 @@ def bin_numeric(x: pd.Series, y: pd.Series, edges: list[float] | None = None,
                      "count": n, "events": ev, "non_events": n - ev})
     tab = _woe_table(pd.DataFrame(rows), total_e, total_ne)
 
+    def _edge(v):
+        """A DataFrame round trip turns None into NaN in a float column, so an
+        unbounded edge comes back as nan and `is not None` becomes True. The
+        dataclass declares `float | None`; honour it."""
+        return None if v is None or (isinstance(v, float) and not np.isfinite(v)) else float(v)
+
     bins = [
-        Bin(index=i, label=r["label"], lo=r["lo"], hi=r["hi"], levels=None,
+        Bin(index=i, label=r["label"], lo=_edge(r["lo"]), hi=_edge(r["hi"]), levels=None,
             count=int(r["count"]), events=int(r["events"]),
             non_events=int(r["non_events"]),
             event_rate=float(r["events"] / r["count"]) if r["count"] else float("nan"),
@@ -449,3 +455,116 @@ def _fmt(v: float) -> str:
     if a >= 1:
         return f"{v:.1f}"
     return f"{v:.3f}"
+
+
+# ── which treatment does this variable actually want? ────────────────────────
+def shape_diagnostic(b: Binning) -> dict:
+    """Recommend how a variable should enter the model, from its own bin shape.
+
+    "Spline or continuous?" is a real question and taste is a poor way to settle
+    it. The bins already contain the answer, because the shape of the bin
+    log-odds is exactly what each treatment assumes:
+
+      continuous  assumes the log-odds are LINEAR in the variable
+      spline      assumes they bend, but smoothly and without reversing
+      bins        assumes nothing — the right choice when the relationship
+                  genuinely reverses, or has a cliff
+      woe         same fit as bins for one parameter, when the shape is
+                  monotone enough for a single coefficient to carry it
+
+    So: fit a straight line through the bin log-odds, weighted by bin size, and
+    look at what is left over. A high R-squared means continuous is enough and
+    cheapest. Real curvature with no reversal means a spline. A reversal means
+    neither — use bins and let each level go where it wants.
+
+    This is a recommendation, shown with its reason. It is never applied for you.
+    """
+    real = [x for x in b.bins if not x.is_special and x.count > 0]
+    if len(real) < 4:
+        return {"recommendation": "woe", "confidence": "low",
+                "reason": "Too few bins to judge the shape.",
+                "linear_r2": None, "monotone": b.monotone, "curvature": None}
+
+    # bin position: the midpoint for a numeric binning, the rank otherwise
+    def _mid(x) -> float | None:
+        lo_ok = x.lo is not None and np.isfinite(x.lo)
+        hi_ok = x.hi is not None and np.isfinite(x.hi)
+        if lo_ok and hi_ok:
+            return (x.lo + x.hi) / 2.0
+        if lo_ok:
+            return float(x.lo)          # open-ended top bin
+        if hi_ok:
+            return float(x.hi)          # open-ended bottom bin
+        return None
+
+    mids = [_mid(x) for x in real] if b.kind == "numeric" else [None] * len(real)
+    pos = (np.array(mids, dtype=float) if all(m is not None for m in mids)
+           else np.arange(len(real), dtype=float))
+
+    w = np.array([x.count for x in real], dtype=float)
+    lo = np.array([x.woe for x in real], dtype=float)     # WoE is the bin log-odds
+    if np.allclose(lo, lo[0]):
+        return {"recommendation": "continuous", "confidence": "low",
+                "reason": "The bins barely separate — the variable carries little.",
+                "linear_r2": 0.0, "monotone": b.monotone, "curvature": 0.0}
+
+    z = (pos - pos.mean()) / (pos.std() or 1.0)
+    w = w / w.sum()                     # normalised; raw bin counts overflow polyfit
+
+    def _wls_r2(degree: int) -> float:
+        """Weighted least squares through the bin log-odds, via normal equations.
+
+        numpy.polyfit was tried and fails here: it scales the design by the raw
+        weights, and bin counts in the hundreds of thousands drive LAPACK's
+        scaling routine out of range — it reports an illegal parameter and the
+        SVD does not converge.
+        """
+        V = np.vander(z, degree + 1)
+        sw = np.sqrt(w)[:, None]
+        coef, *_ = np.linalg.lstsq(V * sw, lo * sw.ravel(), rcond=None)
+        resid = lo - V @ coef
+        ss_tot = float(np.sum(w * (lo - np.average(lo, weights=w)) ** 2)) or 1.0
+        return float(1.0 - np.sum(w * resid ** 2) / ss_tot)
+
+    r2_lin = _wls_r2(1)
+    r2_quad = _wls_r2(2)
+    r2_cubic = _wls_r2(3) if len(real) >= 5 else r2_quad
+    r2_smooth = max(r2_quad, r2_cubic)
+    curvature = float(max(r2_quad - r2_lin, 0.0))
+
+    if not b.monotone:
+        # Non-monotone is not automatically a case for dummies. A seasoning hump
+        # reverses direction and is still perfectly smooth — a spline fits it in
+        # a few columns, where dummies spend one per bin to describe a curve.
+        # What distinguishes them is whether a low-order polynomial can follow
+        # the shape.
+        if r2_smooth >= 0.75:
+            rec, conf = "spline", "high"
+            reason = (f"The event rate reverses direction, but smoothly — a curve "
+                      f"follows {r2_smooth:.0%} of the shape. A spline fits that "
+                      f"bend in a few columns; dummies would spend one per bin to "
+                      f"describe the same curve.")
+        else:
+            rec, conf = "bins", "high"
+            reason = (f"The event rate reverses direction and does not follow a "
+                      f"smooth curve — a cubic still leaves {1 - r2_smooth:.0%} "
+                      f"unexplained. Let each bin go where it wants and pay the "
+                      f"parameters.")
+    elif r2_lin >= 0.95:
+        rec, conf = "continuous", "high"
+        reason = (f"The bin log-odds are almost exactly linear (R-squared "
+                  f"{r2_lin:.2f}), so one continuous column captures the shape "
+                  f"and keeps the within-bin detail that binning discards.")
+    elif curvature >= 0.03:
+        rec, conf = "spline", "high"
+        reason = (f"The relationship bends without reversing — a straight line "
+                  f"leaves {1 - r2_lin:.0%} of the shape unexplained and a curve "
+                  f"recovers most of it. A spline fits the bend smoothly.")
+    else:
+        rec, conf = "woe", "medium"
+        reason = (f"Monotone but not straight (R-squared {r2_lin:.2f}). Weight of "
+                  f"evidence carries a monotone shape in one parameter, which is "
+                  f"the cheapest thing that fits it.")
+    return {"recommendation": rec, "confidence": conf, "reason": reason,
+            "linear_r2": r2_lin, "smooth_r2": r2_smooth, "monotone": b.monotone,
+            "curvature": curvature}

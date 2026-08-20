@@ -55,7 +55,11 @@ class VariableSpec:
     treatment: Treatment = "woe"
     edges: list[float] | None = None           # binning map, set by the editor
     groups: list[list[str]] | None = None      # categorical grouping
-    knots: list[float] | None = None           # spline knots
+    knots: list[float] | None = None           # explicit spline knots, if any
+    # How many interior knots to place at quantiles when none are given. Four is
+    # the usual default for a natural spline: enough to bend, few enough to stay
+    # stable at the tails.
+    n_knots: int = 4
     # Empirical-Bayes shrinkage strength for WoE on thin cells. A level with
     # eleven accounts should not get its own weight; this pulls it toward the
     # book average. 0 disables it.
@@ -79,7 +83,7 @@ class VariableSpec:
     def key(self) -> dict:
         return {"column": self.column, "treatment": self.treatment,
                 "edges": self.edges, "groups": self.groups, "knots": self.knots,
-                "shrinkage": self.shrinkage}
+                "n_knots": self.n_knots, "shrinkage": self.shrinkage}
 
 
 @dataclass

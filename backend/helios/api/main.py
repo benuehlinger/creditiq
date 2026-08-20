@@ -231,6 +231,13 @@ def design_tokens():
 from functools import lru_cache                                        # noqa: E402
 
 from ..analysis import binning as binmod                               # noqa: E402
+
+
+def binmod_knots(x, n_knots: int) -> list[float]:
+    """Knot positions for the spline treatment, from the variable's own quantiles."""
+    from ..models.design import quantile_knots
+    v = pd.to_numeric(x, errors="coerce").dropna().to_numpy(float)
+    return quantile_knots(v, max(1, min(n_knots, 10)))
 from ..analysis import screening as screen                             # noqa: E402
 
 # Columns never offered as model inputs. Identifiers and dates are not
@@ -323,7 +330,7 @@ def screen_variables(key: str):
 
 @app.get("/api/portfolios/{key}/binning/{column}")
 def binning(key: str, column: str, edges: str | None = None, max_bins: int = 8,
-            monotone: bool = True):
+            monotone: bool = True, n_knots: int = 4):
     """Bin a variable. Pass `edges` as a comma-separated list to override the
     optimal edges — this is what the drag interaction in the editor sends."""
     if key not in PORTFOLIOS:
@@ -358,16 +365,20 @@ def binning(key: str, column: str, edges: str | None = None, max_bins: int = 8,
     # What each treatment would cost in columns, so the UI never has to guess.
     n_real = len([z for z in b.bins if not z.is_special])
     n_special = len([z for z in b.bins if z.is_special and z.count > 0])
+    knot_positions = binmod_knots(df[column], n_knots) if use_numeric else []
     costs = {
         "woe": 1,
         "bins": max(n_real - 1, 0) + n_special,
         "continuous": 1 if use_numeric else None,
-        "spline": (len(binmod.__dict__.get("SEASONING_KNOTS", ())) or 8) + 1
-                  if use_numeric else None,
+        # a spline costs one column per knot plus the linear term
+        "spline": len(knot_positions) + 1 if use_numeric else None,
     }
     return _jsonable({
         **b.to_dict(), "sampled": sampled, "domain": domain, "histogram": hist,
         "column_costs": costs, "supports_continuous": bool(use_numeric),
+        "shape": binmod.shape_diagnostic(b),
+        "knots": knot_positions,
+        "n_knots": n_knots,
         "max_bin_lift": lift, "max_lift_bin": where,
         "leakage_risk": risk, "leakage_reason": reason,
         "expected_sign": PORTFOLIOS[key].expected_signs.get(column),

@@ -56,6 +56,21 @@ def clear_woe_cache() -> None:
     _COL_CACHE.clear()
 
 
+def _frame_key(df: pd.DataFrame, y: pd.Series) -> tuple:
+    """Identify WHICH ROWS a transform was fitted on.
+
+    This is not a performance detail — it is a leakage guard. The binning must be
+    fitted on the training slice alone, and a cache keyed only on the column and
+    its edges will happily hand a map fitted on the FULL panel back to a fit that
+    should never have seen the test rows. The symptom is quiet: the same
+    specification returns a slightly better AUC depending on what ran before it,
+    which is how this was found.
+    """
+    idx = df.index
+    return (len(df), int(idx[0]) if len(idx) else -1,
+            int(idx[-1]) if len(idx) else -1, int(y.sum()))
+
+
 def _cache_col(key: tuple, build_fn) -> np.ndarray:
     v = _COL_CACHE.get(key)
     if v is None:
@@ -302,7 +317,7 @@ def build(df: pd.DataFrame, spec: ModelSpec,
             else:
                 ck = (spec.portfolio, v.column, spec.target_column,
                       tuple(v.edges or ()), tuple(map(tuple, v.groups or ())),
-                      round(v.shrinkage, 6))
+                      round(v.shrinkage, 6), _frame_key(df, ys))
                 m = _WOE_CACHE.get(ck)
                 if m is None:
                     xs, yss = _sample_for_bins(x, ys)
@@ -346,7 +361,7 @@ def build(df: pd.DataFrame, spec: ModelSpec,
         if fitted is not None:
             b, _, meta = _spline_basis(mob, SEASONING_KNOTS, fitted=fitted)
         else:
-            sk = (spec.portfolio, "__seasoning__", len(df), int(df.index[0]))
+            sk = (spec.portfolio, "__seasoning__", _frame_key(df, ys))
             got = _COL_CACHE.get(sk)
             if got is None:
                 b, _, meta = _spline_basis(mob, SEASONING_KNOTS)
@@ -362,7 +377,7 @@ def build(df: pd.DataFrame, spec: ModelSpec,
         dates = pd.DatetimeIndex(df["performance_date"]).to_period("M").to_timestamp()
         for m in spec.mevs:
             mk = (spec.portfolio, "__mev__", m.key, m.transform, m.lag_months,
-                  len(df), int(df.index[0]))
+                  _frame_key(df, ys))
 
             def _mk(m=m):
                 # A scenario projection supplies its OWN macro path: history plus

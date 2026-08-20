@@ -262,8 +262,25 @@ def _screen_all(key: str) -> dict:
     # One null floor per SHAPE, shared across columns of that shape. Estimating
     # it per column costs a permutation binning run each and takes ~48s to screen
     # a book — not a thing anyone waits for in a meeting.
-    floors = {"numeric": binmod.null_floor_for_shape(y, "numeric"),
-              "categorical": binmod.null_floor_for_shape(y, "categorical")}
+    # Two floors: one numeric, one categorical.
+    #
+    # Cardinality was banded here at first, on the assumption that a 144-level
+    # variable must score far higher by chance than a 3-level one. Measured, it
+    # barely does — because the population floor COLLAPSES the tail before the
+    # information value is computed, so a wide variable and a narrow one both
+    # arrive at the statistic with a similar number of surviving bins. The
+    # collapse is what removes the free pass, not the floor.
+    #
+    # The categorical probe is drawn at the widest cardinality in the book, with
+    # a realistic concentration, so the floor is the conservative one.
+    widest = max((int(df[c].nunique(dropna=True)) for c in _candidates(key)
+                  if not (pd.api.types.is_numeric_dtype(df[c])
+                          and df[c].nunique(dropna=True) > 12)), default=10)
+    floors = {
+        "numeric": binmod.null_floor_for_shape(y, "numeric"),
+        "categorical": binmod.null_floor_for_shape(y, "categorical",
+                                                   n_levels=min(widest, 150)),
+    }
     rows = []
     for c in _candidates(key):
         try:

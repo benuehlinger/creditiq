@@ -22,6 +22,66 @@ from . import copula as cp
 from .copula import Marginal
 from .spec import Interaction, PortfolioSpec, TargetDef
 
+
+def _msa_weights() -> list[float]:
+    """A realistic metro concentration: a few large ones, a long thin tail."""
+    import numpy as _np
+    n = len(MSA_LEVELS)
+    # Zipf-ish but flattened. A raw 1/rank puts a quarter of the book in one
+    # metro, which no real mortgage portfolio looks like — the largest MSA in a
+    # national book is usually under 10%.
+    w = 1.0 / _np.power(_np.arange(1, n + 1), 0.75)
+    return list(w / w.sum())
+
+# Metropolitan statistical areas, each mapped to its state.
+#
+# This exists to make the mortgage book genuinely HIGH CARDINALITY. A real
+# mortgage tape carries a few hundred MSAs, most of them holding a fraction of a
+# percent of the book, and that is the case where naive weight of evidence falls
+# apart: a metro with eleven loans gets its own weight, and it is noise.
+#
+# Only a handful carry a real risk effect. The rest are deliberately empty, which
+# is what makes the shrinkage and the small-sample null floor worth having — most
+# of the apparent signal in a wide categorical is not signal.
+MSA_STATE: dict[str, str] = {}
+_MSA_SEED = [
+    ("Los Angeles", "CA"), ("San Francisco", "CA"), ("San Diego", "CA"),
+    ("Sacramento", "CA"), ("Riverside", "CA"), ("San Jose", "CA"), ("Fresno", "CA"),
+    ("Houston", "TX"), ("Dallas", "TX"), ("Austin", "TX"), ("San Antonio", "TX"),
+    ("El Paso", "TX"), ("Fort Worth", "TX"),
+    ("Miami", "FL"), ("Orlando", "FL"), ("Tampa", "FL"), ("Jacksonville", "FL"),
+    ("Cape Coral", "FL"), ("Sarasota", "FL"),
+    ("New York", "NY"), ("Buffalo", "NY"), ("Rochester", "NY"), ("Albany", "NY"),
+    ("Chicago", "IL"), ("Rockford", "IL"), ("Peoria", "IL"),
+    ("Philadelphia", "PA"), ("Pittsburgh", "PA"), ("Allentown", "PA"),
+    ("Cleveland", "OH"), ("Columbus", "OH"), ("Cincinnati", "OH"), ("Toledo", "OH"),
+    ("Atlanta", "GA"), ("Savannah", "GA"), ("Augusta", "GA"),
+    ("Charlotte", "NC"), ("Raleigh", "NC"), ("Greensboro", "NC"),
+    ("Phoenix", "AZ"), ("Tucson", "AZ"), ("Mesa", "AZ"),
+    ("Seattle", "WA"), ("Spokane", "WA"), ("Tacoma", "WA"),
+    ("Detroit", "MI"), ("Grand Rapids", "MI"), ("Ann Arbor", "MI"),
+]
+for _name, _st in _MSA_SEED:
+    MSA_STATE[f"{_name}, {_st}"] = _st
+# pad out to a realistic tail of small metros, each holding well under 1%
+for _i, (_name, _st) in enumerate(_MSA_SEED * 2):
+    MSA_STATE[f"{_name} outlying {_i // len(_MSA_SEED) + 1}, {_st}"] = _st
+
+MSA_LEVELS = list(MSA_STATE)
+
+# The few metros that genuinely carry risk. Everything else is exactly zero, so
+# any weight of evidence it appears to have is small-sample noise.
+MSA_RISK: dict[str, float] = {
+    "Las Vegas outlying 1, AZ": 0.0,      # placeholder, overwritten below
+}
+MSA_RISK = {
+    "Riverside, CA": 0.34, "Cape Coral, FL": 0.31, "Miami, FL": 0.22,
+    "Phoenix, AZ": 0.19, "Detroit, MI": 0.26, "Toledo, OH": 0.18,
+    "San Jose, CA": -0.24, "Seattle, WA": -0.19, "Raleigh, NC": -0.16,
+    "Austin, TX": -0.14,
+}
+
+
 # ── shared dynamics ──────────────────────────────────────────────────────────
 def mortgage_dynamics(state: dict, mev: dict, mev0: dict) -> dict:
     """Current LTV, updated every month by the ACTUAL HPI path.
@@ -180,9 +240,11 @@ MORTGAGE = PortfolioSpec(
         Marginal("product", cp.categorical(["30yr fixed", "15yr fixed", "ARM 5/1"],
                                            [0.68, 0.19, 0.13])),
         Marginal("first_time_buyer", cp.categorical(["Y", "N"], [0.28, 0.72])),
-        Marginal("state", cp.categorical(
-            ["CA", "TX", "FL", "NY", "IL", "PA", "OH", "GA", "NC", "AZ", "WA", "MI"],
-            [0.16, 0.12, 0.10, 0.08, 0.06, 0.06, 0.05, 0.06, 0.06, 0.05, 0.06, 0.04])),
+        # Drawn on the copula like everything else, so it correlates with the
+        # rest of the book rather than being an independent sprinkle. State is
+        # DERIVED from it, because a loan's state is a property of its metro —
+        # generating them independently would produce loans in Miami, Ohio.
+        Marginal("msa", cp.categorical(MSA_LEVELS, _msa_weights())),
     ],
     correlations={
         ("fico_orig", "original_ltv"): -0.25,
@@ -201,6 +263,7 @@ MORTGAGE = PortfolioSpec(
         "current_ltv": 0.62, "fico_orig": -0.42, "dti": 0.16, "annual_income": -0.06,
     },
     categorical_betas={
+        "msa": MSA_RISK,
         "doc_type": {"full": -0.06, "alt": 0.18, "low": 0.42},
         "occupancy": {"primary": -0.08, "second": 0.12, "investor": 0.34},
         "product": {"30yr fixed": 0.0, "15yr fixed": -0.22, "ARM 5/1": 0.20},

@@ -104,6 +104,13 @@ def generate(spec: PortfolioSpec, seed: int = 20260819,
     names = [m.name for m in spec.marginals]
     attrs = draw(n, spec.marginals, build_correlation(names, spec.correlations), rng)
 
+    # State is a PROPERTY of the metro, not an independent draw. Generating them
+    # separately would put loans in "Miami, Ohio".
+    if "msa" in attrs:
+        from .portfolios import MSA_STATE
+        attrs["state"] = np.array([MSA_STATE.get(m, "??") for m in attrs["msa"]],
+                                  dtype=object)
+
     term = rng.choice(np.asarray(spec.term_choices), size=n,
                       p=np.asarray(spec.term_probs)).astype(np.int32)
     if spec.key == "mortgage":

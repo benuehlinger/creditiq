@@ -115,10 +115,7 @@ export default function ExploreSurface() {
                     <BinningEditor result={binning.data} pending={binning.isFetching}
                                    onEdgesChange={(e) => setEdges(e)} />
                   ) : (
-                    <p className="px-4 py-6 text-center text-xs text-ink-muted">
-                      Categorical variable — levels are grouped rather than cut, so there
-                      are no edges to drag. Grouping is on the level table below.
-                    </p>
+                    <CategoricalNote b={binning.data} />
                   )}
                   <MonotonicityRow b={binning.data} />
                 </Card>
@@ -165,6 +162,46 @@ function LeakageBanner({ risk, reason, lift, bin }: {
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+/** What was done to a wide categorical, and why — stated rather than asked.
+ *
+ *  A mortgage tape carries a few hundred metros, most holding a fraction of a
+ *  percent of the book. Left alone, weight of evidence hands a metro with a
+ *  handful of loans a weight of its own, and the information value comes out
+ *  nearly ten times its honest value. The app collapses the tail and shrinks thin
+ *  cells automatically, then says so — the analyst should not have to know to
+ *  ask. */
+function CategoricalNote({ b }: { b: any }) {
+  const collapsed = b.n_levels_raw > b.bins.length
+  const shrunk = (b.shrinkage ?? 0) > 0
+  if (!collapsed && !shrunk) {
+    return (
+      <p className="px-4 py-6 text-center text-xs text-ink-muted">
+        Categorical with {b.n_levels_raw} levels — grouped rather than cut, so there
+        are no edges to drag. The grouping is in the table below.
+      </p>
+    )
+  }
+  return (
+    <div className="space-y-2 px-4 py-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <StatusPill severity="warning">High cardinality</StatusPill>
+        <span className="text-xs text-ink">
+          {b.n_levels_raw} levels, reduced to {b.bins.length} bins
+        </span>
+      </div>
+      <ul className="space-y-1.5 text-tiny leading-relaxed text-ink-secondary">
+        {(b.warnings ?? []).map((w: string) => <li key={w}>· {w}</li>)}
+      </ul>
+      <p className="border-t border-hairline pt-2 text-micro leading-relaxed text-ink-muted">
+        Both steps are applied automatically and both LOWER the information value.
+        That is the point: most of the apparent signal in a wide categorical is the
+        tail being handed weights it has not earned. Compare the value above with
+        the null floor in the left-hand panel before selecting it.
+      </p>
     </div>
   )
 }

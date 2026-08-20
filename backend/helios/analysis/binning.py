@@ -62,6 +62,8 @@ class Binning:
     n_total: int
     n_events: int
     warnings: list[str] = field(default_factory=list)
+    n_levels_raw: int = 0
+    shrinkage: float = 0.0
 
     def to_dict(self) -> dict:
         return {
@@ -69,12 +71,37 @@ class Binning:
             "edges": self.edges, "groups": self.groups,
             "monotone": self.monotone, "monotone_direction": self.monotone_direction,
             "n_total": self.n_total, "n_events": self.n_events,
-            "warnings": self.warnings,
+            "warnings": self.warnings, "n_levels_raw": self.n_levels_raw,
+            "shrinkage": self.shrinkage,
             "bins": [b.__dict__ for b in self.bins],
         }
 
 
-def _woe_table(counts: pd.DataFrame, total_e: int, total_ne: int) -> pd.DataFrame:
+def auto_shrinkage(n_levels: int, n_events: int) -> float:
+    """How hard to pull a thin level's weight toward the book average.
+
+    Returns a pseudo-count `k`. A level with `k` events gets half its own weight
+    and half the average; a level with many more keeps essentially all of its
+    own. Zero means no shrinkage.
+
+    The rule scales with how thinly the events are spread. A mortgage book with
+    144 metros and 1,800 defaults averages twelve events per metro, and a metro
+    with three of them should not get a weight of its own — that number is noise,
+    and an unshrunk weight of evidence will happily hand it one.
+
+    Low-cardinality variables are left alone, because shrinking a five-level
+    categorical biases it for no stability gain.
+    """
+    if n_levels < 15 or n_events <= 0:
+        return 0.0
+    per_level = n_events / n_levels
+    # target: a level needs roughly the average event count to earn half its own
+    # weight, floored so the correction stays meaningful on very wide variables
+    return float(max(per_level, 5.0))
+
+
+def _woe_table(counts: pd.DataFrame, total_e: int, total_ne: int,
+               shrinkage: float = 0.0) -> pd.DataFrame:
     """WoE and IV per bin, with a zero-cell correction.
 
     WoE = ln( (events in bin / all events) / (non-events in bin / all non-events) )
@@ -94,9 +121,23 @@ def _woe_table(counts: pd.DataFrame, total_e: int, total_ne: int) -> pd.DataFram
     pne = ne / max(total_ne, 1)
     woe = np.log(np.where(pe > 0, pe, 1e-12) / np.where(pne > 0, pne, 1e-12))
     counts = counts.copy()
+    counts["woe_raw"] = woe
+    if shrinkage > 0:
+        # Empirical-Bayes shrinkage toward the book average. The global weight of
+        # evidence is exactly zero by construction — it is a log ratio of shares
+        # that each sum to one — so shrinking toward the average is shrinking
+        # toward zero.
+        #
+        #     WoE_shrunk(b) = n_b / (n_b + k) x WoE(b)
+        #
+        # A level with many events keeps its weight; a level with a handful gets
+        # most of it taken away.
+        ev = counts["events"].astype(float).to_numpy()
+        woe = woe * (ev / (ev + shrinkage))
     counts["woe"] = woe
     counts["iv_contribution"] = (pe - pne) * woe
     counts["_corrected"] = empty
+    counts["_shrunk"] = shrinkage > 0
     return counts
 
 
@@ -236,17 +277,32 @@ def bin_numeric(x: pd.Series, y: pd.Series, edges: list[float] | None = None,
 
 def bin_categorical(x: pd.Series, y: pd.Series,
                     groups: list[list[str]] | None = None,
-                    max_levels: int = 12) -> Binning:
+                    max_levels: int = 12, min_share: float = 0.01,
+                    shrinkage: float | None = None) -> Binning:
+    """Group a categorical, with a POPULATION FLOOR rather than a fixed top-k.
+
+    A fixed "keep the top twelve" is arbitrary and behaves badly at both ends: it
+    discards a meaningful thirteenth level on a narrow variable, and it keeps a
+    twelfth level holding 0.2% of the book on a wide one. The floor keeps any
+    level holding at least `min_share` of the population and folds the rest into
+    a single Other, capped so the design never explodes.
+    """
     s = x.astype("string")
     yy = y.astype(int)
     total_e = int(yy.sum())
     total_ne = int(len(yy) - total_e)
+    n_levels_raw = int(s.nunique(dropna=True))
+    if shrinkage is None:
+        shrinkage = auto_shrinkage(n_levels_raw, total_e)
 
     if groups is None:
         vc = s.value_counts(dropna=True)
-        keep = list(vc.index[:max_levels])
+        share = vc / max(len(s), 1)
+        keep = list(share.index[(share >= min_share)][:max_levels])
+        if not keep:                                  # everything is tiny
+            keep = list(vc.index[:max_levels])
         groups = [[str(k)] for k in keep]
-        rare = [str(k) for k in vc.index[max_levels:]]
+        rare = [str(k) for k in vc.index if str(k) not in {str(z) for z in keep}]
         if rare:
             groups.append(rare)
 
@@ -278,7 +334,7 @@ def bin_categorical(x: pd.Series, y: pd.Series,
         ev = int(yy[m].sum())
         rows.append({"key": k, "label": lab, "levels": lvls, "special": special,
                      "count": n, "events": ev, "non_events": n - ev})
-    tab = _woe_table(pd.DataFrame(rows), total_e, total_ne)
+    tab = _woe_table(pd.DataFrame(rows), total_e, total_ne, shrinkage=shrinkage)
 
     bins = [
         Bin(index=i, label=r["label"], lo=None, hi=None, levels=r["levels"],
@@ -294,12 +350,26 @@ def bin_categorical(x: pd.Series, y: pd.Series,
     if tab["_corrected"].any():
         warnings.append("A level had no events or no non-events; a zero-cell "
                         "correction was applied. Consider grouping it.")
+    n_folded = n_levels_raw - len([g for g in groups if len(g) == 1])
+    if n_folded > 0:
+        warnings.append(
+            f"{n_levels_raw} levels, of which {n_folded} hold under "
+            f"{min_share:.0%} of the book each and were folded into a single "
+            f"Other. Keeping them would spend a parameter per level on a "
+            f"handful of accounts.")
+    if shrinkage > 0:
+        warnings.append(
+            f"Weights of evidence are shrunk toward the book average with a "
+            f"pseudo-count of {shrinkage:.0f} events, because {n_levels_raw} "
+            f"levels share {total_e:,} events. A level with a few events would "
+            f"otherwise be handed a weight it has not earned.")
     return Binning(column=str(x.name), kind="categorical", bins=bins,
                    iv=float(tab["iv_contribution"].sum()), edges=None, groups=groups,
                    # A nominal category has no natural order, so monotonicity is
                    # not a meaningful question for it.
                    monotone=True, monotone_direction="n/a",
-                   n_total=int(len(s)), n_events=total_e, warnings=warnings)
+                   n_total=int(len(s)), n_events=total_e, warnings=warnings,
+                   n_levels_raw=n_levels_raw, shrinkage=float(shrinkage))
 
 
 def information_value(x: pd.Series, y: pd.Series, max_bins: int = 10) -> float:
@@ -350,8 +420,19 @@ def null_floor_for_shape(y: pd.Series, kind: str, n_levels: int = 10,
     if kind == "numeric":
         probe = pd.Series(rng.normal(size=n), index=y.index, name="_null_probe")
     else:
-        lv = np.array([f"L{i}" for i in range(max(2, min(n_levels, 20)))])
-        probe = pd.Series(rng.choice(lv, size=n), index=y.index, name="_null_probe")
+        # Levels are drawn with a ZIPF-LIKE concentration, not uniformly.
+        #
+        # A uniform 120-level probe puts 0.83% in every level, so the population
+        # floor folds all of them into Other and the probe collapses to a single
+        # bin — reporting a LOWER null for a wide categorical than a narrow one,
+        # which is backwards. A real wide categorical has a few large levels and
+        # a long thin tail, and it is the surviving large levels that carry the
+        # chance signal. The probe has to have the same shape to measure it.
+        k = max(2, n_levels)
+        lv = np.array([f"L{i}" for i in range(k)])
+        w = 1.0 / np.power(np.arange(1, k + 1), 0.75)
+        probe = pd.Series(rng.choice(lv, size=n, p=w / w.sum()),
+                          index=y.index, name="_null_probe")
     return iv_null_floor(probe, y, draws=draws, seed=seed)
 
 

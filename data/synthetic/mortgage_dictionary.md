@@ -5,7 +5,7 @@ hazard process driven by real FRED macroeconomic history. It is not any
 institution's portfolio and must never be presented as one.
 
 - Accounts: 40,000
-- Account-month rows: 1,736,472
+- Account-month rows: 1,736,566
 - Window: 2015-01 to 2025-12
 - Target: `default_flag` — 180+ days past due or foreclosure referral
 - EAD method: amortizing — Amortizing product. EAD is the contractual scheduled balance at the default month from the amortization schedule, with an optional CPR haircut and a small arrears uplift for accrued interest and advances.
@@ -54,14 +54,15 @@ institution's portfolio and must never be presented as one.
 | `scheduled_payment` | float64 | 0.0% | Contractual monthly payment, USD. |
 | `fico_orig` | float64 | 0.0% | Credit driver. higher reduces risk |
 | `original_ltv` | float64 | 0.0% | Account attribute. |
-| `dti` | float64 | 14.8% | Credit driver. higher raises risk |
+| `dti` | float64 | 15.0% | Credit driver. higher raises risk |
 | `annual_income` | float64 | 0.0% | Credit driver. higher reduces risk |
-| `second_lien_pct` | float64 | 29.8% | Account attribute. |
+| `second_lien_pct` | float64 | 29.7% | Account attribute. |
 | `doc_type` | object | 0.0% | Categorical credit driver. |
 | `occupancy` | object | 0.0% | Categorical credit driver. |
 | `property_type` | object | 0.0% | Categorical credit driver. |
 | `product` | object | 0.0% | Categorical credit driver. |
 | `first_time_buyer` | object | 0.0% | Categorical credit driver. |
+| `msa` | object | 0.0% | Categorical credit driver. |
 | `state` | object | 0.0% | Account attribute. |
 | `vintage` | int32 | 0.0% | Origination year. The standard cohort dimension. |
 | `loan_officer_id_numeric` | int64 | 0.0% | PLANTED NOISE. Expect IV below 0.02. |

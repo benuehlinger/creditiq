@@ -96,6 +96,16 @@ first terminal event.
 
 | Variable | Level | Coefficient |
 |---|---|---|
+| `msa` | Riverside, CA | +0.340 |
+| `msa` | Cape Coral, FL | +0.310 |
+| `msa` | Miami, FL | +0.220 |
+| `msa` | Phoenix, AZ | +0.190 |
+| `msa` | Detroit, MI | +0.260 |
+| `msa` | Toledo, OH | +0.180 |
+| `msa` | San Jose, CA | -0.240 |
+| `msa` | Seattle, WA | -0.190 |
+| `msa` | Raleigh, NC | -0.160 |
+| `msa` | Austin, TX | -0.140 |
 | `doc_type` | full | -0.060 |
 | `doc_type` | alt | +0.180 |
 | `doc_type` | low | +0.420 |

@@ -138,3 +138,34 @@ def test_a_version_saved_before_the_split_still_loads(legacy, expected):
             "variables": [{"column": "fico_orig", "transform": legacy}]}
     spec = ModelSpec.from_dict(blob)
     assert spec.variables[0].treatment == expected
+
+
+# ── the leakage guard ────────────────────────────────────────────────────────
+def test_a_transform_fitted_on_the_full_panel_never_leaks_into_a_train_fit(df):
+    """The binning must be fitted on the training slice alone.
+
+    A cache keyed only on the column and its edges will hand a map fitted on the
+    FULL panel back to a fit that should never have seen the test rows. The
+    symptom is quiet — the same specification returns a slightly better AUC
+    depending on what ran before it — which is how the original bug was found:
+    0.78998 with the leak against 0.78950 without.
+    """
+    spec = _spec("fico_orig", "woe", extra=())
+    full = D.build(df, spec)
+    half = df.iloc[: len(df) // 2]
+    train = D.build(half, spec)
+
+    a = full.woe_maps["fico_orig"]
+    b = train.woe_maps["fico_orig"]
+    assert a["edges"] != b["edges"] or a["woe"] != b["woe"], (
+        "the training design reused the full-panel binning — the cache is not "
+        "keyed on which rows the transform was fitted on")
+
+
+def test_the_same_slice_still_reuses_its_cached_transform(df):
+    """The guard must not defeat the cache it is guarding, or every refit pays
+    for optimal binning again."""
+    spec = _spec("fico_orig", "woe", extra=())
+    first = D.build(df, spec)
+    second = D.build(df, spec)
+    assert first.woe_maps["fico_orig"]["edges"] == second.woe_maps["fico_orig"]["edges"]

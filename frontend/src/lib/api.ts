@@ -161,6 +161,8 @@ export interface BinningResult {
   histogram: { bounds: number[]; counts: number[] } | null
   column_costs: Record<string, number | null>
   supports_continuous: boolean
+  n_levels_raw: number
+  shrinkage: number
 }
 
 export type Treatment = 'woe' | 'bins' | 'continuous' | 'spline' 

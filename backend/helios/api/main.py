@@ -892,3 +892,32 @@ def mev_reconciliation(key: str):
         "residual_absolute": residual, "residual_relative": identity,
         "identity_holds": None if identity is None else identity < 1e-10,
     })
+
+
+# ── static frontend (container build only) ───────────────────────────────────
+# In development the frontend runs on Vite and proxies /api here. In the
+# container the built assets are copied in and served by this app, so
+# `docker compose up` starts ONE thing on ONE port and there is no CORS step, no
+# second process and no reverse proxy to get wrong.
+_DIST = ROOT / "frontend" / "dist"
+if _DIST.is_dir():
+    from fastapi.responses import FileResponse                          # noqa: E402
+    from fastapi.staticfiles import StaticFiles                         # noqa: E402
+
+    app.mount("/assets", StaticFiles(directory=_DIST / "assets"), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def spa(full_path: str):
+        """Serve the single-page app, letting the client router own the path.
+
+        Anything under /api has already matched a real route by the time this is
+        reached, so it is explicitly rejected rather than silently answered with
+        the HTML shell — an unknown API path returning 200 and a page of markup is
+        a genuinely confusing failure to debug.
+        """
+        if full_path.startswith("api/"):
+            raise HTTPException(404, "unknown API route")
+        candidate = _DIST / full_path
+        if full_path and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(_DIST / "index.html")

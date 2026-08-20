@@ -220,3 +220,136 @@ disk — `.gitignore` covers `.env` and `*.key`.
 **Docker is not installed on the build machine.** The compose stack is authored
 and linted but has not been executed here. That is stated rather than reported as
 a passing check.
+
+---
+
+## 9. Modelling choices made during the build
+
+**The seasoning spline is QR-orthogonalized.** The raw hinge basis — the value
+plus `max(value − knot, 0)` at each knot — is the obvious way to write a
+piecewise-linear spline and it is catastrophically collinear: every hinge is a
+truncated copy of the one before. Fitted directly it produced variance inflation
+factors above 4,700 and a pair of coefficients of +21.5 and −21.8 that cancel to
+nothing. Those numbers are not wrong, but no validator will accept a
+specification card that shows them. A QR decomposition spans exactly the same
+function space, so the fitted curve is identical while variance inflation drops
+to 1.00. The individual weights then carry no separate meaning, which is honest:
+a spline's shape is the quantity of interest, not its basis weights.
+
+**The orthogonalizing map is persisted, not recomputed.** A projection ages
+accounts past knots that were dead in the fit sample, which changes the column
+count, and re-running QR on new data produces a *different* basis spanning the
+same space — the fitted coefficients would be applied to the wrong vectors. The
+knot set and the map are stored with the fit.
+
+**Binning is fitted on an event-preserving sample.** Optimal binning is a
+constrained optimisation; running it over 1.7M rows per variable cost about four
+seconds of a two-second refit budget. A binning is a population statistic, and
+fitting it on 300,000 rows moves the edges by less than the width of a bar. Where
+the analyst has set edges in the editor, they are used verbatim and nothing is
+refitted.
+
+**Refit performance: 2.8 seconds, against a ~2 second target.** Reduced from 5.2
+by caching WoE maps and transformed columns, building the design once instead of
+twice, vectorising the account split and computing AUC and KS from a single sort.
+One optimisation was tried and **reverted**: a hand-written mid-rank function to
+replace `scipy.stats.rankdata`, on the assumption that scipy's per-call overhead
+mattered. It was three times slower — averaging ties needs a pass over runs of
+equal values, and that pass is C in scipy and a Python loop by hand. The target
+was not reached; the fit-sample toggle and a real progress indicator are both
+shipped, as the brief allows.
+
+---
+
+## 10. Three defects in the loss layer, found by looking at the output
+
+**Realised LGD carried no macro term.** The coefficients were declared on the
+portfolio specification and never applied in the generator, so severity had no
+relationship to the cycle and the attribution bridge showed an LGD contribution
+of −0.1M. This is precisely the failure the brief singles out as the most common
+thing a validator catches. Severity now swings 0.09 to 0.21 on the mortgage book
+between rising and falling house prices, and LGD contributes 44M to the bridge.
+
+**Projected accounts have no workout duration.** The column is zero for every
+open account, so imputing the median imputed zero — and the median of an all-NaN
+column is NaN, which made every projected mortgage and CRE LGD come back NaN. A
+projected default now takes the book's realised mean workout duration.
+
+**The EAD step is exactly zero on an amortizing book, and that is correct.** The
+schedule is contractual and does not depend on the economy, so exposure is
+identical in every scenario. It reads as a bug, so the bridge explains it rather
+than leaving a bare zero bar.
+
+---
+
+## 11. Extrapolation beyond the estimation window
+
+The 2026 severely adverse scenario takes commercial property growth to −24% year
+on year against a fitted floor of −10.7% — 4.3 standard deviations outside
+anything the model has seen. A logit is linear in the log-odds of its inputs;
+outside the fitted range that is extrapolation with no evidence and no bound. The
+unconstrained model answered with a 33% cumulative default rate and a 19x stress
+multiple.
+
+Helios reports the distance per variable and winsorizes the forward path to the
+fitted range by default. That is standard practice and a real trade-off — it
+keeps the projection inside the evidence and it also caps the stress — so both
+numbers are shown. On CRE the uncapped figure is 2.3x the capped one.
+
+---
+
+## 12. Two sign problems, and why only one was a specification error
+
+**The tornado's shock direction was wrong.** It took the adverse direction from
+the way each variable moves in the severely adverse scenario. Mortgage rates
+*fall* in that scenario — a flight to quality — so the shock pushed rates down
+and the executive view reported that a worse mortgage rate cuts expected loss by
+22%. Direction now comes from the economic prior.
+
+**`hpi_yoy` fits with the wrong sign on the mortgage book, and dropping
+`current_ltv` does not fix it.** With current LTV in the specification it fits
++0.399; without it, +0.120 and still significant. The second number is the
+interesting one, because it rules out simple double counting. House price growth
+peaked in 2021-22 at exactly the moment the book filled with young, high-LTV
+originations climbing the seasoning ramp, so the *marginal* association between
+price growth and default is positive even though the causal effect is negative.
+That is a composition confound between the macro cycle and book vintage.
+
+The resolution is not to constrain the sign — the term is measuring something
+real, just not what it is named after. The mortgage specification now carries
+unemployment alone, and the house-price channel reaches PD through current LTV,
+which the projection recomputes on the scenario's own HPI path. Mortgage ECL
+still triples under severely adverse, and every macro sensitivity on the roll-up
+now moves the way economics predicts.
+
+---
+
+## 13. Colour decisions caught by the validator
+
+Two charts were built with palette pairs that fail, and the validator caught both.
+
+**Actual against predicted** was drawn in slots 1 and 4. Both are blues; the
+palette's adjacent gate tests 1-2, 2-3, 3-4 and 4-5, so that pair was never
+checked. It measures ΔE 14.5 against a floor of 15. Moved to slots 1 and 3, which
+clear the harder all-pairs gate at 18.9.
+
+**The macro splice chart** used the portfolio accent for "Actual". On the CRE book
+the accent *is* slot 3, so "Actual" and "Severely adverse" rendered in the same
+colour. It now uses explicit slots 1-3.
+
+The lesson generalises: a chart that derives one series colour from context and
+another from a fixed slot can collide, and only the validator will notice.
+
+---
+
+## 14. Container
+
+One image, one process, one port. The frontend is built in a node stage and
+served by the Python app, so `docker compose up` starts a single thing and there
+is no reverse proxy, second port or CORS configuration to get wrong in a
+conference room. The synthetic panels are generated during the image build, so
+the container is self-contained and needs no network at run time.
+
+**Docker is not installed on the build machine.** The compose file is authored
+and its YAML parses; the image has not been built or run here. That is stated
+rather than reported as a passing check.

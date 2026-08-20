@@ -827,3 +827,68 @@ def rollup(tornado: bool = True):
                  "exists, and with a documented default specification where none "
                  "does. The source is shown per portfolio."),
     })
+
+
+@app.get("/api/mev/reconciliation/{key}")
+def mev_reconciliation(key: str):
+    """Show the frequency conversion, rather than burying it.
+
+    Raw published points overlaid on the derived monthly series, with the
+    benchmarking residual. If the method is right this residual is zero to machine
+    precision, and being able to point at that is worth more than asserting it.
+    """
+    from ..mev import reconcile as rc
+    catalog = by_key()
+    if key not in catalog:
+        raise HTTPException(404, f"unknown variable {key!r}")
+    mev = catalog[key]
+    hist = pd.read_parquet(mev_panel.CACHE_DIR / "fred_history.parquet")
+    hist["date"] = pd.to_datetime(hist["date"])
+    raw = hist.loc[hist["key"] == key].set_index("date")["value"].sort_index()
+    monthly = mev_panel.monthly_panel()
+    col = f"{key}_level" if f"{key}_level" in monthly.columns else key
+    derived = monthly[col].dropna()
+
+    agg = mev.agg if mev.agg != "max" else "eop"
+    residual = None
+    identity = None
+    # Compare like with like. Where FRED publishes GROWTH and the app reconstructs
+    # a LEVEL — the BIS commercial property series — the benchmark target is the
+    # reconstructed quarterly level, not the published growth rate. Comparing the
+    # derived level against the raw growth is apples to oranges and reports a
+    # relative residual of 22.
+    benchmark_target = raw
+    if mev.derive == "level_from_yoy_growth":
+        from ..mev import reconcile as rc2
+        benchmark_target = pd.Series(
+            rc2.level_from_yoy_growth(raw.to_numpy(float)), index=raw.index)
+    if mev.native == "Q" and len(raw) > 4:
+        idx = raw.index.to_period("Q")
+        months = pd.date_range(idx.min().start_time, idx.max().end_time, freq="MS")
+        sub = derived.reindex(months).ffill().bfill().to_numpy(float)
+        n = (len(sub) // 3) * 3
+        try:
+            absr, relr = rc.aggregation_residual(
+                sub[:n], benchmark_target.to_numpy(float)[: n // 3], agg)
+            residual, identity = float(absr), float(relr)
+        except Exception:                                               # noqa: BLE001
+            pass
+
+    return _jsonable({
+        "key": key, "label": mev.label, "series_id": mev.series_id,
+        "native": mev.native, "kind": mev.kind, "measure": mev.measure,
+        "agg": mev.agg, "unit": mev.unit, "note": mev.note, "rebase": mev.rebase,
+        "derive": mev.derive,
+        "method": ("Denton-Cholette proportional benchmarking" if mev.native == "Q"
+                   else f"{'period-' + mev.agg if mev.agg != 'eop' else 'end-of-period'} "
+                        f"aggregation" if mev.native in ("D", "W")
+                   else "already monthly — passed through"),
+        "raw_is_derived": mev.derive == "level_from_yoy_growth",
+        "raw": [{"date": d.strftime("%Y-%m-%d"), "value": float(v)}
+                for d, v in benchmark_target.loc[
+                    benchmark_target.index >= "2014-01-01"].items()],
+        "derived": [{"date": d.strftime("%Y-%m-%d"), "value": float(v)}
+                    for d, v in derived.loc[derived.index >= "2014-01-01"].items()],
+        "residual_absolute": residual, "residual_relative": identity,
+        "identity_holds": None if identity is None else identity < 1e-10,
+    })

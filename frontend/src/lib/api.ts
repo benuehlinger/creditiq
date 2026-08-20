@@ -427,4 +427,15 @@ export const api = {
   deleteVersion: (hash: string) =>
     fetch(`/api/versions/${hash}`, { method: 'DELETE' }).then((r) => r.json()),
   rollup: () => get<RollUpResponse>('/rollup'),
+  reconciliation: (key: string) =>
+    get<{
+      key: string; label: string; series_id: string; native: string; kind: string
+      measure: string; agg: string; unit: string; note: string | null
+      rebase: boolean; derive: string | null; method: string
+      raw_is_derived: boolean
+      raw: { date: string; value: number }[]
+      derived: { date: string; value: number }[]
+      residual_absolute: number | null; residual_relative: number | null
+      identity_holds: boolean | null
+    }>(`/mev/reconciliation/${key}`),
 }

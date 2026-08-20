@@ -7,6 +7,7 @@ import EChart from '../charts/EChart'
 import Legend from '../charts/Legend'
 import Waterfall from '../charts/Waterfall'
 import ScenarioEditor from '../components/ScenarioEditor'
+import MacroPanel from '../components/MacroPanel'
 import { baseOption, crosshairTooltip, lineSeries } from '../charts/base'
 import { ink, mode, ordinal } from '../design/tokens'
 import { useUi } from '../lib/store'
@@ -28,6 +29,7 @@ export default function ScenarioSurface() {
   const [ifrs9, setIfrs9] = useState(false)
   const [custom, setCustom] = useState<Record<string, Record<string, number>>>({})
   const [weights] = useState({ baseline: 0.5, adverse: 0.3, severely_adverse: 0.2 })
+  const [tab, setTab] = useState<'ecl' | 'macro'>('ecl')
 
   useEffect(() => { setRes(null); setCustom({}) }, [portfolio])
 
@@ -86,6 +88,19 @@ export default function ScenarioSurface() {
 
   return (
     <div className="space-y-3 p-4">
+      <div className="flex items-center gap-1">
+        {(['ecl', 'macro'] as const).map((t) => (
+          <button key={t} onClick={() => setTab(t)}
+            className={`rounded-ctl px-3 py-1 text-xs font-medium transition-colors ${
+              tab === t ? 'bg-accent-soft text-ink' : 'text-ink-muted hover:text-ink-secondary'}`}>
+            {t === 'ecl' ? 'Scenarios & ECL' : 'Macro variables'}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'macro' && <MacroPanel portfolio={portfolio} />}
+
+      {tab === 'ecl' && (<>
       <Card>
         <div className="flex flex-wrap items-center gap-4 px-4 py-3">
           <div className="text-xs text-ink-secondary">
@@ -297,6 +312,7 @@ export default function ScenarioSurface() {
           </EmptyState>
         </Card>
       )}
+      </>)}
     </div>
   )
 }

@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { FitRequest, PortfolioKey } from './api'
+import type { FitRequest, PortfolioKey, Treatment } from './api'
 
 type Theme = 'dark' | 'light'
 
@@ -32,6 +32,8 @@ interface UiState {
   methodologyOpen: string | null
   selectedVariables: Record<PortfolioKey, string[]>
   fitted: Record<PortfolioKey, FittedModel | null>
+  /** How each variable enters the model. Absent means the default, WoE. */
+  treatments: Record<PortfolioKey, Record<string, Treatment>>
   setTheme: (t: Theme) => void
   toggleTheme: () => void
   setPaletteOpen: (b: boolean) => void
@@ -39,6 +41,7 @@ interface UiState {
   toggleVariable: (p: PortfolioKey, v: string) => void
   clearVariables: (p: PortfolioKey) => void
   setFitted: (p: PortfolioKey, f: FittedModel | null) => void
+  setTreatment: (p: PortfolioKey, column: string, t: Treatment) => void
 }
 
 export const useUi = create<UiState>()(
@@ -49,6 +52,7 @@ export const useUi = create<UiState>()(
       methodologyOpen: null,
       selectedVariables: { consumer: [], mortgage: [], cre: [] },
       fitted: { consumer: null, mortgage: null, cre: null },
+      treatments: { consumer: {}, mortgage: {}, cre: {} },
       setTheme: (t) => {
         document.documentElement.setAttribute('data-theme', t)
         set({ theme: t })
@@ -69,9 +73,11 @@ export const useUi = create<UiState>()(
       clearVariables: (p) =>
         set((s) => ({ selectedVariables: { ...s.selectedVariables, [p]: [] } })),
       setFitted: (p, f) => set((s) => ({ fitted: { ...s.fitted, [p]: f } })),
+      setTreatment: (p, column, t) =>
+        set((s) => ({ treatments: { ...s.treatments, [p]: { ...s.treatments[p], [column]: t } } })),
     }),
     { name: 'helios-ui', partialize: (s) => ({ theme: s.theme, selectedVariables: s.selectedVariables,
-                            fitted: s.fitted }) },
+                            fitted: s.fitted, treatments: s.treatments }) },
   ),
 )
 

@@ -139,14 +139,36 @@ def fit(design: Design, spec: ModelSpec) -> FitResult:
         z = np.where(se > 0, beta / se, 0.0)
     pval = 2.0 * (1.0 - stats.norm.cdf(np.abs(z)))
 
-    # VIF from the design's own correlation structure, excluding the intercept
+    # VIF from the design's own correlation structure, excluding the intercept.
+    #
+    # A pseudo-inverse alone is NOT enough and quietly hides the worst case. With
+    # two exactly duplicated columns the correlation matrix is singular, `pinv`
+    # returns a finite pseudo-inverse, and every VIF comes back as 1.00 — the
+    # guardrail reporting perfect health on a rank-deficient design. So the
+    # eigenspectrum is checked first: a near-zero eigenvalue means an exact linear
+    # dependence, and the columns loading on it are the aliased set.
     vifs = np.ones(X.shape[1])
+    aliased: list[str] = []
     if X.shape[1] > 2:
-        C = np.corrcoef(X[:, 1:], rowvar=False)
-        C = np.nan_to_num(C, nan=0.0)
+        C = np.nan_to_num(np.corrcoef(X[:, 1:], rowvar=False), nan=0.0)
         np.fill_diagonal(C, 1.0)
         try:
-            vifs[1:] = np.clip(np.diag(np.linalg.pinv(C)), 1.0, None)
+            vals, vecs = np.linalg.eigh(C)
+            null = vals < 1e-8
+            if null.any():
+                # loadings on the null space identify the linearly dependent columns
+                load = np.abs(vecs[:, null]).max(axis=1)
+                for i in np.flatnonzero(load > 0.1):
+                    vifs[i + 1] = np.inf
+                    aliased.append(design.columns[i + 1])
+            # NB: not named `ok` — that is the convergence flag from irls, and
+            # shadowing it made `not ok` evaluate an array.
+            finite = ~np.isinf(vifs[1:])
+            if finite.any():
+                diag = np.clip(np.diag(np.linalg.pinv(C)), 1.0, None)
+                slot = vifs[1:]
+                slot[finite] = diag[finite]
+                vifs[1:] = slot
         except np.linalg.LinAlgError:
             pass
 
@@ -156,7 +178,14 @@ def fit(design: Design, spec: ModelSpec) -> FitResult:
     contrib = np.concatenate([[0.0], var[1:] / total])
 
     warn = None
-    if np.any(np.abs(beta[1:]) > 12) or not ok:
+    if aliased:
+        warn = ("The design is rank deficient: "
+                + ", ".join(sorted(set(aliased))[:6])
+                + (" and others" if len(set(aliased)) > 6 else "")
+                + " are exact linear combinations of other terms. Their "
+                  "coefficients are not identified — the fit splits the effect "
+                  "between them arbitrarily. Remove one of the duplicated terms.")
+    elif np.any(np.abs(beta[1:]) > 12) or not ok:
         warn = ("A coefficient is very large or the fit did not converge, which "
                 "usually means one variable separates the target almost perfectly. "
                 "Check the variable screen for leakage before reading these "

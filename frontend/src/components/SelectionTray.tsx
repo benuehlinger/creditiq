@@ -17,6 +17,7 @@ export default function SelectionTray({ portfolio, rows }: {
   portfolio: string; rows: ScreenRow[]
 }) {
   const { selectedVariables, toggleVariable, clearVariables } = useUi()
+  const treatments = useUi((s) => s.treatments[portfolio as PortfolioKey] ?? {})
   const picked = selectedVariables[portfolio as PortfolioKey] ?? []
   const byName = new Map(rows.map((r) => [r.column, r]))
 
@@ -92,6 +93,11 @@ export default function SelectionTray({ portfolio, rows }: {
                   className="shrink-0 text-micro text-ink-muted hover:text-ink" title="Remove">×</button>
               </div>
               <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-micro text-ink-muted">
+                {(treatments[p] ?? 'woe') !== 'woe' && (
+                  <span className="rounded border border-hairline px-1 text-accent">
+                    {treatments[p]}
+                  </span>
+                )}
                 <span>IV <span className="tnum text-ink-secondary">{r?.iv.toFixed(3) ?? '—'}</span></span>
                 {v != null && (
                   <span>VIF <span className="tnum"

@@ -159,7 +159,11 @@ export interface BinningResult {
   observed_sign: number | null
   domain: [number, number] | null
   histogram: { bounds: number[]; counts: number[] } | null
+  column_costs: Record<string, number | null>
+  supports_continuous: boolean
 }
+
+export type Treatment = 'woe' | 'bins' | 'continuous' | 'spline' 
 
 export interface CorrelationResult {
   columns: string[]
@@ -240,7 +244,7 @@ export interface SliceMetrics {
 
 export interface FitRequest {
   portfolio: string
-  variables: { column: string; transform?: string; edges?: number[] | null }[]
+  variables: { column: string; treatment?: Treatment; edges?: number[] | null }[]
   mevs: { key: string; transform?: string; lag_months?: number }[]
   estimator?: string
   regularization?: number

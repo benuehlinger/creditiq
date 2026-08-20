@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { api, type ScreenRow } from '../lib/api'
+import { api, type PortfolioKey, type ScreenRow } from '../lib/api'
 import { Card, CardHead, Skeleton, StatusPill } from '../components/ui'
 import BinningEditor from '../components/BinningEditor'
 import SelectionTray from '../components/SelectionTray'
 import CorrelationPanel from '../components/CorrelationPanel'
 import BinStability from '../components/BinStability'
+import TreatmentControl from '../components/TreatmentControl'
+import { useUi } from '../lib/store'
 import { num, pct } from '../lib/format'
 import { diverging, mode } from '../design/tokens'
 
@@ -14,6 +16,8 @@ type Tab = 'variables' | 'correlation'
 
 export default function ExploreSurface() {
   const { portfolio = 'consumer' } = useParams()
+  const treatments = useUi((s) => s.treatments[portfolio as PortfolioKey] ?? {})
+  const setTreatment = useUi((s) => s.setTreatment)
   const [tab, setTab] = useState<Tab>('variables')
   const [column, setColumn] = useState<string | null>(null)
   const [edges, setEdges] = useState<number[] | undefined>(undefined)
@@ -102,6 +106,11 @@ export default function ExploreSurface() {
                       </div>
                     }
                   />
+                  <TreatmentControl
+                    value={treatments[binning.data.column] ?? 'woe'}
+                    result={binning.data}
+                    onChange={(t) => setTreatment(portfolio as PortfolioKey,
+                                                  binning.data!.column, t)} />
                   {binning.data.kind === 'numeric' && binning.data.domain ? (
                     <BinningEditor result={binning.data} pending={binning.isFetching}
                                    onEdgesChange={(e) => setEdges(e)} />

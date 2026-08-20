@@ -127,6 +127,50 @@ def _woe_vector(x: pd.Series, y: pd.Series, v: VariableSpec) -> tuple[np.ndarray
     return out.astype(float), m
 
 
+def _dummy_matrix(x: pd.Series, m: dict) -> tuple[np.ndarray, list[str]]:
+    """Indicator columns for a binning — k-1 of them, first bin as reference.
+
+    The difference from WoE is the whole point of separating the two decisions.
+    WoE spends ONE parameter and bakes the direction into the encoding: it
+    assumes the fitted effect is proportional to the log-odds ratio the bins
+    already showed. Dummies spend k-1 parameters and assume nothing — each bin
+    gets its own free level, so a non-monotone or hook-shaped relationship
+    survives contact with the model instead of being flattened.
+
+    That freedom is not free. The column-cost readout in the UI exists so the
+    analyst sees the price before choosing it.
+    """
+    if m["kind"] == "numeric":
+        idx = np.digitize(pd.to_numeric(x, errors="coerce").fillna(-np.inf), m["edges"])
+        n_bins = len(m["woe"])
+        labels = m.get("labels") or [f"bin{i}" for i in range(n_bins)]
+        idx = np.clip(idx, 0, max(n_bins - 1, 0))
+        miss = x.isna().to_numpy()
+    else:
+        cat = x.astype("category")
+        order = list(m["map"].keys())
+        pos = {lvl: i for i, lvl in enumerate(order)}
+        lut = np.array([pos.get(str(c), -1) for c in cat.cat.categories], dtype=np.int64)
+        raw = cat.cat.codes.to_numpy()
+        idx = np.where(raw >= 0, lut[np.clip(raw, 0, max(len(lut) - 1, 0))], -1)
+        n_bins = len(order)
+        labels = order
+        miss = idx < 0
+        idx = np.clip(idx, 0, max(n_bins - 1, 0))
+
+    cols, names = [], []
+    # the first bin is the reference level, so the design stays full rank
+    for b in range(1, n_bins):
+        cols.append(((idx == b) & ~miss).astype(float))
+        names.append(f"={labels[b]}")
+    if miss.any():
+        cols.append(miss.astype(float))
+        names.append("=Missing")
+    if not cols:
+        return np.zeros((len(x), 0)), []
+    return np.column_stack(cols), names
+
+
 def _apply_woe(x: pd.Series, m: dict) -> np.ndarray:
     if m["kind"] == "numeric":
         woe = np.asarray(m["woe"], dtype=float)
@@ -251,34 +295,52 @@ def build(df: pd.DataFrame, spec: ModelSpec,
         if v.column not in df.columns:
             continue
         x = df[v.column]
-        if v.transform == "woe":
+        enc = v.encoder
+        if enc in ("woe", "dummies", "ordinal"):
             if v.column in maps:
-                vec = _apply_woe(x, maps[v.column])
+                m = maps[v.column]
             else:
                 ck = (spec.portfolio, v.column, spec.target_column,
-                      tuple(v.edges or ()), tuple(map(tuple, v.groups or ())))
+                      tuple(v.edges or ()), tuple(map(tuple, v.groups or ())),
+                      round(v.shrinkage, 6))
                 m = _WOE_CACHE.get(ck)
                 if m is None:
                     xs, yss = _sample_for_bins(x, ys)
                     _, m = _woe_vector(xs, yss, v)
                     _WOE_CACHE[ck] = m
                 maps[v.column] = m
-                vec = _cache_col((*ck, "apply", len(df), int(df.index[0])),
-                                 lambda: _apply_woe(x, m))
-            blocks.append(vec[:, None]); names.append(f"{v.column}_woe")
-        elif v.transform == "spline":
+            if enc == "woe":
+                blocks.append(_apply_woe(x, m)[:, None])
+                names.append(f"{v.column}_woe")
+            elif enc == "dummies":
+                B, sub = _dummy_matrix(x, m)
+                if B.shape[1]:
+                    blocks.append(B)
+                    names += [f"{v.column}{t}" for t in sub]
+            else:                                    # ordinal bin index
+                idx = np.digitize(pd.to_numeric(x, errors="coerce").fillna(-np.inf),
+                                  m.get("edges") or [])
+                blocks.append(idx.astype(float)[:, None])
+                names.append(f"{v.column}_bin")
+        elif enc == "spline":
             col = pd.to_numeric(x, errors="coerce")
             b, sub, meta = _spline_basis(col.fillna(col.median()).to_numpy(),
                                          v.knots or SEASONING_KNOTS,
                                          fitted=bases.get(v.column))
             bases[v.column] = meta
-            blocks.append(b); names += [f"{v.column}_{s}" for s in sub]
-        else:
+            blocks.append(b); names += [f"{v.column}_{t}" for t in sub]
+        else:                                        # scaled continuous
             col = pd.to_numeric(x, errors="coerce")
             blocks.append(col.fillna(col.median()).to_numpy(float)[:, None])
             names.append(v.column)
 
-    if spec.seasoning_spline and "months_on_book" in df.columns:
+    # The automatic seasoning spline is on months_on_book. If the analyst has
+    # ALSO selected months_on_book explicitly, adding both puts two bases of the
+    # same variable into the design — exact collinearity. The ridge does not
+    # error; it silently splits the effect in half across duplicated columns, and
+    # every coefficient comes out at exactly half its true value.
+    explicit_seasoning = any(v.column == "months_on_book" for v in spec.variables)
+    if spec.seasoning_spline and not explicit_seasoning and "months_on_book" in df.columns:
         mob = df["months_on_book"].to_numpy(float)
         fitted = bases.get("__seasoning__")
         if fitted is not None:

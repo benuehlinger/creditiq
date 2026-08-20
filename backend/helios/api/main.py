@@ -338,8 +338,19 @@ def binning(key: str, column: str, edges: str | None = None, max_bins: int = 8,
         counts, bounds = np.histogram(v.clip(lo, hi), bins=48, range=(lo, hi))
         hist = {"bounds": [float(z) for z in bounds],
                 "counts": [int(z) for z in counts]}
+    # What each treatment would cost in columns, so the UI never has to guess.
+    n_real = len([z for z in b.bins if not z.is_special])
+    n_special = len([z for z in b.bins if z.is_special and z.count > 0])
+    costs = {
+        "woe": 1,
+        "bins": max(n_real - 1, 0) + n_special,
+        "continuous": 1 if use_numeric else None,
+        "spline": (len(binmod.__dict__.get("SEASONING_KNOTS", ())) or 8) + 1
+                  if use_numeric else None,
+    }
     return _jsonable({
         **b.to_dict(), "sampled": sampled, "domain": domain, "histogram": hist,
+        "column_costs": costs, "supports_continuous": bool(use_numeric),
         "max_bin_lift": lift, "max_lift_bin": where,
         "leakage_risk": risk, "leakage_reason": reason,
         "expected_sign": PORTFOLIOS[key].expected_signs.get(column),

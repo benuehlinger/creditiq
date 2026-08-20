@@ -17,21 +17,69 @@ import json
 from dataclasses import asdict, dataclass, field
 from typing import Literal
 
-Transform = Literal["woe", "raw", "spline"]
 Estimator = Literal["logistic", "logistic_l1", "logistic_l2", "gbm"]
+
+# Discretizing and encoding are DIFFERENT decisions, and fusing them was the
+# original mistake. "Binned" and "WoE" are not two choices — weight of evidence
+# is one *encoding* of a binning, and dummies are another.
+#
+#   continuous ─┬─► scaler ──────────────────────────► 1 column
+#               ├─► spline basis ─────────────────────► k columns
+#               └─► discretizer ─► bins ─► encoder ───► 1 or k columns
+#   categorical ──► grouper ─────► bins ─► encoder ───► 1 or k columns
+#
+# Splitting them is what makes the binning editor upstream of the encoding
+# choice: drag the edges once, then decide whether that binning enters as one
+# WoE column or as k−1 indicators.
+Discretizer = Literal["none", "optimal", "quantile", "manual", "group"]
+Encoder = Literal["woe", "dummies", "ordinal", "scaled", "spline"]
+
+# What the UI offers. Four named treatments rather than two dropdowns, because a
+# 5x5 grid of legal pairs is a control panel and this is meant to be usable in an
+# afternoon. The pairs below are the ones that mean something.
+TREATMENTS: dict[str, tuple[str, str]] = {
+    # name          (discretizer, encoder)
+    "woe":        ("optimal", "woe"),      # scorecard convention — 1 column
+    "bins":       ("optimal", "dummies"),  # free step function — k−1 columns
+    "continuous": ("none", "scaled"),      # linear in the log-odds — 1 column
+    "spline":     ("none", "spline"),      # smooth non-linearity — k columns
+}
+# Superseded, kept so saved versions still load.
+LEGACY_TRANSFORMS = {"woe": "woe", "raw": "continuous", "spline": "spline"}
+Treatment = Literal["woe", "bins", "continuous", "spline"]
 
 
 @dataclass
 class VariableSpec:
     column: str
-    transform: Transform = "woe"
-    edges: list[float] | None = None          # binning map, when transform = woe
+    treatment: Treatment = "woe"
+    edges: list[float] | None = None           # binning map, set by the editor
     groups: list[list[str]] | None = None      # categorical grouping
-    knots: list[float] | None = None           # spline knots, when transform = spline
+    knots: list[float] | None = None           # spline knots
+    # Empirical-Bayes shrinkage strength for WoE on thin cells. A level with
+    # eleven accounts should not get its own weight; this pulls it toward the
+    # book average. 0 disables it.
+    shrinkage: float = 0.0
+
+    def __post_init__(self) -> None:
+        # migrate a spec saved before discretizer and encoder were separated
+        legacy = getattr(self, "transform", None)
+        if legacy and legacy in LEGACY_TRANSFORMS:
+            object.__setattr__(self, "treatment", LEGACY_TRANSFORMS[legacy])
+
+    @property
+    def discretizer(self) -> str:
+        return TREATMENTS[self.treatment][0] if not (self.edges or self.groups) \
+            else ("manual" if self.edges else "group")
+
+    @property
+    def encoder(self) -> str:
+        return TREATMENTS[self.treatment][1]
 
     def key(self) -> dict:
-        return {"column": self.column, "transform": self.transform,
-                "edges": self.edges, "groups": self.groups, "knots": self.knots}
+        return {"column": self.column, "treatment": self.treatment,
+                "edges": self.edges, "groups": self.groups, "knots": self.knots,
+                "shrinkage": self.shrinkage}
 
 
 @dataclass
@@ -109,7 +157,19 @@ class ModelSpec:
     def from_dict(d: dict) -> "ModelSpec":
         d = dict(d)
         d.pop("hash", None)
-        d["variables"] = [VariableSpec(**v) for v in d.get("variables", [])]
+
+        def _var(v: dict) -> VariableSpec:
+            v = dict(v)
+            # A version saved before the split carries `transform`. Map it rather
+            # than orphaning the file — a saved specification that no longer loads
+            # would break the reproducibility claim outright.
+            legacy = v.pop("transform", None)
+            if legacy and "treatment" not in v:
+                v["treatment"] = LEGACY_TRANSFORMS.get(legacy, "woe")
+            return VariableSpec(**{k: val for k, val in v.items()
+                                   if k in VariableSpec.__dataclass_fields__})
+
+        d["variables"] = [_var(v) for v in d.get("variables", [])]
         d["mevs"] = [MevSpec(**m) for m in d.get("mevs", [])]
         d["sample"] = SampleSpec(**d.get("sample", {}))
         return ModelSpec(**d)

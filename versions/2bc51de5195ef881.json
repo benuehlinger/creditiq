@@ -1,0 +1,110 @@
+{
+  "hash": "2bc51de5195ef881",
+  "name": "canny-keystone-18",
+  "portfolio": "cre",
+  "created_at": "2026-08-20T03:53:08+00:00",
+  "spec": {
+    "portfolio": "cre",
+    "variables": [
+      {
+        "column": "current_ltv",
+        "transform": "woe",
+        "edges": null,
+        "groups": null,
+        "knots": null
+      },
+      {
+        "column": "interest_rate",
+        "transform": "woe",
+        "edges": null,
+        "groups": null,
+        "knots": null
+      },
+      {
+        "column": "dscr_reported",
+        "transform": "woe",
+        "edges": null,
+        "groups": null,
+        "knots": null
+      }
+    ],
+    "mevs": [
+      {
+        "key": "cre_price_index_yoy",
+        "transform": "level",
+        "lag_months": 0
+      },
+      {
+        "key": "bbb_yield",
+        "transform": "level",
+        "lag_months": 0
+      },
+      {
+        "key": "real_gdp_growth",
+        "transform": "level",
+        "lag_months": 0
+      }
+    ],
+    "estimator": "logistic",
+    "regularization": 1.0,
+    "seasoning_spline": true,
+    "vintage_effect": false,
+    "sample": {
+      "test_fraction": 0.3,
+      "oot_from": "2023-01-01",
+      "seed": 42,
+      "downsample_rows": null
+    },
+    "target_column": "default_flag",
+    "label": null,
+    "parent_hash": null,
+    "notes": "",
+    "hash": "2bc51de5195ef881"
+  },
+  "metrics": {
+    "auc_test": 0.7695181040424928,
+    "auc_oot": 0.830770861391635,
+    "ks_test": 0.4627695622708395,
+    "gini_test": 0.5390362080849855,
+    "log_loss_test": 0.0063408242823879074,
+    "brier_test": 0.0008466445336757221,
+    "calibration_error": 0.00020266446252708193,
+    "mcfadden_r2": 0.1252025269477195,
+    "n_variables": 3,
+    "n_mevs": 3,
+    "estimator": "logistic",
+    "coefficients": {
+      "intercept": -8.209077775025808,
+      "current_ltv_woe": 0.5029920220255809,
+      "interest_rate_woe": 0.532453964825412,
+      "dscr_reported_woe": 0.7704542711717867,
+      "seasoning_basis1": -0.1465206133124529,
+      "seasoning_basis2": -0.8868593940468291,
+      "seasoning_basis3": -0.09188834571789496,
+      "seasoning_basis4": -0.0365572727925187,
+      "seasoning_basis5": -0.029195411681646216,
+      "seasoning_basis6": 0.07880658985343127,
+      "seasoning_basis7": -0.19601129335884715,
+      "seasoning_basis8": -0.5019475356987796,
+      "mev:cre_price_index_yoy": -0.30634003409958105,
+      "mev:bbb_yield": 0.08036595163337712,
+      "mev:real_gdp_growth": 0.013869125159231218
+    }
+  },
+  "ecl": {
+    "ecl_baseline": 253285226.76607144,
+    "ecl_adverse": 966406362.7870042,
+    "ecl_severely_adverse": 2089490418.8965015,
+    "ecl_bps_baseline": 118.70327636177146,
+    "ecl_bps_adverse": 452.9107481883612,
+    "ecl_bps_severely_adverse": 979.2492117142679,
+    "weighted_ecl": 834462605.9984373
+  },
+  "status": "challenger",
+  "starred": false,
+  "tags": [],
+  "notes": "",
+  "parent_hash": null,
+  "author": "Helios",
+  "schema_version": 1
+}

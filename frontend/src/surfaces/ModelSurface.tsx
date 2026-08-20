@@ -20,6 +20,7 @@ export default function ModelSurface() {
   const { portfolio = 'consumer' } = useParams()
   const picked = useUi((s) => s.selectedVariables[portfolio as PortfolioKey] ?? [])
   const setFitted = useUi((s) => s.setFitted)
+  const treatments = useUi((s) => s.treatments[portfolio as PortfolioKey] ?? {})
   const [estimator, setEstimator] = useState('logistic')
   const [mevs, setMevs] = useState<string[]>(DEFAULT_MEVS[portfolio] ?? [])
   const [downsample, setDownsample] = useState<number | null>(null)
@@ -36,7 +37,10 @@ export default function ModelSurface() {
   // replay it, so a saved version is provably the model that was fitted.
   const request = {
     portfolio,
-    variables: picked.map((c) => ({ column: c })),
+    // Each variable carries how it enters the model. Sending only the column
+    // name would silently fall back to WoE for everything, which is what the
+    // engine defaults to — and would quietly discard the analyst's choice.
+    variables: picked.map((c) => ({ column: c, treatment: treatments[c] ?? 'woe' })),
     mevs: mevs.map((k) => ({ key: k })),
     estimator, seasoning_spline: true, oot_from: ootFrom,
     downsample_rows: downsample,
@@ -77,6 +81,13 @@ export default function ModelSurface() {
             <div className="mt-1 text-sm text-ink">
               {picked.length} variable{picked.length === 1 ? '' : 's'} · {mevs.length} macro term{mevs.length === 1 ? '' : 's'}
             </div>
+            {Object.keys(treatments).some((c) => picked.includes(c)
+              && treatments[c] !== 'woe') && (
+              <div className="mt-0.5 text-micro text-ink-muted">
+                {picked.filter((c) => (treatments[c] ?? 'woe') !== 'woe')
+                  .map((c) => `${c} as ${treatments[c]}`).join(' · ')}
+              </div>
+            )}
           </div>
 
           <label className="text-tiny">

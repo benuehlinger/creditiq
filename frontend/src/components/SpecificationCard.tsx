@@ -15,8 +15,20 @@ export default function SpecificationCard({ r }: { r: FitResponse }) {
   const seasoning = r.coefficients.filter((c) => isSeasoning(c.name))
   const shown = r.coefficients.filter((c) => !isSeasoning(c.name))
 
+  const flips = r.sign_checks?.filter((c) => !c.ok) ?? []
+
   return (
     <div className="space-y-3">
+      {flips.map((f) => (
+        <div key={f.term} className="rounded-card border px-4 py-3"
+             style={{ borderColor: 'var(--status-critical)',
+                      background: 'color-mix(in srgb, var(--status-critical) 10%, transparent)' }}>
+          <div className="flex items-start gap-2">
+            <StatusPill severity="critical">Economic sign flipped</StatusPill>
+            <p className="text-xs leading-relaxed text-ink">{f.message}</p>
+          </div>
+        </div>
+      ))}
       <div className="grid gap-3 lg:grid-cols-3">
         <Card>
           <CardHead title="Target definition" />
@@ -109,7 +121,9 @@ export default function SpecificationCard({ r }: { r: FitResponse }) {
                       </div>
                     </td>
                     <td className="px-3 py-1.5">
-                      {flagged
+                      {r.sign_checks?.find((s) => s.term === c.name && !s.ok)
+                        ? <StatusPill severity="critical">sign flip</StatusPill>
+                        : flagged
                         ? <StatusPill severity="warning">not significant</StatusPill>
                         : expected != null
                           ? <span className="text-tiny text-ink-muted">

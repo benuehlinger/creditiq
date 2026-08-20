@@ -224,6 +224,9 @@ export interface FitResponse {
   target: { column: string; label: string; description: string }
   ead: { method: string; note: string }
   expected_signs: Record<string, number>
+  sign_checks: { term: string; mev: string; expected_sign: number
+                 observed_sign: number; coefficient: number; z_stat: number
+                 ok: boolean; significant: boolean; message: string }[]
   woe_maps: Record<string, { kind: string; edges?: number[]; woe?: number[]
                              labels?: string[]; iv: number; missing_woe: number }>
   performance_note: string
@@ -247,6 +250,47 @@ export interface FitRequest {
   oot_from?: string
   downsample_rows?: number | null
   label?: string | null
+}
+
+export interface EclScenario {
+  key: string; label: string; published: boolean; source: string; note: string
+  n_accounts: number; exposure: number; ecl: number; ecl_bps: number
+  weighted_pd_12m: number; weighted_lgd: number
+  monthly: { month: string; marginal_pd: number; survival: number; lgd: number
+             exposure: number; loss: number; cumulative_loss: number }[]
+  by_segment: { segment: string; n: number; exposure: number; ecl: number; ecl_bps: number }[]
+  ifrs9: { trigger: string; total_ecl: number
+           stages: { stage: number; n: number; exposure: number; ecl: number; basis: string }[] }
+  uncapped_ecl: number | null
+}
+
+export interface EclResponse {
+  portfolio: string; model_hash: string; as_of: string
+  horizon_months: number; timings: Record<string, number>; capped: boolean
+  scenarios: EclScenario[]
+  weights: Record<string, number>; weighted_ecl: number
+  bridge: { label: string; value: number; running: number; kind: string; note: string }[]
+  bridge_reconciles: { ok: boolean; residual: number }
+  shapley: Record<string, number>
+  extrapolation: { key: string; fitted_min: number; fitted_max: number
+                   scenario_min: number; scenario_max: number; beyond_sd: number
+                   outside: boolean; note: string }[]
+  ead: { method: string; plain_english: string; parameters: Record<string, unknown>
+         estimated_ccf: number | null; ccf_sample: number; ccf_note: string }
+  lgd: { n_defaults: number; mean_lgd: number; zero_loss_share: number
+         mean_severity_given_loss: number; mean_workout_months: number
+         calibration: { cohort: number; n: number; predicted: number
+                        actual: number; zero_loss_share: number }[]
+         note: string; drivers: string[] }
+}
+
+export interface EclRequest extends FitRequest {
+  scenarios?: string[]
+  weights?: Record<string, number>
+  custom?: Record<string, Record<string, number>>
+  fixed_ccf?: number | null
+  cpr?: number
+  cap_to_fitted_range?: boolean
 }
 
 export const api = {
@@ -305,4 +349,16 @@ export const api = {
       column: string
       segments: FitResponse['backtest']['segments']
     }>,
+  ecl: async (req: EclRequest): Promise<EclResponse> => {
+    const r = await fetch('/api/ecl', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(req),
+    })
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? r.statusText)
+    return r.json()
+  },
+  editableScenario: (name: string, keys: string[]) =>
+    fetch(`/api/scenarios/${name}/editable?keys=${keys.join(',')}`).then((r) => r.json()) as
+      Promise<{ scenario: string; published: boolean; note: string
+                series: Record<string, { quarter: string; value: number }[]> }>,
 }

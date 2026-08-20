@@ -125,7 +125,8 @@ def run(spec: ModelSpec, force: bool = False) -> ModelRun:
     # a second optimal-binning run. Building it twice from scratch was the single
     # largest cost in the refit.
     des_all = D.build(df, spec, woe_maps=des_train.woe_maps,
-                      means=des_train.means, stds=des_train.stds)
+                      means=des_train.means, stds=des_train.stds,
+                      basis_maps=des_train.basis_maps)
     t["design"] = time.perf_counter() - t1
 
     t2 = time.perf_counter()

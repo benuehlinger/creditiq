@@ -484,6 +484,46 @@ class FitRequest(BaseModel):
         )
 
 
+def _sign_checks(r) -> list[dict]:
+    """Compare each MACRO coefficient's fitted sign with its economic prior.
+
+    This is where a sign constraint is actually meaningful. A WoE-transformed
+    driver always enters positively when it agrees with the data — the weight of
+    evidence carries the direction — so the prior is checked at the bin level on
+    the Explore surface. A macro term enters RAW, so its sign is a direct
+    economic claim and a flip is a real finding.
+
+    A flip is usually collinearity rather than a broken model, and the message
+    says so: on the mortgage book, current LTV is computed FROM the house-price
+    path, so once it is in the specification the residual HPI growth term picks
+    up a vintage confound and fits positive. The platform flags it; the analyst
+    decides whether to drop the term, lag it, or drop current LTV instead.
+    """
+    spec = PORTFOLIOS[r.spec.portfolio]
+    out = []
+    for c in r.fit.coefficients:
+        if not c.name.startswith("mev:"):
+            continue
+        key = c.name[4:].split(" ")[0]
+        expected = spec.expected_signs.get(key)
+        if expected is None:
+            continue
+        observed = 1 if c.estimate > 0 else -1
+        ok = observed == expected
+        out.append({
+            "term": c.name, "mev": key, "expected_sign": expected,
+            "observed_sign": observed, "coefficient": c.estimate,
+            "z_stat": c.z_stat, "ok": ok, "significant": c.p_value < 0.05,
+            "message": "" if ok else (
+                f"{key} fits {c.estimate:+.4f}, but the economic prior is "
+                f"{'positive' if expected > 0 else 'negative'}. A flip on a macro "
+                f"term is nearly always collinearity with a driver that already "
+                f"carries the same effect — check whether another variable in the "
+                f"specification is derived from this one."),
+        })
+    return out
+
+
 def _run_payload(r) -> dict:
     spec = PORTFOLIOS[r.spec.portfolio]
     return {
@@ -503,6 +543,7 @@ def _run_payload(r) -> dict:
                    "description": spec.target.description},
         "ead": {"method": spec.ead_method, "note": spec.ead_note},
         "expected_signs": spec.expected_signs,
+        "sign_checks": _sign_checks(r),
         "woe_maps": {k: {kk: vv for kk, vv in v.items() if kk != "map"}
                      for k, v in r.fit.woe_maps.items()},
         "performance_note": (
@@ -555,7 +596,86 @@ def segment_backtest(portfolio: str, hash_: str, column: str):
     from ..models import design as dz
     from ..models.fit import predict as pr
     des = dz.build(df, r.spec, woe_maps=r.fit.woe_maps, means=r.fit.means,
-                   stds=r.fit.stds)
+                   stds=r.fit.stds, basis_maps=r.fit.basis_maps)
     p = pr(des.X, r.fit.beta)
     return _jsonable({"column": column,
                       "segments": bt.segment_backtest(df, des.y, p, column)})
+
+
+# ── scenarios and ECL ────────────────────────────────────────────────────────
+from ..models import scenario_service as scensvc                        # noqa: E402
+
+
+class EclRequest(FitRequest):
+    scenarios: list[str] = ["baseline", "adverse", "severely_adverse"]
+    weights: dict[str, float] | None = None
+    custom: dict[str, dict[str, float]] | None = None
+    fixed_ccf: float | None = None
+    cpr: float = 0.0
+    cap_to_fitted_range: bool = True
+    bridge_from: str = "baseline"
+    bridge_to: str = "severely_adverse"
+
+
+@app.post("/api/ecl")
+def project_ecl(req: EclRequest):
+    if req.portfolio not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {req.portfolio!r}")
+    if not req.variables:
+        raise HTTPException(400, "select at least one variable")
+    try:
+        r = scensvc.run(req.to_spec(), scenarios=req.scenarios, weights=req.weights,
+                        custom=req.custom, fixed_ccf=req.fixed_ccf, cpr=req.cpr,
+                        cap_to_fitted_range=req.cap_to_fitted_range,
+                        bridge_from=req.bridge_from, bridge_to=req.bridge_to)
+    except Exception as e:                                              # noqa: BLE001
+        raise HTTPException(400, f"{type(e).__name__}: {e}") from e
+
+    sc_meta, _ = scen.load_all()
+    return _jsonable({
+        "portfolio": r.portfolio, "model_hash": r.model_hash, "as_of": r.as_of,
+        "horizon_months": r.horizon_months, "timings": r.timings,
+        "capped": r.capped,
+        "scenarios": [{
+            "key": k, "label": sc_meta[k].label, "published": sc_meta[k].published,
+            "source": sc_meta[k].source, "note": sc_meta[k].note,
+            "n_accounts": v.n_accounts, "exposure": v.total_exposure,
+            "ecl": v.ecl, "ecl_bps": v.ecl_bps,
+            "weighted_pd_12m": v.weighted_pd_12m, "weighted_lgd": v.weighted_lgd,
+            "monthly": v.monthly, "by_segment": v.by_segment, "ifrs9": v.ifrs9,
+            "uncapped_ecl": r.uncapped_ecl.get(k),
+        } for k, v in r.results.items()],
+        "weights": r.weights, "weighted_ecl": r.weighted_ecl,
+        "bridge": [{"label": s.label, "value": s.value, "running": s.running,
+                    "kind": s.kind, "note": s.note} for s in r.bridge],
+        "bridge_reconciles": {"ok": r.bridge_reconciles[0],
+                              "residual": r.bridge_reconciles[1]},
+        "shapley": r.shapley,
+        "extrapolation": [e.__dict__ for e in r.extrapolation],
+        "ead": {"method": r.ead.method, "plain_english": r.ead.plain_english,
+                "parameters": r.ead.parameters, "estimated_ccf": r.ead.estimated_ccf,
+                "ccf_sample": r.ead.ccf_sample, "ccf_note": r.ead.ccf_note},
+        "lgd": {"n_defaults": r.lgd.n_defaults, "mean_lgd": r.lgd.mean_lgd,
+                "zero_loss_share": r.lgd.zero_loss_share,
+                "mean_severity_given_loss": r.lgd.mean_severity_given_loss,
+                "mean_workout_months": r.lgd.mean_workout_months,
+                "calibration": r.lgd.calibration, "note": r.lgd.fit_note,
+                "drivers": scensvc.LGD.LGD_DRIVERS.get(r.portfolio, [])},
+    })
+
+
+@app.get("/api/scenarios/{name}/editable")
+def editable_scenario(name: str, keys: str = Query(...)):
+    """The quarterly points the scenario editor lets a user drag."""
+    sc, _ = scen.load_all()
+    if name not in sc:
+        raise HTTPException(404, f"unknown scenario {name!r}")
+    q = sc[name].quarterly
+    out = {}
+    for k in [x.strip() for x in keys.split(",") if x.strip()]:
+        base = k[:-4] if k.endswith("_yoy") else k
+        if base in q.columns:
+            out[base] = [{"quarter": d.strftime("%Y-%m-%d"), "value": float(v)}
+                         for d, v in q[base].items()]
+    return _jsonable({"scenario": name, "published": sc[name].published,
+                      "note": sc[name].note, "series": out})

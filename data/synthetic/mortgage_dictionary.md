@@ -54,7 +54,7 @@ institution's portfolio and must never be presented as one.
 | `scheduled_payment` | float64 | 0.0% | Contractual monthly payment, USD. |
 | `fico_orig` | float64 | 0.0% | Credit driver. higher reduces risk |
 | `original_ltv` | float64 | 0.0% | Account attribute. |
-| `dti` | float64 | 14.9% | Credit driver. higher raises risk |
+| `dti` | float64 | 14.8% | Credit driver. higher raises risk |
 | `annual_income` | float64 | 0.0% | Credit driver. higher reduces risk |
 | `second_lien_pct` | float64 | 29.8% | Account attribute. |
 | `doc_type` | object | 0.0% | Categorical credit driver. |

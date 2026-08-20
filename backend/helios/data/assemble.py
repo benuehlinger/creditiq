@@ -65,6 +65,29 @@ def realise_lgd(panel: pd.DataFrame, accounts: pd.DataFrame, spec: PortfolioSpec
                       1, 60)
 
     z = np.zeros(n)
+
+    # MACRO AT DEFAULT. Without this the realised severity carries no
+    # relationship to the cycle, and a model fitted on it produces a downturn LGD
+    # that does not move — which the brief singles out as the most common thing a
+    # validator catches. It was missing from the first draft of this function:
+    # the coefficients were declared on the portfolio spec and never applied, so
+    # the attribution bridge showed an LGD contribution of almost exactly zero.
+    from ..mev.panel import monthly_panel
+    mev = monthly_panel()
+    when = pd.DatetimeIndex(sub["performance_date"]).to_period("M").to_timestamp()
+    if spec.key == "consumer":
+        u = mev["unemployment_rate"].reindex(when).to_numpy(float)
+        # unsecured recoveries depend on the borrower's ability to pay after
+        # default, which collapses with the labour market
+        z += 0.13 * np.nan_to_num(u - 5.5, nan=0.0)
+    elif spec.key == "mortgage":
+        g = mev["hpi_yoy"].reindex(when).to_numpy(float)
+        # falling house prices cut the liquidation value directly
+        z += -0.075 * np.nan_to_num(g - 5.0, nan=0.0)
+    elif spec.key == "cre":
+        g = mev["cre_price_index_yoy"].reindex(when).to_numpy(float)
+        z += -0.060 * np.nan_to_num(g - 3.0, nan=0.0)
+
     if spec.key == "mortgage":
         cltv = sub["cltv"].to_numpy(float) if "cltv" in sub else sub["current_ltv"].to_numpy(float)
         z += 0.030 * (cltv - 80.0)

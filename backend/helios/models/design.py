@@ -24,7 +24,7 @@ transform to the test target and leaks it into the score.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
@@ -89,6 +89,7 @@ class Design:
     woe_maps: dict[str, dict]
     means: np.ndarray
     stds: np.ndarray
+    basis_maps: dict[str, dict] = field(default_factory=dict)
 
     @property
     def n(self) -> int:
@@ -140,7 +141,8 @@ def _apply_woe(x: pd.Series, m: dict) -> np.ndarray:
     return out.astype(float)
 
 
-def _spline_basis(v: np.ndarray, knots) -> tuple[np.ndarray, list[str]]:
+def _spline_basis(v: np.ndarray, knots, fitted: dict | None = None
+                  ) -> tuple[np.ndarray, list[str], dict]:
     """Piecewise-linear spline basis, ORTHOGONALIZED.
 
     The raw hinge basis — the value plus max(value - knot, 0) at each knot — is
@@ -156,24 +158,46 @@ def _spline_basis(v: np.ndarray, knots) -> tuple[np.ndarray, list[str]]:
     meaning — which is honest, because a spline's shape is the quantity of
     interest, not its basis weights. The Model surface plots the curve.
     """
-    cols = [v.astype(float)]
-    names = ["value"]
-    for k in knots:
-        cols.append(np.maximum(v - k, 0.0))
-        names.append(f"gt{k}")
-    B = np.column_stack(cols)
+    def raw(vv, ks):
+        cols = [vv.astype(float)]
+        nm = ["value"]
+        for kk in ks:
+            cols.append(np.maximum(vv - kk, 0.0))
+            nm.append(f"gt{kk}")
+        return np.column_stack(cols), nm
+
+    if fitted is not None:
+        # APPLY a previously fitted basis. The knot set and the orthogonalising
+        # map must both come from training: a projection ages accounts past knots
+        # that were dead in the fit sample, which would otherwise change the
+        # column count, and re-running QR on new data produces a DIFFERENT basis
+        # spanning the same space — the fitted coefficients would then be applied
+        # to the wrong vectors.
+        B, _ = raw(v, fitted["knots"])
+        B = (B - np.asarray(fitted["center"])) @ np.asarray(fitted["rinv"])
+        B = B * np.asarray(fitted["signs"])
+        return B, [f"basis{i + 1}" for i in range(B.shape[1])], fitted
+
+    B, names = raw(v, knots)
     keep = B.std(axis=0) > 1e-9              # a knot beyond the data's range is dead
+    live_knots = [k for k, kp in zip(knots, keep[1:]) if kp]
     B = B[:, keep]
     names = [n for n, k in zip(names, keep) if k]
+    meta: dict = {"knots": live_knots}
     if B.shape[1] > 1:
-        B = B - B.mean(axis=0)
-        Q, _ = np.linalg.qr(B)
-        # keep the sign convention stable so refits do not flip the plotted curve
-        signs = np.sign(np.sum(Q * B, axis=0))
+        center = B.mean(axis=0)
+        Bc = B - center
+        Q, R = np.linalg.qr(Bc)
+        signs = np.sign(np.sum(Q * Bc, axis=0))
         signs[signs == 0] = 1.0
         B = Q * signs
         names = [f"basis{i + 1}" for i in range(B.shape[1])]
-    return B, names
+        meta |= {"center": center.tolist(),
+                 "rinv": np.linalg.pinv(R).tolist(), "signs": signs.tolist()}
+    else:
+        meta |= {"center": [0.0] * B.shape[1],
+                 "rinv": np.eye(B.shape[1]).tolist(), "signs": [1.0] * B.shape[1]}
+    return B, names, meta
 
 
 def mev_series(spec: MevSpec) -> pd.Series:
@@ -203,7 +227,9 @@ BIN_FIT_ROWS = 300_000
 def build(df: pd.DataFrame, spec: ModelSpec,
           woe_maps: dict[str, dict] | None = None,
           means: np.ndarray | None = None,
-          stds: np.ndarray | None = None) -> Design:
+          stds: np.ndarray | None = None,
+          mev_override: pd.DataFrame | None = None,
+          basis_maps: dict[str, dict] | None = None) -> Design:
     """Build the design matrix.
 
     When a variable has no stored edges the binning is fitted on an
@@ -219,6 +245,7 @@ def build(df: pd.DataFrame, spec: ModelSpec,
     blocks: list[np.ndarray] = []
     names: list[str] = []
     maps: dict[str, dict] = dict(woe_maps or {})
+    bases: dict[str, dict] = dict(basis_maps or {})
 
     for v in spec.variables:
         if v.column not in df.columns:
@@ -241,8 +268,10 @@ def build(df: pd.DataFrame, spec: ModelSpec,
             blocks.append(vec[:, None]); names.append(f"{v.column}_woe")
         elif v.transform == "spline":
             col = pd.to_numeric(x, errors="coerce")
-            b, sub = _spline_basis(col.fillna(col.median()).to_numpy(),
-                                   v.knots or SEASONING_KNOTS)
+            b, sub, meta = _spline_basis(col.fillna(col.median()).to_numpy(),
+                                         v.knots or SEASONING_KNOTS,
+                                         fitted=bases.get(v.column))
+            bases[v.column] = meta
             blocks.append(b); names += [f"{v.column}_{s}" for s in sub]
         else:
             col = pd.to_numeric(x, errors="coerce")
@@ -250,11 +279,22 @@ def build(df: pd.DataFrame, spec: ModelSpec,
             names.append(v.column)
 
     if spec.seasoning_spline and "months_on_book" in df.columns:
-        sk = (spec.portfolio, "__seasoning__", len(df), int(df.index[0]))
-        b = _cache_col(sk, lambda: _spline_basis(
-            df["months_on_book"].to_numpy(float), SEASONING_KNOTS)[0])
-        n_basis = b.shape[1]
-        blocks.append(b); names += [f"seasoning_basis{i + 1}" for i in range(n_basis)]
+        mob = df["months_on_book"].to_numpy(float)
+        fitted = bases.get("__seasoning__")
+        if fitted is not None:
+            b, _, meta = _spline_basis(mob, SEASONING_KNOTS, fitted=fitted)
+        else:
+            sk = (spec.portfolio, "__seasoning__", len(df), int(df.index[0]))
+            got = _COL_CACHE.get(sk)
+            if got is None:
+                b, _, meta = _spline_basis(mob, SEASONING_KNOTS)
+                if len(_COL_CACHE) >= _COL_CACHE_MAX:
+                    _COL_CACHE.pop(next(iter(_COL_CACHE)))
+                _COL_CACHE[sk] = (b, meta)
+            else:
+                b, meta = got
+        bases["__seasoning__"] = meta
+        blocks.append(b); names += [f"seasoning_basis{i + 1}" for i in range(b.shape[1])]
 
     if spec.mevs:
         dates = pd.DatetimeIndex(df["performance_date"]).to_period("M").to_timestamp()
@@ -263,9 +303,21 @@ def build(df: pd.DataFrame, spec: ModelSpec,
                   len(df), int(df.index[0]))
 
             def _mk(m=m):
-                vals = mev_series(m).reindex(dates).to_numpy(float)
+                # A scenario projection supplies its OWN macro path: history plus
+                # the spliced forward path. Falling back to the historical panel
+                # here would silently project the future using the past, which is
+                # the exact opposite of what a stress test is for.
+                if mev_override is not None and m.key in mev_override.columns:
+                    src = mev_override[m.key].astype(float)
+                    if m.lag_months:
+                        src = src.shift(m.lag_months)
+                    vals = src.reindex(dates).to_numpy(float)
+                else:
+                    vals = mev_series(m).reindex(dates).to_numpy(float)
                 return np.nan_to_num(vals, nan=float(np.nanmedian(vals)))[:, None]
-            blocks.append(_cache_col(mk, _mk)); names.append(f"mev:{m.label()}")
+            # never cache an overridden column — the scenario changes under it
+            blocks.append(_mk() if mev_override is not None else _cache_col(mk, _mk))
+            names.append(f"mev:{m.label()}")
 
     if spec.vintage_effect and "vintage" in df.columns:
         d = pd.get_dummies(df["vintage"].astype(int), prefix="vintage",
@@ -290,4 +342,4 @@ def build(df: pd.DataFrame, spec: ModelSpec,
     return Design(X=X, columns=["intercept", *names], y=y,
                   dates=df["performance_date"].to_numpy(),
                   accounts=df["account_id"].to_numpy(),
-                  woe_maps=maps, means=means, stds=stds)
+                  woe_maps=maps, means=means, stds=stds, basis_maps=bases)

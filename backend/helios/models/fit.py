@@ -52,6 +52,7 @@ class FitResult:
     fit_seconds: float
     separation_warning: str | None = None
     woe_maps: dict = field(default_factory=dict)
+    basis_maps: dict = field(default_factory=dict)
     means: np.ndarray | None = None
     stds: np.ndarray | None = None
 
@@ -174,6 +175,7 @@ def fit(design: Design, spec: ModelSpec) -> FitResult:
         converged=ok, iterations=iters, log_likelihood=ll, null_log_likelihood=ll0,
         fit_seconds=time.perf_counter() - t0, separation_warning=warn,
         woe_maps=design.woe_maps, means=design.means, stds=design.stds,
+        basis_maps=design.basis_maps,
     )
 
 

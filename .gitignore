@@ -1,0 +1,19 @@
+# secrets — the FRED key never lands on disk
+.env
+.env.*
+*.key
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+# node
+node_modules/
+dist/
+# generated panels are large; parquet is regenerated with `make data`
+data/synthetic/*.parquet
+# but keep the CSV samples and dictionaries
+!data/synthetic/*_sample.csv
+!data/synthetic/*_dictionary.md
+.DS_Store

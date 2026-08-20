@@ -1,0 +1,35 @@
+{
+  "consumer": {
+    "rows": 1350247,
+    "accounts": 50000,
+    "defaults": 4906,
+    "annual_default_rate_pct": 4.36,
+    "window": [
+      "2015-01-01",
+      "2025-12-01"
+    ],
+    "seed": 20260819
+  },
+  "mortgage": {
+    "rows": 1736472,
+    "accounts": 40000,
+    "defaults": 1770,
+    "annual_default_rate_pct": 1.223,
+    "window": [
+      "2015-01-01",
+      "2025-12-01"
+    ],
+    "seed": 20260820
+  },
+  "cre": {
+    "rows": 236195,
+    "accounts": 7000,
+    "defaults": 356,
+    "annual_default_rate_pct": 1.809,
+    "window": [
+      "2015-01-01",
+      "2025-12-01"
+    ],
+    "seed": 20260821
+  }
+}

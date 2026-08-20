@@ -255,7 +255,13 @@ def bin_categorical(x: pd.Series, y: pd.Series,
         for lvl in g:
             lookup[str(lvl)] = gi
 
-    key = s.map(lambda v: lookup.get(str(v), -2) if pd.notna(v) else -1)
+    # Categorical codes rather than a per-row lambda. On a million-row column the
+    # lambda dominated the whole design-matrix build.
+    cat = s.astype("category")
+    lut = np.array([lookup.get(str(c), -2) for c in cat.cat.categories], dtype=np.int64)
+    codes = cat.cat.codes.to_numpy()
+    key = pd.Series(np.where(codes >= 0, lut[np.clip(codes, 0, max(len(lut) - 1, 0))], -1),
+                    index=s.index)
     rows = []
     labels: list[tuple[int, str, list[str] | None, bool]] = []
     if key.eq(-1).any():

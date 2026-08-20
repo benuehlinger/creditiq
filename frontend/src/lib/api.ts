@@ -170,6 +170,85 @@ export interface CorrelationResult {
 }
 
 
+export interface Coefficient {
+  name: string; estimate: number; std_error: number; z_stat: number
+  p_value: number; vif: number; contribution: number
+}
+
+export interface Cohort {
+  period: string; n: number; events: number
+  actual: number; predicted: number
+  actual_annual: number; predicted_annual: number
+  actual_lo_annual: number; actual_hi_annual: number
+  calibrated: boolean; auc: number; ks: number; gini: number
+}
+
+export interface FitResponse {
+  hash: string; name: string; created_at: string; portfolio: string
+  spec: Record<string, unknown>
+  converged: boolean; iterations: number; separation_warning: string | null
+  n_train: number; n_events_train: number
+  slices: Record<string, number>; n_full: number; downsampled: boolean
+  timings: Record<string, number>
+  coefficients: Coefficient[]
+  diagnostics: {
+    train?: SliceMetrics; test?: SliceMetrics; oot?: SliceMetrics
+    roc: { fpr: number; tpr: number }[]
+    ks_curve: { score: number; cum_bad: number; cum_good: number; sep: number }[]
+    calibration: {
+      bins: { bin: number; n: number; predicted: number; observed: number
+              predicted_annual: number; observed_annual: number; events: number }[]
+      hl_statistic: number; hl_p_value: number; hl_dof: number; hl_note: string
+    }
+    gains: { decile: number; n: number; events: number; event_rate_annual: number
+             mean_predicted: number; capture_pct: number
+             cumulative_capture_pct: number; lift: number }[]
+    mcfadden_r2: number; reference_slice: string
+  }
+  backtest: {
+    cohorts: Cohort[]
+    rank_order: { deciles: number; periods: number; breaks: number
+                  share_monotone: number
+                  rows: { period: string; monotone: boolean; rates_annual: (number|null)[] }[] }
+    score_psi: { period: string; psi: number; n: number }[]
+    vintages: { vintage: number; points: { mob: number; cumulative_default_pct: number; n: number }[] }[]
+    oot_from: string
+    segment_column: string | null
+    segments: { segment: string; n: number; events: number; auc: number
+                auc_delta: number; actual_annual: number; predicted_annual: number
+                calibrated: boolean; bias_pct: number }[]
+  }
+  scorecard: { base_score: number; base_odds: number; pdo: number
+               factor: number; offset: number
+               points: { variable: string; bin: string; woe: number; points: number }[] }
+  target: { column: string; label: string; description: string }
+  ead: { method: string; note: string }
+  expected_signs: Record<string, number>
+  woe_maps: Record<string, { kind: string; edges?: number[]; woe?: number[]
+                             labels?: string[]; iv: number; missing_woe: number }>
+  performance_note: string
+}
+
+export interface SliceMetrics {
+  n: number; events: number; auc: number; gini: number; ks: number
+  ks_at_score: number; brier: number; log_loss: number
+  actual_annual: number; predicted_annual: number
+}
+
+export interface FitRequest {
+  portfolio: string
+  variables: { column: string; transform?: string; edges?: number[] | null }[]
+  mevs: { key: string; transform?: string; lag_months?: number }[]
+  estimator?: string
+  regularization?: number
+  seasoning_spline?: boolean
+  vintage_effect?: boolean
+  test_fraction?: number
+  oot_from?: string
+  downsample_rows?: number | null
+  label?: string | null
+}
+
 export const api = {
   health: () => get<{ status: string; portfolios: PortfolioKey[]; mev_series_resolved: number
                       mev_series_failed: number; mev_cache_built_at: string }>('/health'),
@@ -212,4 +291,18 @@ export const api = {
   vif: (k: string, cols: string[]) =>
     get<{ vif: { column: string; vif: number }[]; skipped: string[] }>(
       `/portfolios/${k}/vif`, { columns: cols.join(',') }),
+  fit: async (req: FitRequest): Promise<FitResponse> => {
+    const r = await fetch('/api/fit', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(req),
+    })
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? r.statusText)
+    return r.json()
+  },
+  segmentBacktest: (portfolio: string, hash: string, column: string) =>
+    fetch(`/api/segment-backtest?portfolio=${portfolio}&hash_=${hash}&column=${column}`,
+          { method: 'POST' }).then((r) => r.json()) as Promise<{
+      column: string
+      segments: FitResponse['backtest']['segments']
+    }>,
 }

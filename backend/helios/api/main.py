@@ -444,3 +444,118 @@ def _warm() -> None:
             pass
 
     threading.Thread(target=run, daemon=True).start()
+
+
+# ── model ────────────────────────────────────────────────────────────────────
+from pydantic import BaseModel                                          # noqa: E402
+
+from ..models import service as modelsvc                                # noqa: E402
+from ..models.naming import friendly_name                               # noqa: E402
+from ..models.spec import MevSpec, ModelSpec, SampleSpec, VariableSpec  # noqa: E402
+
+
+class FitRequest(BaseModel):
+    portfolio: str
+    variables: list[dict] = []
+    mevs: list[dict] = []
+    estimator: str = "logistic"
+    regularization: float = 1.0
+    seasoning_spline: bool = True
+    vintage_effect: bool = False
+    test_fraction: float = 0.30
+    oot_from: str = "2023-01-01"
+    downsample_rows: int | None = None
+    label: str | None = None
+    parent_hash: str | None = None
+
+    def to_spec(self) -> ModelSpec:
+        return ModelSpec(
+            portfolio=self.portfolio,
+            variables=[VariableSpec(**v) for v in self.variables],
+            mevs=[MevSpec(**m) for m in self.mevs],
+            estimator=self.estimator,                    # type: ignore[arg-type]
+            regularization=self.regularization,
+            seasoning_spline=self.seasoning_spline,
+            vintage_effect=self.vintage_effect,
+            sample=SampleSpec(test_fraction=self.test_fraction, oot_from=self.oot_from,
+                              downsample_rows=self.downsample_rows),
+            target_column=PORTFOLIOS[self.portfolio].target.column,
+            label=self.label, parent_hash=self.parent_hash,
+        )
+
+
+def _run_payload(r) -> dict:
+    spec = PORTFOLIOS[r.spec.portfolio]
+    return {
+        "hash": r.hash, "name": r.name, "created_at": r.created_at,
+        "portfolio": r.spec.portfolio,
+        "spec": r.spec.to_dict(),
+        "converged": r.fit.converged, "iterations": r.fit.iterations,
+        "separation_warning": r.fit.separation_warning,
+        "n_train": r.fit.n_train, "n_events_train": r.fit.n_events_train,
+        "slices": r.slices, "n_full": r.n_full, "downsampled": r.downsampled,
+        "timings": r.timings,
+        "coefficients": [c.__dict__ for c in r.fit.coefficients],
+        "diagnostics": r.diagnostics,
+        "backtest": r.backtest,
+        "scorecard": r.scorecard,
+        "target": {"column": spec.target.column, "label": spec.target.label,
+                   "description": spec.target.description},
+        "ead": {"method": spec.ead_method, "note": spec.ead_note},
+        "expected_signs": spec.expected_signs,
+        "woe_maps": {k: {kk: vv for kk, vv in v.items() if kk != "map"}
+                     for k, v in r.fit.woe_maps.items()},
+        "performance_note": (
+            f"Fitted and backtested in {r.timings.get('total', 0):.1f} seconds on "
+            f"{r.n_full:,} account-months."
+            + (f" The FIT sample was thinned to {r.spec.sample.downsample_rows:,} rows "
+               f"(every default kept, non-events thinned, intercept prior-corrected); "
+               f"scoring, diagnostics and backtesting still use every row."
+               if r.downsampled else
+               " No downsampling — every account-month was used for the fit.")),
+    }
+
+
+@app.post("/api/fit")
+def fit_model(req: FitRequest):
+    if req.portfolio not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {req.portfolio!r}")
+    if not req.variables:
+        raise HTTPException(400, "select at least one variable")
+    try:
+        r = modelsvc.run(req.to_spec())
+    except Exception as e:                                              # noqa: BLE001
+        raise HTTPException(400, f"{type(e).__name__}: {e}") from e
+    return _jsonable(_run_payload(r))
+
+
+@app.get("/api/models/{hash_}")
+def get_model(hash_: str):
+    r = modelsvc.cached(hash_)
+    if r is None:
+        raise HTTPException(404, "not in cache — refit from the specification")
+    return _jsonable(_run_payload(r))
+
+
+@app.get("/api/name/{hash_}")
+def name_for(hash_: str):
+    return {"hash": hash_, "name": friendly_name(hash_)}
+
+
+@app.post("/api/segment-backtest")
+def segment_backtest(portfolio: str, hash_: str, column: str):
+    r = modelsvc.cached(hash_)
+    if r is None:
+        raise HTTPException(404, "not in cache")
+    from ..models import backtest as bt
+    df = store.analysis_frame(portfolio)
+    if column not in df.columns:
+        raise HTTPException(400, f"unknown column {column!r}")
+    # rescore rather than store a 1.7M-row vector per cached model
+    from ..models import design as dz
+    from ..models.fit import predict as pr
+    des = dz.build(df, r.spec, woe_maps=r.fit.woe_maps, means=r.fit.means,
+                   stds=r.fit.stds)
+    p = pr(des.X, r.fit.beta)
+    return _jsonable({"column": column,
+                      "segments": bt.segment_backtest(df, des.y, p, column)})

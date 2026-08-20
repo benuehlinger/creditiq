@@ -99,6 +99,77 @@ export interface SplicedSeries {
   points: { date: string; value: number; projected: boolean }[]
 }
 
+
+// ── explore ──────────────────────────────────────────────────────────────────
+export interface ScreenRow {
+  column: string
+  kind: 'numeric' | 'categorical'
+  iv: number
+  iv_band: string
+  iv_null_floor: number
+  above_null: boolean
+  max_bin_lift: number
+  leakage_risk: 'none' | 'review' | 'likely'
+  leakage_reason: string
+  monotone: boolean
+  monotone_direction: string
+  missing_pct: number
+  n_unique: number
+  expected_sign: number | null
+  observed_sign: number | null
+  sign_ok: boolean | null
+  warnings: string[]
+  error?: string
+}
+
+export interface BinRow {
+  index: number
+  label: string
+  lo: number | null
+  hi: number | null
+  levels: string[] | null
+  count: number
+  events: number
+  non_events: number
+  event_rate: number
+  woe: number
+  iv_contribution: number
+  pct_of_total: number
+  is_special: boolean
+}
+
+export interface BinningResult {
+  column: string
+  kind: 'numeric' | 'categorical'
+  iv: number
+  edges: number[] | null
+  groups: string[][] | null
+  monotone: boolean
+  monotone_direction: string
+  n_total: number
+  n_events: number
+  warnings: string[]
+  bins: BinRow[]
+  sampled: boolean
+  max_bin_lift: number
+  max_lift_bin: string
+  leakage_risk: 'none' | 'review' | 'likely'
+  leakage_reason: string
+  expected_sign: number | null
+  observed_sign: number | null
+  domain: [number, number] | null
+  histogram: { bounds: number[]; counts: number[] } | null
+}
+
+export interface CorrelationResult {
+  columns: string[]
+  matrix: number[][]
+  method: string
+  high_pairs: { a: string; b: string; corr: number }[]
+  clusters: { cluster: number; members: string[]; recommended: string }[]
+}
+
+
 export const api = {
   health: () => get<{ status: string; portfolios: PortfolioKey[]; mev_series_resolved: number
                       mev_series_failed: number; mev_cache_built_at: string }>('/health'),
@@ -117,4 +188,28 @@ export const api = {
   spliced: (name: string, keys: string[], historyFrom = '2015-01-01') =>
     get<{ scenario: string; published: boolean; series: Record<string, SplicedSeries> }>(
       `/scenarios/${name}/spliced`, { keys: keys.join(','), history_from: historyFrom }),
+  screen: (k: string) =>
+    get<{
+      sampled: boolean; n_rows: number; rows: ScreenRow[]
+      floors: Record<string, number>; sample_note: string; null_note: string
+      bands: { upto: number | null; label: string }[]
+    }>(`/portfolios/${k}/screen`),
+  binning: (k: string, col: string, edges?: number[], maxBins = 8) =>
+    get<BinningResult>(`/portfolios/${k}/binning/${encodeURIComponent(col)}`, {
+      max_bins: maxBins, edges: edges?.length ? edges.join(',') : undefined,
+    }),
+  bivariate: (k: string, col: string, edges?: number[]) =>
+    get<{
+      column: string; bins: string[]
+      points: { period: string; bin: string; n: number; sum: number; rate: number }[]
+    }>(`/portfolios/${k}/bivariate/${encodeURIComponent(col)}`, {
+      edges: edges?.length ? edges.join(',') : undefined,
+    }),
+  psi: (k: string, col: string) =>
+    get<{ column: string; points: { period: string; psi: number; n: number }[] }>(
+      `/portfolios/${k}/psi/${encodeURIComponent(col)}`),
+  correlation: (k: string) => get<CorrelationResult>(`/portfolios/${k}/correlation`),
+  vif: (k: string, cols: string[]) =>
+    get<{ vif: { column: string; vif: number }[]; skipped: string[] }>(
+      `/portfolios/${k}/vif`, { columns: cols.join(',') }),
 }

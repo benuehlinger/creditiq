@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 
 from ..data.spec import PortfolioSpec
+from .rates import annualize
 
 IDENTIFIERS = {"account_id"}
 DATES = {"performance_date", "origination_date"}
@@ -160,7 +161,7 @@ def check_integrity(panel: pd.DataFrame, spec: PortfolioSpec) -> list[dict]:
         else f"{multi:,} accounts default more than once. The target is meant to be "
              f"absorbing.", multi)
 
-    rate = float(tgt.mean() * 1200)
+    rate = float(annualize(tgt.mean()))
     ok = 0.1 <= rate <= 25.0
     add("Default rate is plausible", ok, "warning",
         f"{rate:.2f}% annualized." + ("" if ok else " Outside any credible band for "

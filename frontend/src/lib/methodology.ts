@@ -28,9 +28,9 @@ export const METHODOLOGY: Record<string, Entry> = {
     title: 'Annualized default rate',
     body: [
       { kind: 'text', text: 'Computed at the observation level and then aggregated by performance date, which is the frame a discrete-time hazard model uses.' },
-      { kind: 'formula', text: 'rate(t) = defaults(t) / account-months(t) x 12 x 100' },
+      { kind: 'formula', text: 'monthly hazard h(t) = defaults(t) / account-months(t)\nannual rate      = ( 1 - (1 - h(t))^12 ) x 100' },
       { kind: 'text', text: 'The denominator is account-months at risk in that month, not accounts outstanding at a point in time. An account that defaults, pays off or matures leaves the denominator from the following month, so the rate is a genuine hazard rather than a stock ratio.' },
-      { kind: 'note', text: 'Multiplying a monthly rate by twelve annualizes it on a simple basis. It is not compounded, which is the market convention for reporting a monthly default rate.' },
+      { kind: 'note', text: 'The annual figure COMPOUNDS the monthly hazard rather than multiplying it by twelve. The two agree to a rounding error at the rates a performing book runs at — 4.27% against 4.36% on the consumer portfolio — but simple annualization breaks down in the tail. A single quarter in a small, low-FICO bin can carry a 33% monthly hazard, which multiplies out to a 400% annual default rate. A book cannot lose 400% of itself in a year, and on a chart that artefact flattens every other line into the axis.' },
     ],
   },
   'mev-catalog': {

@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .. import store
 from ..analysis import profile as prof
+from ..analysis.rates import annualize
 from ..data.build import PLANTED_NOTES
 from ..data.portfolios import PORTFOLIOS
 from ..mev import panel as mev_panel
@@ -31,11 +32,20 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 def _jsonable(o):
-    """pandas and numpy types do not serialise. Normalise once, here."""
+    """pandas and numpy types do not serialise. Normalise once, here.
+
+    NaN and infinity are the trap. They are legitimate results — an empty bin has
+    an undefined event rate, a degenerate PSI is infinite — but `json.dumps`
+    emits bare `NaN`, which is not valid JSON and which FastAPI rejects with a
+    500. They become `null`, which the frontend already renders as an em dash.
+    Plain Python floats need this as much as numpy ones do; handling only
+    `np.floating` was the original bug.
+    """
     if isinstance(o, (np.integer,)):
         return int(o)
-    if isinstance(o, (np.floating,)):
-        return None if np.isnan(o) else float(o)
+    if isinstance(o, (np.floating, float)):
+        v = float(o)
+        return None if (np.isnan(v) or np.isinf(v)) else v
     if isinstance(o, (np.bool_,)):
         return bool(o)
     if isinstance(o, (pd.Timestamp,)):
@@ -72,7 +82,7 @@ def portfolios():
             "key": key, "label": s.label, "accent_slot": s.accent_slot,
             "n_accounts": len(pf.accounts), "n_rows": len(p),
             "n_defaults": int(p[s.target.column].sum()),
-            "annual_default_rate_pct": round(float(p[s.target.column].mean() * 1200), 3),
+            "annual_default_rate_pct": round(float(annualize(p[s.target.column].mean())), 3),
             "window": [p["performance_date"].min(), p["performance_date"].max()],
             "target": {"column": s.target.column, "label": s.target.label,
                        "description": s.target.description},
@@ -117,7 +127,7 @@ def portfolio_timeseries(key: str, by: str | None = Query(None)):
         g = df.groupby(df["performance_date"])
     agg = g.agg(observations=(tgt, "size"), defaults=(tgt, "sum"),
                 balance=("current_balance", "sum")).reset_index()
-    agg["annual_default_rate_pct"] = agg["defaults"] / agg["observations"] * 1200
+    agg["annual_default_rate_pct"] = annualize(agg["defaults"] / agg["observations"])
     agg = agg.rename(columns={by: "series"} if by else {})
     agg["performance_date"] = agg["performance_date"].dt.strftime("%Y-%m-%d")
     return _jsonable(agg.to_dict("records"))
@@ -215,3 +225,222 @@ def scenario_spliced(name: str, keys: str = Query(...), history_from: str = "201
 def design_tokens():
     """The validated palette, served so the frontend cannot drift from it."""
     return json.loads((ROOT / "frontend" / "src" / "design" / "tokens.json").read_text())
+
+
+# ── explore ──────────────────────────────────────────────────────────────────
+from functools import lru_cache                                        # noqa: E402
+
+from ..analysis import binning as binmod                               # noqa: E402
+from ..analysis import screening as screen                             # noqa: E402
+
+# Columns never offered as model inputs. Identifiers and dates are not
+# predictors, and the outcome columns ARE the answer.
+NEVER_SCREEN = {
+    "account_id", "performance_date", "origination_date", "default_flag",
+    "recovery_amount", "loss_amount", "exposure_at_default", "lgd_realised",
+    "workout_months", "terminal_event", "status",
+}
+
+
+def _candidates(key: str) -> list[str]:
+    df = store.analysis_frame(key)
+    out = []
+    for c in df.columns:
+        if c in NEVER_SCREEN or c.startswith("_"):
+            continue
+        if df[c].nunique(dropna=True) < 2:
+            continue
+        out.append(c)
+    return out
+
+
+@lru_cache(maxsize=8)
+def _screen_all(key: str) -> dict:
+    df, sampled = store.screening_frame(key)
+    spec = PORTFOLIOS[key]
+    y = df[spec.target.column]
+    # One null floor per SHAPE, shared across columns of that shape. Estimating
+    # it per column costs a permutation binning run each and takes ~48s to screen
+    # a book — not a thing anyone waits for in a meeting.
+    floors = {"numeric": binmod.null_floor_for_shape(y, "numeric"),
+              "categorical": binmod.null_floor_for_shape(y, "categorical")}
+    rows = []
+    for c in _candidates(key):
+        try:
+            numeric = (pd.api.types.is_numeric_dtype(df[c])
+                       and df[c].nunique(dropna=True) > 12)
+            sc, _ = screen.screen_column(
+                df[c], y, expected=spec.expected_signs.get(c),
+                null_floor=floors["numeric" if numeric else "categorical"])
+            rows.append(sc.__dict__)
+        except Exception as e:                                          # noqa: BLE001
+            rows.append({"column": c, "error": f"{type(e).__name__}: {e}", "iv": 0.0})
+    rows.sort(key=lambda r: -(r.get("iv") or 0))
+    return {"sampled": sampled, "n_rows": len(df), "rows": rows, "floors": floors}
+
+
+@app.get("/api/portfolios/{key}/screen")
+def screen_variables(key: str):
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+    res = _screen_all(key)
+    return _jsonable({
+        **res,
+        "bands": [{"upto": b[0] if b[0] != float("inf") else None, "label": b[1]}
+                  for b in screen.IV_BANDS],
+        "null_note": (
+            "The information-value null floor is the score a variable with NO "
+            "relationship to the target would reach on this sample, estimated by "
+            "permutation. It is above the textbook 0.02 threshold because the "
+            "procedure being measured optimally bins against the target, so the "
+            "floor prices in the binning step's own overfitting. It is estimated "
+            "once per data type, not per column."),
+        "sample_note": (
+            f"Screened on {res['n_rows']:,} account-months"
+            + (" — a deterministic, event-preserving subsample. Every default is "
+               "kept and only non-events are thinned, so no rare target is made "
+               "rarer. Final model fits use the full panel."
+               if res["sampled"] else " — the full panel.")),
+    })
+
+
+@app.get("/api/portfolios/{key}/binning/{column}")
+def binning(key: str, column: str, edges: str | None = None, max_bins: int = 8,
+            monotone: bool = True):
+    """Bin a variable. Pass `edges` as a comma-separated list to override the
+    optimal edges — this is what the drag interaction in the editor sends."""
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+    df, sampled = store.screening_frame(key)
+    if column not in df.columns:
+        raise HTTPException(404, f"unknown column {column!r}")
+    y = df[PORTFOLIOS[key].target.column]
+    x = df[column]
+    use_numeric = pd.api.types.is_numeric_dtype(x) and x.nunique(dropna=True) > 12
+    if use_numeric:
+        ed = [float(e) for e in edges.split(",") if e.strip()] if edges else None
+        b = binmod.bin_numeric(x, y, edges=ed, max_bins=max_bins, monotone=monotone)
+    else:
+        b = binmod.bin_categorical(x, y)
+    lift, where = screen.max_bin_lift(b)
+    risk, reason, _ = screen.leakage_verdict(b)
+    # The editor needs a drawing domain. p1-p99 rather than min-max: one planted
+    # impossible value (a DTI of 900) would otherwise compress the whole axis into
+    # the left two pixels and make the drag interaction useless.
+    domain = None
+    hist = None
+    if use_numeric:
+        v = pd.to_numeric(x, errors="coerce").dropna()
+        lo, hi = (float(np.nanpercentile(v, 1)), float(np.nanpercentile(v, 99)))
+        if hi <= lo:
+            lo, hi = float(v.min()), float(v.max()) or lo + 1
+        domain = [lo, hi]
+        counts, bounds = np.histogram(v.clip(lo, hi), bins=48, range=(lo, hi))
+        hist = {"bounds": [float(z) for z in bounds],
+                "counts": [int(z) for z in counts]}
+    return _jsonable({
+        **b.to_dict(), "sampled": sampled, "domain": domain, "histogram": hist,
+        "max_bin_lift": lift, "max_lift_bin": where,
+        "leakage_risk": risk, "leakage_reason": reason,
+        "expected_sign": PORTFOLIOS[key].expected_signs.get(column),
+        "observed_sign": screen.observed_sign(b),
+    })
+
+
+@app.get("/api/portfolios/{key}/bivariate/{column}")
+def bivariate(key: str, column: str, edges: str | None = None, freq: str = "QS"):
+    """Event rate over time BY BIN. Shows whether a variable's relationship with
+    the target is stable, which a single-period bad-rate chart cannot."""
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+    df, _ = store.screening_frame(key)
+    if column not in df.columns:
+        raise HTTPException(404, f"unknown column {column!r}")
+    tgt = PORTFOLIOS[key].target.column
+    x, y = df[column], df[tgt]
+    numeric = pd.api.types.is_numeric_dtype(x) and x.nunique(dropna=True) > 12
+    if numeric:
+        ed = [float(e) for e in edges.split(",") if e.strip()] if edges else None
+        b = binmod.bin_numeric(x, y, edges=ed)
+        cuts = [-np.inf, *(b.edges or []), np.inf]
+        idx = pd.Series(np.digitize(x.fillna(-np.inf), b.edges or []), index=x.index)
+        idx[x.isna()] = -1
+        names = {i: bn.label for i, bn in enumerate([z for z in b.bins if not z.is_special])}
+        names[-1] = "Missing"
+        label = idx.map(names)
+    else:
+        b = binmod.bin_categorical(x, y)
+        lookup = {str(v): bn.label for bn in b.bins if bn.levels for v in bn.levels}
+        label = x.astype(str).map(lookup).fillna("Missing")
+    g = (pd.DataFrame({"p": df["performance_date"], "b": label, "y": y})
+         .groupby([pd.Grouper(key="p", freq=freq), "b"])["y"]
+         .agg(["size", "sum"]).reset_index())
+    # Drop cells too small to estimate a rate from. At 30 account-months a single
+    # default reads as a 40% annualized rate and eight read as 320%, which
+    # dominates the chart and hides the pattern the reader came for. 250 caps the
+    # single-default artefact near 5%.
+    g = g[g["size"] >= 250]
+    g["rate"] = annualize(g["sum"] / g["size"])
+    g["p"] = g["p"].dt.strftime("%Y-%m-%d")
+    return _jsonable({
+        "column": column, "bins": [bn.label for bn in b.bins],
+        "points": g.rename(columns={"p": "period", "b": "bin", "size": "n"})
+                   .to_dict("records"),
+    })
+
+
+@app.get("/api/portfolios/{key}/psi/{column}")
+def psi_series(key: str, column: str):
+    df, _ = store.screening_frame(key)
+    if column not in df.columns:
+        raise HTTPException(404, f"unknown column {column!r}")
+    return _jsonable({"column": column, "points": screen.psi_over_time(df, column)})
+
+
+@app.get("/api/portfolios/{key}/correlation")
+def correlation(key: str, columns: str | None = None, method: str = "pearson"):
+    df, _ = store.screening_frame(key)
+    cols = ([c.strip() for c in columns.split(",")] if columns
+            else [c for c in _candidates(key)
+                  if pd.api.types.is_numeric_dtype(df[c]) and df[c].nunique() > 5])
+    cols = [c for c in cols if c in df.columns][:40]
+    ivs = {r["column"]: r.get("iv", 0.0) for r in _screen_all(key)["rows"]}
+    return _jsonable({
+        **screen.correlation(df, cols, method),
+        "high_pairs": screen.high_correlation_pairs(df, cols, 0.90),
+        "clusters": screen.cluster_representatives(df, cols, ivs),
+    })
+
+
+@app.get("/api/portfolios/{key}/vif")
+def vif_for(key: str, columns: str = Query(...)):
+    df, _ = store.screening_frame(key)
+    cols = [c.strip() for c in columns.split(",") if c.strip() and c.strip() in df.columns]
+    numeric = [c for c in cols if pd.api.types.is_numeric_dtype(df[c])]
+    return _jsonable({"vif": screen.vif(df, numeric),
+                      "skipped": [c for c in cols if c not in numeric]})
+
+
+@app.on_event("startup")
+def _warm() -> None:
+    """Warm the caches in the background so the first click of a demo is instant.
+
+    Screening a book takes a few seconds. Paying that while a client watches is
+    the difference between a product and a prototype, so it is paid at boot.
+    """
+    import threading
+
+    def run():
+        for k in store.available():
+            try:
+                store.analysis_frame(k)
+                _screen_all(k)
+            except Exception:                                           # noqa: BLE001
+                pass                                    # a warm-up failure is not fatal
+        try:
+            mev_panel.monthly_panel()
+            scen.load_all()
+        except Exception:                                               # noqa: BLE001
+            pass
+
+    threading.Thread(target=run, daemon=True).start()

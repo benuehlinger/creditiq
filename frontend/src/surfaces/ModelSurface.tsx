@@ -19,6 +19,7 @@ const DEFAULT_MEVS: Record<string, string[]> = {
 export default function ModelSurface() {
   const { portfolio = 'consumer' } = useParams()
   const picked = useUi((s) => s.selectedVariables[portfolio as PortfolioKey] ?? [])
+  const setFitted = useUi((s) => s.setFitted)
   const [estimator, setEstimator] = useState('logistic')
   const [mevs, setMevs] = useState<string[]>(DEFAULT_MEVS[portfolio] ?? [])
   const [downsample, setDownsample] = useState<number | null>(null)
@@ -31,15 +32,26 @@ export default function ModelSurface() {
   const catalog = useQuery({ queryKey: ['mevcat'], queryFn: api.mevCatalog })
   const allowed = catalog.data?.by_portfolio?.[portfolio] ?? []
 
+  // ONE request object, used to fit and then stored verbatim. Save and project
+  // replay it, so a saved version is provably the model that was fitted.
+  const request = {
+    portfolio,
+    variables: picked.map((c) => ({ column: c })),
+    mevs: mevs.map((k) => ({ key: k })),
+    estimator, seasoning_spline: true, oot_from: ootFrom,
+    downsample_rows: downsample,
+  }
+
   const fit = useMutation({
-    mutationFn: () => api.fit({
-      portfolio,
-      variables: picked.map((c) => ({ column: c })),
-      mevs: mevs.map((k) => ({ key: k })),
-      estimator, seasoning_spline: true, oot_from: ootFrom,
-      downsample_rows: downsample,
-    }),
-    onSuccess: (r) => { setResult(r); setTab('spec') },
+    mutationFn: () => api.fit(request),
+    onSuccess: (r) => {
+      setResult(r)
+      setTab('spec')
+      setFitted(portfolio as PortfolioKey, {
+        request, hash: r.hash, name: r.name,
+        fittedAt: new Date().toISOString(), variablesAtFit: picked,
+      })
+    },
   })
 
   if (picked.length === 0) {

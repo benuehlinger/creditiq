@@ -23,7 +23,7 @@ const ORDER = ['baseline', 'adverse', 'severely_adverse']
 export default function ScenarioSurface() {
   const { portfolio = 'consumer' } = useParams()
   const theme = useUi((s) => s.theme)
-  const picked = useUi((s) => s.selectedVariables[portfolio as PortfolioKey] ?? [])
+  const fitted = useUi((s) => s.fitted[portfolio as PortfolioKey])
   const [res, setRes] = useState<EclResponse | null>(null)
   const [capped, setCapped] = useState(true)
   const [ifrs9, setIfrs9] = useState(false)
@@ -34,14 +34,19 @@ export default function ScenarioSurface() {
   useEffect(() => { setRes(null); setCustom({}) }, [portfolio])
 
   const run = useMutation({
-    mutationFn: (over?: Record<string, Record<string, number>>) => api.ecl({
-      portfolio,
-      variables: picked.map((c) => ({ column: c })),
-      mevs: (DEFAULT_MEVS[portfolio] ?? []).map((k) => ({ key: k })),
-      cap_to_fitted_range: capped,
-      custom: over ?? custom,
-      weights,
-    }),
+    // Project the model that was FITTED, not a specification rebuilt from the
+    // variable tray. Rebuilding it meant the scenario page could silently project
+    // a different model from the one on the Model surface whenever the estimator,
+    // the out-of-time date or the macro terms had been changed.
+    mutationFn: (over?: Record<string, Record<string, number>>) => {
+      if (!fitted) throw new Error('Fit a model on the Model surface first.')
+      return api.ecl({
+        ...fitted.request,
+        cap_to_fitted_range: capped,
+        custom: over ?? custom,
+        weights,
+      })
+    },
     onSuccess: setRes,
   })
 
@@ -70,15 +75,29 @@ export default function ScenarioSurface() {
     }
   }, [ordered, theme])
 
-  if (picked.length === 0) {
+  if (!fitted) {
     return (
-      <div className="p-4"><Card>
-        <CardHead title="Scenarios" subtitle={portfolio} />
-        <EmptyState title="No model to project">
-          The scenario engine projects a fitted PD model forward. Select variables on
-          Explore and fit on Model first.
-        </EmptyState>
-      </Card></div>
+      <div className="p-4">
+        <div className="mb-3 flex items-center gap-1">
+          {(['ecl', 'macro'] as const).map((t) => (
+            <button key={t} onClick={() => setTab(t)}
+              className={`rounded-ctl px-3 py-1 text-xs font-medium transition-colors ${
+                tab === t ? 'bg-accent-soft text-ink' : 'text-ink-muted hover:text-ink-secondary'}`}>
+              {t === 'ecl' ? 'Scenarios & ECL' : 'Macro variables'}
+            </button>
+          ))}
+        </div>
+        {tab === 'macro' ? <MacroPanel portfolio={portfolio} /> : (
+          <Card>
+            <CardHead title="Scenarios" subtitle={portfolio} />
+            <EmptyState title="No fitted model to project">
+              The scenario engine projects a fitted PD model forward — it does not
+              refit one. Select variables on Explore, fit on Model, then come back.
+              The macro variables tab works without a model.
+            </EmptyState>
+          </Card>
+        )}
+      </div>
     )
   }
 
@@ -104,7 +123,10 @@ export default function ScenarioSurface() {
       <Card>
         <div className="flex flex-wrap items-center gap-4 px-4 py-3">
           <div className="text-xs text-ink-secondary">
-            {picked.length} variables · CECL lifetime over the published horizon
+            Projecting <span className="font-medium text-ink">{fitted.name}</span>
+            {' '}· {fitted.request.variables.length} variables,
+            {' '}{fitted.request.mevs.length} macro terms
+            {' '}· <span className="font-mono text-tiny">{fitted.hash}</span>
           </div>
           <label className="flex items-center gap-1.5 text-tiny text-ink-muted"
             title="Winsorizes the forward macro path to the range the model was fitted on. Keeps the projection inside the evidence — and caps the stress. Both numbers are reported.">

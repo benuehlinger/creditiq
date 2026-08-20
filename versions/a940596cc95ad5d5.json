@@ -1,0 +1,116 @@
+{
+  "hash": "a940596cc95ad5d5",
+  "name": "tranquil-keystone-50",
+  "portfolio": "mortgage",
+  "created_at": "2026-08-20T03:35:21+00:00",
+  "spec": {
+    "portfolio": "mortgage",
+    "variables": [
+      {
+        "column": "fico_orig",
+        "transform": "woe",
+        "edges": null,
+        "groups": null,
+        "knots": null
+      },
+      {
+        "column": "months_on_book",
+        "transform": "woe",
+        "edges": null,
+        "groups": null,
+        "knots": null
+      },
+      {
+        "column": "original_ltv",
+        "transform": "woe",
+        "edges": null,
+        "groups": null,
+        "knots": null
+      },
+      {
+        "column": "property_value_current",
+        "transform": "woe",
+        "edges": null,
+        "groups": null,
+        "knots": null
+      },
+      {
+        "column": "cltv",
+        "transform": "woe",
+        "edges": null,
+        "groups": null,
+        "knots": null
+      },
+      {
+        "column": "remaining_term",
+        "transform": "woe",
+        "edges": null,
+        "groups": null,
+        "knots": null
+      }
+    ],
+    "mevs": [],
+    "estimator": "logistic",
+    "regularization": 1.0,
+    "seasoning_spline": true,
+    "vintage_effect": false,
+    "sample": {
+      "test_fraction": 0.3,
+      "oot_from": "2023-01-01",
+      "seed": 42,
+      "downsample_rows": null
+    },
+    "target_column": "default_flag",
+    "label": null,
+    "parent_hash": null,
+    "notes": "",
+    "hash": "a940596cc95ad5d5"
+  },
+  "metrics": {
+    "auc_test": 0.7555669402670302,
+    "auc_oot": 0.8193045847301942,
+    "ks_test": 0.3818278467055852,
+    "gini_test": 0.5111338805340604,
+    "log_loss_test": 0.007862614609855333,
+    "brier_test": 0.0010659637442843905,
+    "calibration_error": 0.00013558682958831654,
+    "mcfadden_r2": 0.07762867480783475,
+    "n_variables": 6,
+    "n_mevs": 0,
+    "estimator": "logistic",
+    "coefficients": {
+      "intercept": -8.113992316961095,
+      "fico_orig_woe": 0.4627651724724163,
+      "months_on_book_woe": 0.454900747044776,
+      "original_ltv_woe": 0.17834144975620528,
+      "property_value_current_woe": 0.07777830158097435,
+      "cltv_woe": 0.5107841331494867,
+      "remaining_term_woe": 0.1793941844311348,
+      "seasoning_basis1": 1.4871531667354223,
+      "seasoning_basis2": -4.4370764858089435,
+      "seasoning_basis3": -0.5014664194630588,
+      "seasoning_basis4": 0.03131754385527775,
+      "seasoning_basis5": -0.04255270677764437,
+      "seasoning_basis6": 0.024001747029125275,
+      "seasoning_basis7": 0.1124570823193767,
+      "seasoning_basis8": 0.1201235861954235,
+      "seasoning_basis9": 0.07288188103662134
+    }
+  },
+  "ecl": {
+    "ecl_baseline": 40247093.568506375,
+    "ecl_adverse": 56702594.06143531,
+    "ecl_severely_adverse": 82267162.64341176,
+    "ecl_bps_baseline": 96.7510480977138,
+    "ecl_bps_adverse": 136.30885907239596,
+    "ecl_bps_severely_adverse": 197.76419870485967,
+    "weighted_ecl": 53587757.53136613
+  },
+  "status": "challenger",
+  "starred": false,
+  "tags": [],
+  "notes": "",
+  "parent_hash": null,
+  "author": "Helios",
+  "schema_version": 1
+}

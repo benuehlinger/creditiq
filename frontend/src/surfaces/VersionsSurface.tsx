@@ -11,6 +11,12 @@ export default function VersionsSurface() {
   const { portfolio = 'consumer' } = useParams()
   const qc = useQueryClient()
   const picked = useUi((s) => s.selectedVariables[portfolio as PortfolioKey] ?? [])
+  const fitted = useUi((s) => s.fitted[portfolio as PortfolioKey])
+  // The tray can drift after a fit. Detect it and say so rather than silently
+  // saving a stale specification.
+  const stale = !!fitted && (
+    fitted.variablesAtFit.length !== picked.length ||
+    fitted.variablesAtFit.some((v) => !picked.includes(v)))
   const [selected, setSelected] = useState<string[]>([])
 
   const list = useQuery({ queryKey: ['versions', portfolio],
@@ -24,13 +30,18 @@ export default function VersionsSurface() {
   })
 
   const save = useMutation({
-    mutationFn: () => api.saveVersion({
-      portfolio,
-      variables: picked.map((c) => ({ column: c })),
-      mevs: [],
-      with_ecl: true,
-      parent_hash: list.data?.find((v) => v.status === 'champion')?.hash ?? null,
-    }),
+    // Replay the EXACT request that was fitted. Rebuilding it here is what made
+    // saving broken: it sent no macro terms, so it saved a different model —
+    // different hash, different name, different metrics — from the one on the
+    // Model surface.
+    mutationFn: () => {
+      if (!fitted) throw new Error('Fit a model first — there is nothing to save.')
+      return api.saveVersion({
+        ...fitted.request,
+        with_ecl: true,
+        parent_hash: list.data?.find((v) => v.status === 'champion')?.hash ?? null,
+      })
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['versions', portfolio] })
       qc.invalidateQueries({ queryKey: ['lineage', portfolio] })
@@ -59,14 +70,23 @@ export default function VersionsSurface() {
     <div className="space-y-3 p-4">
       <Card>
         <div className="flex flex-wrap items-center gap-3 px-4 py-3">
-          <div className="text-xs text-ink-secondary">
+          <div className="min-w-0 text-xs text-ink-secondary">
             {versions.length} saved version{versions.length === 1 ? '' : 's'} ·
             {' '}every one is a portable JSON file that re-runs to identical numbers
+            {fitted && (
+              <div className="mt-0.5 text-tiny text-ink-muted">
+                Ready to save: <span className="font-medium text-ink">{fitted.name}</span>
+                {' '}· {fitted.request.variables.length} variables,
+                {' '}{fitted.request.mevs.length} macro terms
+                {' '}· <span className="font-mono">{fitted.hash}</span>
+              </div>
+            )}
           </div>
-          <button onClick={() => save.mutate()} disabled={save.isPending || picked.length === 0}
+          <button onClick={() => save.mutate()} disabled={save.isPending || !fitted}
             className="ml-auto rounded-ctl bg-accent px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40"
-            title={picked.length === 0 ? 'Select variables on Explore first' : 'Save the current specification'}>
-            {save.isPending ? 'Saving…' : 'Save current specification'}
+            title={!fitted ? 'Fit a model on the Model surface first'
+                           : `Save ${fitted.name} exactly as fitted`}>
+            {save.isPending ? 'Saving…' : fitted ? `Save ${fitted.name}` : 'Nothing fitted yet'}
           </button>
           {selected.length >= 2 && (
             <button onClick={() => setSelected([])}
@@ -75,6 +95,20 @@ export default function VersionsSurface() {
             </button>
           )}
         </div>
+        {stale && (
+          <div className="border-t border-hairline px-4 py-2">
+            <StatusPill severity="warning">Selection changed since the fit</StatusPill>
+            <span className="ml-2 text-tiny text-ink-secondary">
+              The variable tray no longer matches {fitted!.name}. Saving stores the
+              model that was fitted, not the current tray. Refit on the Model surface
+              to save the new selection.
+            </span>
+          </div>
+        )}
+        {save.isError && (
+          <div className="border-t border-hairline px-4 py-2 text-xs"
+               style={{ color: 'var(--status-critical)' }}>{String(save.error)}</div>
+        )}
       </Card>
 
       {versions.length === 0 ? (

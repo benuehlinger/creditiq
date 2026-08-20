@@ -1,20 +1,44 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { PortfolioKey } from './api'
+import type { FitRequest, PortfolioKey } from './api'
 
 type Theme = 'dark' | 'light'
+
+/** The specification that was actually fitted, per portfolio.
+ *
+ *  This exists because three surfaces used to rebuild the spec independently and
+ *  each got it wrong in its own way: Versions saved with no macro terms at all,
+ *  and Scenarios projected whatever the variable tray happened to hold rather
+ *  than what was fitted. The consequence was silent — you got a saved version
+ *  with a different hash, a different name and different metrics from the model
+ *  on screen.
+ *
+ *  The REQUEST is stored rather than the response, because the request is what
+ *  determines the hash. Save and project replay it verbatim, so the version is
+ *  provably the model that was fitted. */
+export interface FittedModel {
+  request: FitRequest
+  hash: string
+  name: string
+  fittedAt: string
+  /** The tray selection at the moment of the fit, so a later divergence is
+   *  detectable and can be shown rather than silently ignored. */
+  variablesAtFit: string[]
+}
 
 interface UiState {
   theme: Theme
   paletteOpen: boolean
   methodologyOpen: string | null
   selectedVariables: Record<PortfolioKey, string[]>
+  fitted: Record<PortfolioKey, FittedModel | null>
   setTheme: (t: Theme) => void
   toggleTheme: () => void
   setPaletteOpen: (b: boolean) => void
   setMethodology: (id: string | null) => void
   toggleVariable: (p: PortfolioKey, v: string) => void
   clearVariables: (p: PortfolioKey) => void
+  setFitted: (p: PortfolioKey, f: FittedModel | null) => void
 }
 
 export const useUi = create<UiState>()(
@@ -24,6 +48,7 @@ export const useUi = create<UiState>()(
       paletteOpen: false,
       methodologyOpen: null,
       selectedVariables: { consumer: [], mortgage: [], cre: [] },
+      fitted: { consumer: null, mortgage: null, cre: null },
       setTheme: (t) => {
         document.documentElement.setAttribute('data-theme', t)
         set({ theme: t })
@@ -43,8 +68,10 @@ export const useUi = create<UiState>()(
         }),
       clearVariables: (p) =>
         set((s) => ({ selectedVariables: { ...s.selectedVariables, [p]: [] } })),
+      setFitted: (p, f) => set((s) => ({ fitted: { ...s.fitted, [p]: f } })),
     }),
-    { name: 'helios-ui', partialize: (s) => ({ theme: s.theme, selectedVariables: s.selectedVariables }) },
+    { name: 'helios-ui', partialize: (s) => ({ theme: s.theme, selectedVariables: s.selectedVariables,
+                            fitted: s.fitted }) },
   ),
 )
 

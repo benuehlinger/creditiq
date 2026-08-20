@@ -1,0 +1,91 @@
+{
+  "hash": "c555d84ac97cf0d2",
+  "name": "vigilant-lantern-98",
+  "portfolio": "cre",
+  "created_at": "2026-08-20T03:43:19+00:00",
+  "spec": {
+    "portfolio": "cre",
+    "variables": [
+      {
+        "column": "current_ltv",
+        "transform": "woe",
+        "edges": null,
+        "groups": null,
+        "knots": null
+      },
+      {
+        "column": "interest_rate",
+        "transform": "woe",
+        "edges": null,
+        "groups": null,
+        "knots": null
+      },
+      {
+        "column": "dscr_reported",
+        "transform": "woe",
+        "edges": null,
+        "groups": null,
+        "knots": null
+      }
+    ],
+    "mevs": [],
+    "estimator": "logistic",
+    "regularization": 1.0,
+    "seasoning_spline": true,
+    "vintage_effect": false,
+    "sample": {
+      "test_fraction": 0.3,
+      "oot_from": "2023-01-01",
+      "seed": 42,
+      "downsample_rows": null
+    },
+    "target_column": "default_flag",
+    "label": null,
+    "parent_hash": null,
+    "notes": "",
+    "hash": "c555d84ac97cf0d2"
+  },
+  "metrics": {
+    "auc_test": 0.7750121639703199,
+    "auc_oot": 0.8321637526379029,
+    "ks_test": 0.47286565763636684,
+    "gini_test": 0.5500243279406398,
+    "log_loss_test": 0.006329814176861242,
+    "brier_test": 0.0008467993419831888,
+    "calibration_error": 0.000279446112916544,
+    "mcfadden_r2": 0.11963497643113485,
+    "n_variables": 3,
+    "n_mevs": 0,
+    "estimator": "logistic",
+    "coefficients": {
+      "intercept": -8.160283132797659,
+      "current_ltv_woe": 0.5221947071400338,
+      "interest_rate_woe": 0.5272781176624445,
+      "dscr_reported_woe": 0.7812242778086458,
+      "seasoning_basis1": -0.1501944812894593,
+      "seasoning_basis2": -0.894956216437244,
+      "seasoning_basis3": -0.09488690540283704,
+      "seasoning_basis4": -0.037030121520677535,
+      "seasoning_basis5": -0.025378412322334214,
+      "seasoning_basis6": 0.07862065737816416,
+      "seasoning_basis7": -0.19912620182926166,
+      "seasoning_basis8": -0.4995021874456434
+    }
+  },
+  "ecl": {
+    "ecl_baseline": 189396749.05409122,
+    "ecl_adverse": 508411707.8440887,
+    "ecl_severely_adverse": 942592326.4860454,
+    "ecl_bps_baseline": 88.76164998660879,
+    "ecl_bps_adverse": 238.26946495191802,
+    "ecl_bps_severely_adverse": 441.75019149733566,
+    "weighted_ecl": 435740352.1774813
+  },
+  "status": "challenger",
+  "starred": false,
+  "tags": [],
+  "notes": "",
+  "parent_hash": null,
+  "author": "Helios",
+  "schema_version": 1
+}

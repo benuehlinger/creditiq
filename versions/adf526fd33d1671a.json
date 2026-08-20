@@ -1,0 +1,103 @@
+{
+  "hash": "adf526fd33d1671a",
+  "name": "hardy-colonnade-28",
+  "portfolio": "consumer",
+  "created_at": "2026-08-20T03:50:36+00:00",
+  "spec": {
+    "portfolio": "consumer",
+    "variables": [
+      {
+        "column": "fico_orig",
+        "transform": "woe",
+        "edges": null,
+        "groups": null,
+        "knots": null
+      },
+      {
+        "column": "revolving_utilization",
+        "transform": "woe",
+        "edges": null,
+        "groups": null,
+        "knots": null
+      },
+      {
+        "column": "annual_income",
+        "transform": "woe",
+        "edges": null,
+        "groups": null,
+        "knots": null
+      }
+    ],
+    "mevs": [
+      {
+        "key": "unemployment_rate",
+        "transform": "level",
+        "lag_months": 0
+      },
+      {
+        "key": "real_disp_income_growth",
+        "transform": "level",
+        "lag_months": 0
+      }
+    ],
+    "estimator": "logistic",
+    "regularization": 1.0,
+    "seasoning_spline": true,
+    "vintage_effect": false,
+    "sample": {
+      "test_fraction": 0.3,
+      "oot_from": "2023-01-01",
+      "seed": 42,
+      "downsample_rows": null
+    },
+    "target_column": "default_flag",
+    "label": null,
+    "parent_hash": null,
+    "notes": "",
+    "hash": "adf526fd33d1671a"
+  },
+  "metrics": {
+    "auc_test": 0.7902245559041229,
+    "auc_oot": 0.7627335931548301,
+    "ks_test": 0.4377025455409517,
+    "gini_test": 0.5804491118082458,
+    "log_loss_test": 0.02344247364446697,
+    "brier_test": 0.003952528556982968,
+    "calibration_error": 0.0002568002073267446,
+    "mcfadden_r2": 0.10774669420415661,
+    "n_variables": 3,
+    "n_mevs": 2,
+    "estimator": "logistic",
+    "coefficients": {
+      "intercept": -6.270559594464877,
+      "fico_orig_woe": 0.7602177813914474,
+      "revolving_utilization_woe": 0.40988707277245606,
+      "annual_income_woe": 0.04009070411389829,
+      "seasoning_basis1": 0.12216798134069794,
+      "seasoning_basis2": -0.7448318713516715,
+      "seasoning_basis3": -0.06851594824850633,
+      "seasoning_basis4": -0.10681934337864005,
+      "seasoning_basis5": 0.0544887655178765,
+      "seasoning_basis6": 0.02143732666475974,
+      "seasoning_basis7": -0.010315114565182562,
+      "mev:unemployment_rate": 0.4386180958467554,
+      "mev:real_disp_income_growth": -0.27744701829976337
+    }
+  },
+  "ecl": {
+    "ecl_baseline": 5949573.561513267,
+    "ecl_adverse": 9421394.080196738,
+    "ecl_severely_adverse": 14648607.753146319,
+    "ecl_bps_baseline": 432.94291368159156,
+    "ecl_bps_adverse": 685.5828845295264,
+    "ecl_bps_severely_adverse": 1065.960586326936,
+    "weighted_ecl": 8730926.555444919
+  },
+  "status": "challenger",
+  "starred": false,
+  "tags": [],
+  "notes": "",
+  "parent_hash": null,
+  "author": "Helios",
+  "schema_version": 1
+}

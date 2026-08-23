@@ -72,14 +72,44 @@ export function CreditIQLockup({ size = 28, nameSize = 17, className = '' }: {
  * than a broken-image icon, because a demo that shows a broken asset in the
  * header is worse than one that shows a word.
  *
- * The mark is four thin square outlines crossed by the italic wordmark. That
- * detail does not survive below about 20px, so the default is 21 rather than
- * whatever happens to fit — shrinking it until the squares turn to mush is how a
- * trademark ends up misused.
+ * SIZING. The four squares occupy the upper half of the artwork and the letters
+ * only the lower 55%, so sizing by the bounding box makes the type far smaller
+ * than it looks like it should be — a 21px mark has 11px letters. `height` here
+ * therefore means the height of the LETTERS, and the component scales the box up
+ * to suit. That is what makes it balance against a wordmark set beside it.
  */
+
+/** The letters occupy the lower 55% of the artwork; measured from the path. */
+const KPMG_LETTER_RATIO = 0.55
+
+/**
+ * Strip baked-in colour so the mark can take `currentColor`.
+ *
+ * The file has no `fill` ATTRIBUTE, which is what I checked first and why I
+ * wrongly concluded it was already tintable. The colour is in an inline STYLE on
+ * the path — `style="fill:#003087;stroke:#ffffff;..."` — and an inline style beats
+ * a fill inherited from the parent `<svg>`. So the mark stayed KPMG blue on the
+ * dark surface no matter what the CSS variable said.
+ *
+ * Only paint declarations are removed. Geometry-bearing ones — stroke-width,
+ * stroke-linejoin and the rest — are left alone, because dropping those changes
+ * the shape of a trademark rather than its colour.
+ */
+function tintable(svg: string): string {
+  const PAINT = /(^|;)\s*(fill|stroke|fill-opacity|stroke-opacity)\s*:[^;"]*/gi
+  return svg
+    .replace(/style="([^"]*)"/gi, (_m, decls: string) => {
+      const kept = decls.replace(PAINT, '').replace(/^;+|;+$/g, '').replace(/;{2,}/g, ';')
+      return kept ? `style="${kept}"` : ''
+    })
+    .replace(/\s(fill|stroke)="(?!none)[^"]*"/gi, '')
+}
 export function KpmgMark({ height = 21, className = '' }: {
-  height?: number; className?: string
+  /** Height of the LETTERS, not of the bounding box. */
+  height?: number
+  className?: string
 }) {
+  const boxHeight = height / KPMG_LETTER_RATIO
   const [svg, setSvg] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
 
@@ -87,7 +117,7 @@ export function KpmgMark({ height = 21, className = '' }: {
     let live = true
     fetch('/brand/kpmg.svg')
       .then((r) => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))))
-      .then((t) => { if (live && t.trim().startsWith('<svg')) setSvg(t) })
+      .then((t) => { if (live && t.trim().startsWith('<svg')) setSvg(tintable(t)) })
       .catch(() => { if (live) setFailed(true) })
     return () => { live = false }
   }, [])
@@ -103,15 +133,14 @@ export function KpmgMark({ height = 21, className = '' }: {
   return (
     <span
       className={`inline-block ${className}`}
-      style={{ height, color: 'var(--brand-kpmg)' }}
+      style={{ height: boxHeight, color: 'var(--brand-kpmg)' }}
       aria-label="KPMG"
       role="img"
-      // the file is a static asset we ship, and it is validated as an <svg>
-      // before it is inserted
+      // a static asset we ship, validated as an <svg> before insertion
       dangerouslySetInnerHTML={{
         __html: svg.replace(
           '<svg',
-          `<svg style="height:${height}px;width:auto;display:block;fill:currentColor"`,
+          `<svg style="height:${boxHeight}px;width:auto;display:block;fill:currentColor"`,
         ),
       }}
     />
@@ -131,5 +160,26 @@ export function CreditIQHero({ className = '' }: { className?: string }) {
         </div>
       </div>
     </div>
+  )
+}
+
+/**
+ * The two marks together, optically balanced.
+ *
+ * `scale` drives both from one number so they cannot drift apart: the KPMG
+ * letters and the CreditIQ wordmark are set to the same cap height, and the
+ * CreditIQ tile is sized to sit between them.
+ */
+export function CoBrand({ scale = 1, className = '' }: {
+  scale?: number; className?: string
+}) {
+  const cap = 22 * scale
+  return (
+    <span className={`inline-flex items-center ${className}`}
+          style={{ gap: 16 * scale }}>
+      <KpmgMark height={cap} />
+      <span style={{ width: 1, height: 26 * scale, background: 'var(--chrome-border-strong)' }} />
+      <CreditIQLockup size={32 * scale} nameSize={cap} />
+    </span>
   )
 }

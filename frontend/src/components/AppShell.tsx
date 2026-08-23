@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useUi } from '../lib/store'
 import PortfolioSwitcher from './PortfolioSwitcher'
-import { CreditIQLockup, KpmgMark } from './Brand'
+import { CoBrand } from './Brand'
 import CommandPalette from './CommandPalette'
 import MethodologyDrawer from './MethodologyDrawer'
 
@@ -51,21 +51,22 @@ export default function AppShell() {
   return (
     <div className="flex h-full flex-col bg-page text-ink">
       {/* ── row 1: identity, the executive view, and global controls ── */}
-      <header className="flex h-12 shrink-0 items-center gap-4 border-b border-hairline bg-raised px-4">
+      <header className="flex h-16 shrink-0 items-center gap-5 border-b border-hairline bg-raised px-5">
         {/* Two marks, side by side and separated by a rule: KPMG says who built
-            it, CreditIQ says what it is. They are never fused into one graphic —
-            that would be inventing a co-brand nobody approved. */}
-        <KpmgMark height={21} />
-        <span className="h-5 w-px bg-hairline" />
+            it, CreditIQ says what it is. Never fused into one graphic — that
+            would be inventing a co-brand nobody approved. Both are driven from
+            one scale so they cannot drift apart. */}
         <button onClick={() => nav('/rollup')} className="text-left"
                 title="CreditIQ — go to the portfolio roll-up">
-          <CreditIQLockup size={24} nameSize={16} />
+          <CoBrand scale={1} />
         </button>
 
-        <span className="h-4 w-px bg-hairline" />
+        <span className="h-6 w-px bg-hairline" />
         {/* Typographic treatment only — no fabricated client logo. */}
-        <span className="text-xs text-ink-secondary">
-          Prepared for <span className="font-medium text-ink">Apollo FIG</span>
+        <span className="text-xs leading-tight text-ink-secondary">
+          Prepared for
+          <br />
+          <span className="font-medium text-ink">Apollo FIG</span>
         </span>
 
         <div className="ml-auto flex items-center gap-2">

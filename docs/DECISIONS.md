@@ -375,15 +375,31 @@ with the asset from the internal brand portal before this is shown to a client:
 the mark is a registered trademark and the internal file is the authoritative
 one. It is fetched at runtime, so swapping it is a file copy.
 
-It is a single path with no fill attribute, so it inherits `currentColor` and can
-be tinted per surface. That matters, because **#00338D is unreadable on the dark
-surface at 1.67:1**. The dark theme steps to #4DA3E8 — the same brand hue at a
-legible lightness — rather than putting an illegible mark on screen.
+**Correction to an earlier claim here.** I first wrote that the file has no fill
+and therefore inherits `currentColor`. That was wrong, and it was wrong because I
+checked for a `fill="…"` ATTRIBUTE and the colour is in an inline STYLE on the
+path — `style="fill:#003087;…"` — which beats a fill inherited from the parent
+`<svg>`. The mark stayed KPMG blue on the dark surface no matter what the CSS
+variable said. The component now strips paint declarations on load, leaving the
+geometry ones alone, because dropping stroke-width or stroke-linejoin changes the
+SHAPE of a trademark rather than its colour.
 
-The mark is four thin square outlines crossed by the italic wordmark, and that
-detail does not survive below about 20px. The component defaults to 21px rather
-than to whatever happens to fit; shrinking a trademark until it turns to mush is
-a misuse of it.
+**On dark, the mark is REVERSED to white, not tinted blue.** #00338D measures
+1.67:1 on the dark surface and is unreadable; a mid-blue tint leaves the four
+thin square outlines fighting the background and reading as fuzz. Reversing a
+logo to white on a dark ground is what every brand system specifies, and it is
+what looks right here.
+
+**Sizing is optical, not by bounding box.** The four squares occupy the upper
+half of the artwork and the letters only the lower 55% — measured off the path —
+so sizing by the box makes the type far smaller than it looks like it should be.
+A 21px mark has 11px letters, which is why it sat awkwardly beside a 16px
+CreditIQ wordmark. `KpmgMark`'s `height` now means the height of the LETTERS and
+the component scales the box to suit, so the two marks share a cap height.
+
+`CoBrand` drives both from a single `scale`, so they cannot drift apart when
+someone adjusts one of them. The header runs at scale 1: a 22px cap in a 64px
+bar, which is roughly double the effective size of the first attempt.
 
 **The CreditIQ mark decodes.** Three ascending bars under a curve: a binning,
 with a fitted hazard running through it. Those are the two things the product

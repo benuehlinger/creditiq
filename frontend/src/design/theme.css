@@ -60,7 +60,7 @@
   /* Brand. On the dark surface the KPMG blue #00338D is far too dark to read —
      it sits at 1.67:1 — so the mark takes the light-blue step, which is the same
      brand hue at a legible lightness. */
-  --brand-kpmg: #4DA3E8;
+  --brand-kpmg: #F2F4F7;
   --brand-name: #F2F4F7;
   --brand-name-accent: #4DA3E8;
   --brand-mark-bg: #0061be;

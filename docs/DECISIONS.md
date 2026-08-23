@@ -131,7 +131,7 @@ the file, never hardcoded.
 
 **The Fed publishes no adverse scenario.** It has not since the 2022 cycle — the
 URL 404s for 2023, 2024, 2025 and 2026. The brief asks for three severities, so
-Helios **derives** an adverse path as a 50% severity interpolation between the two
+CreditIQ **derives** an adverse path as a 50% severity interpolation between the two
 published paths. It is labelled as derived everywhere it appears and is never
 described as supervisory. The scenario editor lets a user replace it.
 
@@ -164,7 +164,7 @@ collapsed to **0.586**. Switching to year-over-year change restored it to
 **0.758**. The cumulative level effect on a borrower is already carried correctly
 by current LTV, which is measured against their own origination.
 
-**Calibration is automated, not hand-tuned.** `helios.data.calibrate` bisects the
+**Calibration is automated, not hand-tuned.** `creditiq.data.calibrate` bisects the
 roll intercept to hit the target default-rate band and sweeps frailty against a
 target AUC. The realised values:
 
@@ -291,7 +291,7 @@ outside the fitted range that is extrapolation with no evidence and no bound. Th
 unconstrained model answered with a 33% cumulative default rate and a 19x stress
 multiple.
 
-Helios reports the distance per variable and winsorizes the forward path to the
+CreditIQ reports the distance per variable and winsorizes the forward path to the
 fitted range by default. That is standard practice and a real trade-off — it
 keeps the projection inside the evidence and it also caps the stress — so both
 numbers are shown. On CRE the uncapped figure is 2.3x the capped one.
@@ -353,3 +353,48 @@ the container is self-contained and needs no network at run time.
 **Docker is not installed on the build machine.** The compose file is authored
 and its YAML parses; the image has not been built or run here. That is stated
 rather than reported as a passing check.
+
+
+---
+
+## 15. Branding: CreditIQ, and the two marks
+
+**The product is CreditIQ.** The Python package was renamed from `helios` to
+`creditiq` at the same time, so the codebase does not say one thing while the
+screen says another. The repository directory is unchanged, because renaming it
+would break paths on a running machine for no benefit.
+
+**Two marks, never fused.** KPMG identifies who built the tool; CreditIQ
+identifies what it is. They sit side by side separated by a rule and are never
+combined into a single graphic — that would be inventing a co-brand nobody
+approved.
+
+**The KPMG mark is a stand-in.** The committed file is the Wikimedia Commons
+vector, used so the layout is real rather than a grey box. It must be replaced
+with the asset from the internal brand portal before this is shown to a client:
+the mark is a registered trademark and the internal file is the authoritative
+one. It is fetched at runtime, so swapping it is a file copy.
+
+It is a single path with no fill attribute, so it inherits `currentColor` and can
+be tinted per surface. That matters, because **#00338D is unreadable on the dark
+surface at 1.67:1**. The dark theme steps to #4DA3E8 — the same brand hue at a
+legible lightness — rather than putting an illegible mark on screen.
+
+The mark is four thin square outlines crossed by the italic wordmark, and that
+detail does not survive below about 20px. The component defaults to 21px rather
+than to whatever happens to fit; shrinking a trademark until it turns to mush is
+a misuse of it.
+
+**The CreditIQ mark decodes.** Three ascending bars under a curve: a binning,
+with a fitted hazard running through it. Those are the two things the product
+does. The bars carry the same specs as every chart in the app — capped thickness,
+rounded data ends, a surface gap between them.
+
+**Space Grotesk is self-hosted.** One 22 KB variable file covers every weight.
+A `fonts.googleapis.com` link would be a network dependency, and the brief
+requires this to run in a conference room with hostile WiFi.
+
+**The display face is for the wordmark and headings only.** Charts, axis labels
+and every number stay in the system sans. The dataviz rules are explicit that a
+display face on a hero figure reads as off-brand decoration, and tabular
+alignment depends on the system metrics.

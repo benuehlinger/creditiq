@@ -1,8 +1,8 @@
 # Generative truth
 
-Every coefficient that produced the synthetic data, so what Helios recovers
+Every coefficient that produced the synthetic data, so what CreditIQ recovers
 can be checked against what actually generated it. This file is written
-directly from `helios/data/portfolios.py` — it cannot drift from the code.
+directly from `creditiq/data/portfolios.py` — it cannot drift from the code.
 
 ## How the data is made
 

@@ -1,4 +1,4 @@
-# Helios — KPMG credit risk model development platform
+# CreditIQ — KPMG credit risk model development platform
 .DEFAULT_GOAL := help
 PY := backend/.venv/bin/python
 
@@ -19,24 +19,24 @@ setup:  ## one time: create the venv, install dependencies, build the panels
 	$(MAKE) data
 
 fred:  ## refresh the committed FRED cache (needs network; the app does not)
-	cd backend && .venv/bin/python -m helios.mev.fred_cache
+	cd backend && .venv/bin/python -m creditiq.mev.fred_cache
 
 data:  ## regenerate every synthetic panel, deterministically
-	cd backend && .venv/bin/python -m helios.data.build
+	cd backend && .venv/bin/python -m creditiq.data.build
 
 test:  ## backend test suite
 	cd backend && .venv/bin/python -m pytest tests -q
 
 lint:
-	cd backend && .venv/bin/ruff check helios tests || true
+	cd backend && .venv/bin/ruff check creditiq tests || true
 	cd frontend && ./node_modules/.bin/tsc -b --pretty false
 
 dev:  ## run backend and frontend together
-	@echo "Helios starting — the API warms its caches for about 30 seconds."
+	@echo "CreditIQ starting — the API warms its caches for about 30 seconds."
 	@$(MAKE) -j2 backend frontend
 
 backend:
-	cd backend && .venv/bin/uvicorn helios.api.main:app --reload --port 8000
+	cd backend && .venv/bin/uvicorn creditiq.api.main:app --reload --port 8000
 
 frontend:
 	cd frontend && npm run dev

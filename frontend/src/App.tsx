@@ -6,6 +6,7 @@ import ModelSurface from './surfaces/ModelSurface'
 import ScenarioSurface from './surfaces/ScenarioSurface'
 import VersionsSurface from './surfaces/VersionsSurface'
 import RollUpSurface from './surfaces/RollUpSurface'
+import BrandSurface from './surfaces/BrandSurface'
 
 /** Portfolio context lives in the URL, so any screen is linkable and the
  *  presenter can jump straight to it mid-demo. */
@@ -15,6 +16,7 @@ export default function App() {
       <Route element={<AppShell />}>
         <Route path="/" element={<Navigate to="/rollup" replace />} />
         <Route path="/rollup" element={<RollUpSurface />} />
+        <Route path="/brand" element={<BrandSurface />} />
         <Route path="/:portfolio/data" element={<DataSurface />} />
         <Route path="/:portfolio/explore" element={<ExploreSurface />} />
         <Route path="/:portfolio/model" element={<ModelSurface />} />

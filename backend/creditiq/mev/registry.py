@@ -19,7 +19,7 @@ Conversion NEVER reads a global rule — it reads this table:
 
 `growth` variables get special handling: a growth rate is NEVER interpolated
 directly. It is converted to a level index, the LEVEL is benchmarked, then the
-result is re-differenced. See helios.mev.reconcile.
+result is re-differenced. See creditiq.mev.reconcile.
 """
 
 from __future__ import annotations

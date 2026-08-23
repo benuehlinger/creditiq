@@ -76,7 +76,7 @@ export const useUi = create<UiState>()(
       setTreatment: (p, column, t) =>
         set((s) => ({ treatments: { ...s.treatments, [p]: { ...s.treatments[p], [column]: t } } })),
     }),
-    { name: 'helios-ui', partialize: (s) => ({ theme: s.theme, selectedVariables: s.selectedVariables,
+    { name: 'creditiq-ui', partialize: (s) => ({ theme: s.theme, selectedVariables: s.selectedVariables,
                             fitted: s.fitted, treatments: s.treatments }) },
   ),
 )

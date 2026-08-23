@@ -1,16 +1,16 @@
-# Helios — `docker compose up` and open http://localhost:8000
+# CreditIQ — `docker compose up` and open http://localhost:8000
 #
 # One service on one port. No API key, no network access and no configuration:
 # the FRED history and the supervisory scenarios are committed, and the synthetic
 # panels are generated during the image build.
 
 services:
-  helios:
+  creditiq:
     build:
       context: .
       dockerfile: Dockerfile
-    image: helios:latest
-    container_name: helios
+    image: creditiq:latest
+    container_name: creditiq
     ports:
       - "8000:8000"
     environment:

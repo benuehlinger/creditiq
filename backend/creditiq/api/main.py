@@ -1,4 +1,4 @@
-"""Helios API.
+"""CreditIQ API.
 
 Runs entirely offline against the committed FRED cache and the generated panels.
 No key, no network, no configuration.
@@ -23,7 +23,7 @@ from ..mev import panel as mev_panel
 from ..mev import scenarios as scen
 from ..mev.registry import PORTFOLIO_MEVS, by_key
 
-app = FastAPI(title="Helios", version="0.1.0",
+app = FastAPI(title="CreditIQ", version="0.1.0",
               description="Credit risk model development platform")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
                    allow_headers=["*"])

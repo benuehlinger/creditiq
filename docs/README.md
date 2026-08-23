@@ -1,4 +1,4 @@
-# Helios
+# CreditIQ
 
 Credit risk model development platform. A KPMG demonstration asset.
 

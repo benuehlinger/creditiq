@@ -8,7 +8,7 @@ Provenance, stated plainly because it is the first thing a validator asks:
 
   * The Fed publishes NO ADVERSE scenario. It has not since the 2022 cycle — the
     URL 404s for 2023, 2024, 2025 and 2026. The brief asks for three severities,
-    so Helios DERIVES an adverse path as a 50% severity interpolation between the
+    so CreditIQ DERIVES an adverse path as a 50% severity interpolation between the
     two published paths. It is labelled in the UI as derived, never as published.
     The scenario editor lets a user replace it with their own.
 
@@ -144,7 +144,7 @@ def derive_adverse(baseline: Scenario, severe: Scenario,
     s = severe.quarterly.loc[b.index, cols]
     return Scenario(
         "adverse", "Adverse (derived)", False, b + severity * (s - b),
-        source="DERIVED by Helios, not published by the Federal Reserve",
+        source="DERIVED by CreditIQ, not published by the Federal Reserve",
         note=(f"The Federal Reserve has published no adverse scenario since the "
               f"2022 cycle. This path is a {severity:.0%} severity interpolation "
               f"between the published baseline and severely adverse paths. It is "

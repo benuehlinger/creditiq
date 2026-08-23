@@ -1,6 +1,6 @@
 # Methodology
 
-Every computed quantity in Helios, with its formula and its assumptions.
+Every computed quantity in CreditIQ, with its formula and its assumptions.
 
 **This is a demonstration of capability. It is not a validated model, it carries
 no regulatory approval, and nothing here should be read as an assertion of
@@ -59,7 +59,7 @@ were sample-size free. They are not. The procedure being measured is "optimally
 bin, then compute IV", and the binning step itself fits the permuted target. On
 the commercial real estate book — 356 defaults — a variable with **no signal at
 all** scores a null information value around 0.18, which is inside the "medium"
-band. Helios estimates that floor by permutation and quotes it beside the
+band. CreditIQ estimates that floor by permutation and quotes it beside the
 ranking.
 
 ### Binning
@@ -90,7 +90,7 @@ On the consumer book the planted `collections_referral_flag` reaches 126x, and
 knowable at origination — reaches 275x. FICO, with a comparable information
 value, peaks at 4.9x. The rule separates them cleanly.
 
-Helios **flags**; it does not block. The judgement stays with the analyst.
+CreditIQ **flags**; it does not block. The judgement stays with the analyst.
 
 ---
 
@@ -163,7 +163,7 @@ on year against a fitted floor of −10.7%, which is 4.3 standard deviations
 outside anything the model has seen. Unconstrained, the model answered with a 33%
 cumulative default rate over the horizon.
 
-Helios reports the distance in standard deviations per variable, and offers
+CreditIQ reports the distance in standard deviations per variable, and offers
 winsorizing the forward path to the fitted range. That is standard practice and
 it is a real trade-off — it keeps the projection inside the evidence and it
 **also caps the stress** — so both the capped and uncapped numbers are shown.

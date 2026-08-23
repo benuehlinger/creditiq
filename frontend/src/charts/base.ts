@@ -1,7 +1,7 @@
 import type { EChartsOption } from 'echarts'
 import { chrome, ink, marks, mode, surfaces } from '../design/tokens'
 
-/** The chart chrome every Helios chart shares.
+/** The chart chrome every CreditIQ chart shares.
  *
  *  These are the dataviz mark specs, applied once here instead of remembered at
  *  each call site: hairline SOLID gridlines one step off the surface (never

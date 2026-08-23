@@ -6,10 +6,10 @@ import json
 
 import pytest
 
-from helios.models import service as modelsvc
-from helios.models import versions as V
-from helios.models.naming import friendly_name
-from helios.models.spec import MevSpec, ModelSpec, VariableSpec
+from creditiq.models import service as modelsvc
+from creditiq.models import versions as V
+from creditiq.models.naming import friendly_name
+from creditiq.models.spec import MevSpec, ModelSpec, VariableSpec
 
 
 def _spec(cols, mevs=("unemployment_rate",)):

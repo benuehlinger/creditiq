@@ -6,10 +6,10 @@ import numpy as np
 import pytest
 from scipy import stats
 
-from helios import store
-from helios.models import design as D
-from helios.models import fit as F
-from helios.models.spec import TREATMENTS, MevSpec, ModelSpec, VariableSpec
+from creditiq import store
+from creditiq.models import design as D
+from creditiq.models import fit as F
+from creditiq.models.spec import TREATMENTS, MevSpec, ModelSpec, VariableSpec
 
 
 @pytest.fixture(scope="module")
@@ -178,7 +178,7 @@ def test_knots_come_from_the_variables_own_quantiles(df):
     one sits below the minimum, so each hinge reduces to an affine copy of the
     variable. The hinge matrix had rank 2 and the basis emitted nine columns,
     seven of them floating-point residue, which the model then fitted."""
-    from helios.models.design import SEASONING_KNOTS, _spline_basis, quantile_knots
+    from creditiq.models.design import SEASONING_KNOTS, _spline_basis, quantile_knots
 
     fico = df["fico_orig"].to_numpy(float)
     ks = quantile_knots(fico, 4)
@@ -195,7 +195,7 @@ def test_knots_come_from_the_variables_own_quantiles(df):
 
 
 def test_knot_count_controls_the_column_count(df):
-    from helios.models.design import _spline_basis, quantile_knots
+    from creditiq.models.design import _spline_basis, quantile_knots
     fico = df["fico_orig"].to_numpy(float)
     for n in (2, 4, 6):
         B, _, _ = _spline_basis(fico, quantile_knots(fico, n))
@@ -204,7 +204,7 @@ def test_knot_count_controls_the_column_count(df):
 
 def test_the_seasoning_knots_still_suit_months_on_book(df):
     """They were designed for it, and there they are full rank."""
-    from helios.models.design import SEASONING_KNOTS, _spline_basis
+    from creditiq.models.design import SEASONING_KNOTS, _spline_basis
     mob = df["months_on_book"].to_numpy(float)
     B, _, _ = _spline_basis(mob, SEASONING_KNOTS)
     assert B.shape[1] >= 6 and np.linalg.matrix_rank(B) == B.shape[1]
@@ -214,14 +214,14 @@ def test_the_seasoning_knots_still_suit_months_on_book(df):
 def test_bin_edges_are_none_not_nan_at_the_boundaries(df):
     """A DataFrame round trip turns None into NaN in a float column, so an
     unbounded edge came back as nan and `is not None` was True for it."""
-    from helios.analysis.binning import bin_numeric
+    from creditiq.analysis.binning import bin_numeric
     b = bin_numeric(df["fico_orig"], df["default_flag"])
     real = [x for x in b.bins if not x.is_special]
     assert real[0].lo is None and real[-1].hi is None
 
 
 def test_shape_diagnostic_recommends_continuous_for_a_linear_relationship(df):
-    from helios.analysis.binning import bin_numeric, shape_diagnostic
+    from creditiq.analysis.binning import bin_numeric, shape_diagnostic
     d = shape_diagnostic(bin_numeric(df["fico_orig"], df["default_flag"]))
     assert d["recommendation"] == "continuous"
     assert d["linear_r2"] > 0.95
@@ -231,7 +231,7 @@ def test_shape_diagnostic_recommends_continuous_for_a_linear_relationship(df):
 def test_shape_diagnostic_recommends_a_flexible_form_for_a_hump():
     """A seasoning curve reverses direction, so neither a straight line nor a
     single weight can carry it."""
-    from helios.analysis.binning import bin_numeric, shape_diagnostic
+    from creditiq.analysis.binning import bin_numeric, shape_diagnostic
     rng = np.random.default_rng(5)
     n = 200_000
     age = rng.integers(1, 120, n).astype(float)
@@ -245,7 +245,7 @@ def test_shape_diagnostic_recommends_a_flexible_form_for_a_hump():
 
 def test_every_recommendation_carries_a_reason(df):
     """It is a suggestion shown to a human, so it has to say why."""
-    from helios.analysis.binning import bin_numeric, shape_diagnostic
+    from creditiq.analysis.binning import bin_numeric, shape_diagnostic
     for col in ("fico_orig", "dti", "months_on_book", "annual_income"):
         d = shape_diagnostic(bin_numeric(df[col], df["default_flag"]))
         assert d["reason"] and len(d["reason"]) > 40

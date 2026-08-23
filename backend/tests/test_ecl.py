@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from helios.models import bridge as BR
+from creditiq.models import bridge as BR
 
 
 @pytest.fixture
@@ -116,7 +116,7 @@ def test_discounting_reduces_ecl(parts):
 
 # ── EAD ──────────────────────────────────────────────────────────────────────
 def test_amortization_paydown_is_monotone():
-    from helios.models.ead import amortize
+    from creditiq.models.ead import amortize
     bal = np.array([100_000.0, 50_000.0])
     path = amortize(bal, np.array([0.06, 0.09]), np.array([120.0, 60.0]), 36)
     assert (np.diff(path, axis=1) <= 1e-6).all(), "an amortizing balance rose"
@@ -124,7 +124,7 @@ def test_amortization_paydown_is_monotone():
 
 
 def test_prepayment_accelerates_paydown():
-    from helios.models.ead import amortize
+    from creditiq.models.ead import amortize
     bal = np.array([100_000.0])
     slow = amortize(bal, np.array([0.06]), np.array([120.0]), 36, cpr=0.0)
     fast = amortize(bal, np.array([0.06]), np.array([120.0]), 36, cpr=0.15)
@@ -133,8 +133,8 @@ def test_prepayment_accelerates_paydown():
 
 def test_ccf_is_estimated_not_assumed():
     """The CRE book must yield a CCF from its own tape, not the regulatory default."""
-    from helios import store
-    from helios.models.ead import REGULATORY_CCF, estimate_ccf
+    from creditiq import store
+    from creditiq.models.ead import REGULATORY_CCF, estimate_ccf
     ccf, n, note = estimate_ccf(store.load("cre").panel)
     assert n > 50, f"only {n} facilities in the CCF cohort"
     assert 0.0 <= ccf <= 1.0
@@ -153,8 +153,8 @@ def test_realised_lgd_moves_with_the_cycle(portfolio, mev, expect_positive):
     catches. The realised severity in the DATA must carry the relationship before
     any model can find it."""
     import pandas as pd
-    from helios import store
-    from helios.mev.panel import monthly_panel
+    from creditiq import store
+    from creditiq.mev.panel import monthly_panel
     p = store.load(portfolio).panel
     d = p[p["default_flag"] == 1]
     when = pd.DatetimeIndex(d["performance_date"]).to_period("M").to_timestamp()
@@ -169,9 +169,9 @@ def test_realised_lgd_moves_with_the_cycle(portfolio, mev, expect_positive):
 
 
 def test_lgd_two_stage_reproduces_the_zero_mass():
-    from helios import store
-    from helios.mev.panel import monthly_panel
-    from helios.models.lgd import fit_lgd
+    from creditiq import store
+    from creditiq.mev.panel import monthly_panel
+    from creditiq.models.lgd import fit_lgd
     m = fit_lgd(store.analysis_frame("mortgage"), "mortgage", monthly_panel())
     # a mortgage book must have a real mass at exactly zero loss
     assert 0.30 < m.zero_loss_share < 0.70

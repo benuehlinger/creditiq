@@ -44,7 +44,7 @@ class Version:
     tags: list[str] = field(default_factory=list)
     notes: str = ""
     parent_hash: str | None = None
-    author: str = "Helios"
+    author: str = "CreditIQ"
     schema_version: int = SCHEMA_VERSION
 
     def to_dict(self) -> dict:
@@ -57,7 +57,7 @@ def _path(hash_: str) -> Path:
 
 def save(spec: ModelSpec, metrics: dict, ecl: dict | None = None,
          label: str | None = None, notes: str = "", tags: list[str] | None = None,
-         parent_hash: str | None = None, author: str = "Helios") -> Version:
+         parent_hash: str | None = None, author: str = "CreditIQ") -> Version:
     VERSIONS_DIR.mkdir(parents=True, exist_ok=True)
     h = spec.hash()
     existing = load(h)

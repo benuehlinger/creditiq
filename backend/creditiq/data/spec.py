@@ -1,6 +1,6 @@
 """The declarative portfolio registry.
 
-This file is the architecture claim in the sales message: Helios is ONE platform
+This file is the architecture claim in the sales message: CreditIQ is ONE platform
 configured three ways, not three hardcoded paths. A fourth portfolio is a
 `PortfolioSpec` entry — a driver catalog, a target definition, an EAD method, a
 set of MEVs and the expected signs — and nothing else changes.

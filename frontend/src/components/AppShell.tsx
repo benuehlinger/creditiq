@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useUi } from '../lib/store'
 import PortfolioSwitcher from './PortfolioSwitcher'
+import { CreditIQLockup, KpmgMark } from './Brand'
 import CommandPalette from './CommandPalette'
 import MethodologyDrawer from './MethodologyDrawer'
 
@@ -51,15 +52,14 @@ export default function AppShell() {
     <div className="flex h-full flex-col bg-page text-ink">
       {/* ── row 1: identity, the executive view, and global controls ── */}
       <header className="flex h-12 shrink-0 items-center gap-4 border-b border-hairline bg-raised px-4">
-        <button
-          onClick={() => nav('/rollup')}
-          className="flex items-center gap-2.5 text-left"
-          title="Helios — go to the portfolio roll-up"
-        >
-          <span className="grid h-6 w-6 place-items-center rounded bg-s1 text-[11px] font-bold tracking-tight text-white">
-            K
-          </span>
-          <span className="text-sm font-semibold tracking-tight">Helios</span>
+        {/* Two marks, side by side and separated by a rule: KPMG says who built
+            it, CreditIQ says what it is. They are never fused into one graphic —
+            that would be inventing a co-brand nobody approved. */}
+        <KpmgMark height={21} />
+        <span className="h-5 w-px bg-hairline" />
+        <button onClick={() => nav('/rollup')} className="text-left"
+                title="CreditIQ — go to the portfolio roll-up">
+          <CreditIQLockup size={24} nameSize={16} />
         </button>
 
         <span className="h-4 w-px bg-hairline" />

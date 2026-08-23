@@ -20,6 +20,8 @@ export default function CommandPalette() {
     const out: Cmd[] = [
       { id: 'rollup', label: 'Portfolio Roll-Up', hint: 'Executive view · 0', run: () => nav('/rollup') },
       { id: 'theme', label: 'Toggle light / dark mode', hint: 'Appearance', run: toggleTheme },
+      { id: 'brand', label: 'Brand assets', hint: 'Logos, export for a deck',
+        run: () => nav('/brand') },
     ]
     for (const p of portfolios ?? []) {
       for (const [s, l] of [['data', 'Data'], ['explore', 'Explore'], ['model', 'Model'],

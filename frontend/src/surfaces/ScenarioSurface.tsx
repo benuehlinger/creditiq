@@ -253,7 +253,7 @@ export default function ScenarioSurface() {
                     </td>
                     <td className="px-3 py-1.5">
                       <StatusPill severity={s.published ? 'good' : 'warning'}>
-                        {s.published ? 'Federal Reserve' : 'derived by Helios'}
+                        {s.published ? 'Federal Reserve' : 'derived by CreditIQ'}
                       </StatusPill>
                     </td>
                     <td className="px-3 py-1.5 text-right tnum text-ink-secondary">{pct(s.weighted_pd_12m * 100)}</td>

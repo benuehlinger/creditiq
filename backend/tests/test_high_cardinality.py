@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from helios import store
-from helios.analysis import binning as B
+from creditiq import store
+from creditiq.analysis import binning as B
 
 
 @pytest.fixture(scope="module")

@@ -32,7 +32,15 @@ export default {
         critical: tokens.status.critical,
         deemph: 'var(--deemphasis)',
       },
-      fontFamily: { sans: tokens.type.sans.split(', '), mono: tokens.type.mono.split(', ') },
+      fontFamily: {
+        sans: tokens.type.sans.split(', '),
+        mono: tokens.type.mono.split(', '),
+        // The display face is for the wordmark and headings ONLY. Charts, axis
+        // labels and every number stay in the system sans: the dataviz rules are
+        // explicit that a display face on a hero figure reads as off-brand
+        // decoration, and tabular alignment depends on the system metrics.
+        display: ['Space Grotesk', ...tokens.type.sans.split(', ')],
+      },
       fontSize: {
         micro: ['10px', { lineHeight: '14px', letterSpacing: '0.04em' }],
         tiny: ['11px', { lineHeight: '15px' }],

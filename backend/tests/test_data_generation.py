@@ -13,11 +13,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from helios.data.assemble import assemble
-from helios.data.build import SEEDS
-from helios.data.calibrate import TARGET_AUC, TARGET_RATE, measure
-from helios.data.generate import generate
-from helios.data.portfolios import PORTFOLIOS
+from creditiq.data.assemble import assemble
+from creditiq.data.build import SEEDS
+from creditiq.data.calibrate import TARGET_AUC, TARGET_RATE, measure
+from creditiq.data.generate import generate
+from creditiq.data.portfolios import PORTFOLIOS
 
 KEYS = list(PORTFOLIOS)
 

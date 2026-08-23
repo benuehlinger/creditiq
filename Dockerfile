@@ -1,4 +1,4 @@
-# Helios — one image, one process, one port.
+# CreditIQ — one image, one process, one port.
 #
 # The frontend is built in a node stage and the assets are copied into the
 # Python image, which serves both the API and the app. Splitting them into two
@@ -41,12 +41,12 @@ COPY --from=web /build/dist ./frontend/dist
 
 # The synthetic panels are gitignored, so generate them at build time. This keeps
 # the image self-contained: it starts with no network and no configuration.
-RUN cd backend && python -m helios.data.build
+RUN cd backend && python -m creditiq.data.build
 
 ENV PYTHONPATH=/app/backend
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
   CMD python -c "import httpx,sys; sys.exit(0 if httpx.get('http://127.0.0.1:8000/api/health',timeout=4).status_code==200 else 1)"
 
-CMD ["uvicorn", "helios.api.main:app", "--host", "0.0.0.0", "--port", "8000", \
+CMD ["uvicorn", "creditiq.api.main:app", "--host", "0.0.0.0", "--port", "8000", \
      "--app-dir", "/app/backend"]

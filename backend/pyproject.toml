@@ -1,5 +1,5 @@
 [project]
-name = "helios"
+name = "creditiq"
 version = "0.1.0"
 description = "Credit risk model development platform — KPMG demo asset"
 requires-python = ">=3.11,<3.13"

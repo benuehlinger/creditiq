@@ -160,7 +160,7 @@ function LeakageBanner({ risk, reason, lift, bin }: {
           {reason}
           <div className="mt-1 text-tiny text-ink-secondary">
             Strongest bin “{bin}” · {lift.toFixed(1)}x event-capture lift.
-            {likely && ' Helios does not block this variable — it flags it. The judgement is yours.'}
+            {likely && ' CreditIQ does not block this variable — it flags it. The judgement is yours.'}
           </div>
         </div>
       </div>

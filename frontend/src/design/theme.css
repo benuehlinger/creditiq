@@ -1,3 +1,14 @@
+/* Space Grotesk, self-hosted. A fonts.googleapis.com link would be a network
+   dependency, and the brief requires this to run in a conference room with
+   hostile WiFi. One variable file covers every weight. */
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url('/fonts/SpaceGrotesk-variable.woff2') format('woff2');
+}
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -45,6 +56,16 @@
 
   --deemphasis: #4A525E;
   --good-text: #0ca30c;
+
+  /* Brand. On the dark surface the KPMG blue #00338D is far too dark to read —
+     it sits at 1.67:1 — so the mark takes the light-blue step, which is the same
+     brand hue at a legible lightness. */
+  --brand-kpmg: #4DA3E8;
+  --brand-name: #F2F4F7;
+  --brand-name-accent: #4DA3E8;
+  --brand-mark-bg: #0061be;
+  --brand-mark-bar: rgba(255, 255, 255, 0.42);
+  --brand-mark-curve: #FFFFFF;
 }
 
 :root[data-theme='light'] {
@@ -76,6 +97,14 @@
 
   --deemphasis: #9AA2AE;
   --good-text: #006300;
+
+  /* On the light surface the true KPMG deep blue is used, as intended. */
+  --brand-kpmg: #00338D;
+  --brand-name: #00338D;
+  --brand-name-accent: #0091DA;
+  --brand-mark-bg: #00338D;
+  --brand-mark-bar: rgba(255, 255, 255, 0.45);
+  --brand-mark-curve: #FFFFFF;
 }
 
 /* Portfolio accent. Set on <html> by the portfolio switcher, so every chart,

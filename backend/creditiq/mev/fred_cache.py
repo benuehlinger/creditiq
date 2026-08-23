@@ -76,7 +76,7 @@ def fetch_all(verbose: bool = True, need_start: str = "2014-01-01") -> dict:
     cre_ids = {m.series_id for m in CRE_CANDIDATES}
 
     with httpx.Client(follow_redirects=True,
-                      headers={"User-Agent": "helios-demo/0.1"}) as client:
+                      headers={"User-Agent": "creditiq-demo/0.1"}) as client:
         for m in ALL_CANDIDATES:
             if m.key in resolved_keys and m.series_id in cre_ids:
                 continue

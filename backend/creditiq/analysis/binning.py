@@ -10,7 +10,8 @@ because those are what a validator asks about.
 
   * ZERO CELLS are handled by a Haldane-Anscombe style correction rather than by
     dropping the bin. A bin with no bads gives an infinite WoE; dropping it makes
-    the IV depend on sample size in a way nobody can explain in a meeting.
+    the information value depend on the sample size in a way that is difficult
+    to interpret.
 
   * IV IS BIASED UPWARD IN SMALL SAMPLES. The classic interpretation bands
     (<0.02 not predictive, and so on) are quoted as though they were sample-size

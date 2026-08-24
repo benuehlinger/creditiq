@@ -1,7 +1,8 @@
+import { useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api, type ScreenRow } from '../lib/api'
 import { Card, CardHead, StatusPill } from '../components/ui'
-import { useUi } from '../lib/store'
+import { useUi, NO_MAP } from '../lib/store'
 import type { PortfolioKey } from '../lib/api'
 
 /**
@@ -17,32 +18,60 @@ export default function SelectionTray({ portfolio, rows }: {
   portfolio: string; rows: ScreenRow[]
 }) {
   const { selectedVariables, toggleVariable, clearVariables } = useUi()
-  const treatments = useUi((s) => s.treatments[portfolio as PortfolioKey] ?? {})
+  const treatments = useUi((s) => s.treatments[portfolio as PortfolioKey] ?? NO_MAP)
   const picked = selectedVariables[portfolio as PortfolioKey] ?? []
   const byName = new Map(rows.map((r) => [r.column, r]))
 
+  // Keyed on the treatments as well as the columns: the same variables entering
+  // as splines, as bin indicators or as continuous terms are three different
+  // designs with three different collinearity structures.
+  const treatKey = picked.map((c) => `${c}:${treatments[c] ?? 'woe'}`).join(',')
   const vif = useQuery({
-    queryKey: ['vif', portfolio, picked.join(',')],
-    queryFn: () => api.vif(portfolio, picked),
+    queryKey: ['vif', portfolio, treatKey],
+    queryFn: () => api.vif(portfolio, picked, treatments),
     enabled: picked.length >= 2,
   })
-  const vifBy = new Map<string, number>((vif.data?.vif ?? []).map((v) => [v.column, v.vif] as const))
+  const vifBy = new Map((vif.data?.vif ?? []).map((v) => [v.column, v] as const))
 
   const worstVif = Math.max(0, ...(vif.data?.vif ?? []).map((v) => v.vif))
   const anyLeak = picked.some((p) => byName.get(p)?.leakage_risk === 'likely')
   const anyFlip = picked.some((p) => byName.get(p)?.sign_ok === false)
-  // A crude, honest preview: not a fitted model, just the sum of information
-  // values discounted for redundancy. Labelled as an indicator, never as a score.
-  const totalIv = picked.reduce((a, p) => a + Math.min(byName.get(p)?.iv ?? 0, 1.5), 0)
-  const redundancy = worstVif > 1 ? 1 / Math.sqrt(worstVif) : 1
-  const indicator = totalIv * redundancy
+
+  // A screening preview, not a fitted model:
+  //
+  //     indicator = SUM over selected  min(IV, 1.5) / sqrt(VIF)
+  //
+  // Each variable contributes its own information value, capped so a
+  // leakage-shaped column scoring 22 cannot swamp the rest, and divided by its
+  // OWN standard-error inflation factor. Dividing every variable by the worst
+  // VIF in the set — which is what this did — penalised uncorrelated variables
+  // for a collinear pair they had nothing to do with.
+  //
+  // The per-variable form is also the one that behaves correctly when a
+  // redundant variable is added: it contributes little because its own VIF is
+  // high, AND it deflates the variable it duplicates. The old form moved only
+  // when the worst pair changed.
+  const covered = picked.length < 2
+    || picked.every((c) => vifBy.has(c) || (vif.data?.skipped ?? []).includes(c))
+  const settled = !vif.isFetching && covered
+  const indicator = picked.reduce((a, p) => {
+    const iv = Math.min(byName.get(p)?.iv ?? 0, 1.5)
+    const v = vifBy.get(p)?.vif ?? 1
+    return a + iv / Math.sqrt(Math.max(v, 1))
+  }, 0)
+  // The variance inflation arrives a moment after the selection changes. Showing
+  // the sum undiscounted in the meantime made the number jump to a high value
+  // and fall back, which reads as instability in the specification rather than
+  // in the fetch. The last settled figure is held until the new one is complete.
+  const shown = useRef(indicator)
+  if (settled) shown.current = indicator
 
   return (
     <Card className="flex h-fit max-h-[calc(100vh-190px)] flex-col">
       <CardHead
         title="Selected variables"
         subtitle={`${picked.length} in the current specification`}
-        caption="Variance inflation is against the current set, so adding a variable shows its cost immediately."
+        caption="Variance inflation is computed on the design the model will actually contain, so it depends on how each variable is treated as well as on which variables are selected. A term that emits several columns — a spline basis, a set of bin indicators — is reported as a generalised VIF on the one-column scale."
         right={picked.length > 0 && (
           <button onClick={() => clearVariables(portfolio as PortfolioKey)}
             className="rounded border border-hairline px-1.5 py-0.5 text-micro text-ink-muted hover:text-ink">
@@ -53,13 +82,18 @@ export default function SelectionTray({ portfolio, rows }: {
 
       <div className="border-b border-hairline px-4 py-3">
         <div className="text-micro text-ink-muted">Specification strength indicator</div>
-        <div className="mt-0.5 text-2xl font-semibold tabular-nums text-accent">
-          {indicator.toFixed(2)}
+        <div className={`mt-0.5 text-2xl font-semibold tabular-nums text-accent transition-opacity ${
+          settled ? '' : 'opacity-40'}`}>
+          {shown.current.toFixed(2)}
         </div>
-        <p className="mt-1 text-micro leading-snug text-ink-muted">
-          Summed information value, discounted for redundancy. An indicator of where the
-          specification is heading — <span className="text-ink-secondary">not a fitted
-          model score</span>. Fit on the Model surface for the real number.
+        <p className="mt-1 text-micro leading-snug text-ink-muted"
+           title="indicator = sum over the selected variables of min(IV, 1.5) / sqrt(VIF). Each variable contributes its own information value, capped so a leakage-shaped column cannot swamp the rest, divided by its own standard-error inflation factor.">
+          Each variable's information value, capped at 1.5, divided by the square
+          root of its variance inflation, summed.{' '}
+          <span className="text-ink-secondary">Not a fitted model score</span>:
+          information value is read off the optimal binning whatever treatment is
+          selected, so this is a screening quantity. Fit the model for
+          discrimination and calibration.
         </p>
         {(anyLeak || anyFlip || worstVif > 5) && (
           <div className="mt-2 flex flex-wrap gap-1.5">
@@ -100,9 +134,14 @@ export default function SelectionTray({ portfolio, rows }: {
                 )}
                 <span>IV <span className="tnum text-ink-secondary">{r?.iv.toFixed(3) ?? '—'}</span></span>
                 {v != null && (
-                  <span>VIF <span className="tnum"
-                    style={{ color: v > 10 ? 'var(--status-critical)' : v > 5 ? 'var(--status-warning)' : 'var(--ink-secondary)' }}>
-                    {v.toFixed(2)}</span></span>
+                  <span title={v.df > 1
+                    ? `This term contributes ${v.df} design columns, so the ordinary variance inflation factor does not apply to it. Shown is the Fox-Monette generalised VIF raised to 1/(2·df) and squared, which is on the same scale as a one-column VIF. Raw GVIF ${v.gvif.toFixed(1)}.`
+                    : 'Variance inflation against the other columns in the design, including the seasoning basis.'}>
+                    VIF <span className="tnum"
+                    style={{ color: v.vif > 10 ? 'var(--status-critical)' : v.vif > 5 ? 'var(--status-warning)' : 'var(--ink-secondary)' }}>
+                    {v.vif.toFixed(2)}</span>
+                    {v.df > 1 && <span className="ml-0.5 text-ink-muted">·{v.df}col</span>}
+                  </span>
                 )}
                 {r && r.missing_pct > 0 && <span>{r.missing_pct.toFixed(0)}% miss</span>}
                 {r?.sign_ok === false && <StatusPill severity="critical">sign</StatusPill>}

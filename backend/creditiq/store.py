@@ -52,7 +52,36 @@ def load(key: str) -> Portfolio:
             df.drop(columns=drop, inplace=True)
     p["performance_date"] = pd.to_datetime(p["performance_date"])
     a["origination_date"] = pd.to_datetime(a["origination_date"])
-    return Portfolio(PORTFOLIOS[key], p, a)
+    return Portfolio(PORTFOLIOS[key], _compact(p), _compact(a))
+
+
+# A low-cardinality string column costs about 55 bytes per row as Python
+# objects and about 1 as a categorical code. On the mortgage panel nine such
+# columns — none with more than 144 distinct values, several with two — held
+# 1,036 MB of a 1,445 MB frame. Storing them as categories is what makes room
+# for panels large enough to fill a month with workouts.
+#
+# The threshold is deliberately generous: a column with thousands of distinct
+# values still saves, and one with a distinct value per row is left alone
+# because a category of that shape costs more than it saves.
+_CATEGORY_MAX_RATIO = 0.5
+
+
+def _compact(df: pd.DataFrame) -> pd.DataFrame:
+    """Narrow the dtypes without changing a single value.
+
+    Categoricals compare and group exactly as the strings did. Floats are left
+    at double precision — these are model inputs, and narrowing them would move
+    coefficients rather than only the memory."""
+    for c in df.columns:
+        if df[c].dtype != object:
+            continue
+        # An identifier column is excluded: it is a key, not a level.
+        if c.endswith("_id") or c == "account_id":
+            continue
+        if df[c].nunique(dropna=False) <= max(2, int(len(df) * _CATEGORY_MAX_RATIO)):
+            df[c] = df[c].astype("category")
+    return df
 
 
 @lru_cache(maxsize=8)
@@ -76,14 +105,12 @@ def screening_frame(key: str, n: int = SCREEN_ROWS) -> tuple[pd.DataFrame, bool]
     """A deterministic subsample used for VARIABLE SCREENING only.
 
     Information value, correlation and stability are population statistics that
-    are stable well below a million rows, and optimal binning on 1.7M rows takes
-    seconds per variable — which would make the screen feel broken. Final model
-    fits always use the full panel.
+    are stable well below a million rows, and optimal binning over 2M rows takes
+    seconds per variable. Model fits always use the full panel.
 
-    The sample is EVENT-PRESERVING: every default is kept and only non-events are
-    thinned, so a rare target is not made rarer. The returned flag says whether
-    any thinning happened, and the UI states it — an approximation the user
-    cannot see is not an approximation, it is a lie.
+    The sample is event-preserving: every default is retained and only non-events
+    are thinned, so the event rate is unchanged. The returned flag records
+    whether any thinning occurred, and the interface reports it.
     """
     df = analysis_frame(key)
     if len(df) <= n:
@@ -97,7 +124,20 @@ def screening_frame(key: str, n: int = SCREEN_ROWS) -> tuple[pd.DataFrame, bool]
     return out, True
 
 
+# Caches held elsewhere that are DERIVED from these panels, and so are stale the
+# moment the panels are dropped. Registering them here keeps `clear()` the one
+# place that has to be right — a derived cache that outlives its source is the
+# kind of bug that only shows up after a rebuild.
+_DEPENDENT: list = []
+
+
+def register_dependent_cache(clear_fn) -> None:
+    _DEPENDENT.append(clear_fn)
+
+
 def clear() -> None:
     load.cache_clear()
     analysis_frame.cache_clear()
     screening_frame.cache_clear()
+    for fn in _DEPENDENT:
+        fn()

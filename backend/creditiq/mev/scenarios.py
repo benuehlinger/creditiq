@@ -7,10 +7,15 @@ Provenance, stated plainly because it is the first thing a validator asks:
     verbatim to `data/scenarios`. Nothing about them is modelled.
 
   * The Fed publishes NO ADVERSE scenario. It has not since the 2022 cycle — the
-    URL 404s for 2023, 2024, 2025 and 2026. The brief asks for three severities,
-    so CreditIQ DERIVES an adverse path as a 50% severity interpolation between the
-    two published paths. It is labelled in the UI as derived, never as published.
-    The scenario editor lets a user replace it with their own.
+    URL 404s for 2023, 2024, 2025 and 2026. CreditIQ therefore SHIPS NO ADVERSE
+    SCENARIO. An earlier version interpolated one at 50% severity between the two
+    published paths and labelled it "derived"; that has been removed. A middle
+    path invented by the platform looks exactly like a supervisory path on a
+    chart, and the label carries the whole burden of the distinction. Two real
+    scenarios beat three where one is ours.
+
+    A user who needs a middle path builds it in the scenario editor, where it is
+    their assumption and is marked as a custom path throughout.
 
 The horizon is read from the file, never hardcoded. The 2026 cycle runs 13
 quarters; an earlier or later cycle will run a different length and the app
@@ -66,7 +71,7 @@ FED_COLUMNS: dict[str, str] = {
     "U.K. bilateral dollar exchange rate (USD/pound)": "usd_gbp",
 }
 
-SEVERITIES = {"baseline": 0.0, "adverse": 0.5, "severely_adverse": 1.0}
+SEVERITIES = {"baseline": 0.0, "severely_adverse": 1.0}
 
 
 @dataclass
@@ -131,33 +136,12 @@ def load_published() -> tuple[dict[str, Scenario], list[str]]:
     return out, warnings
 
 
-def derive_adverse(baseline: Scenario, severe: Scenario,
-                   severity: float = 0.5) -> Scenario:
-    """The middle scenario the Fed no longer publishes.
-
-    A straight interpolation in each variable's own published units. It is
-    monotone in severity by construction, which is what the demo needs, and it is
-    labelled as derived everywhere it appears.
-    """
-    cols = [c for c in baseline.quarterly.columns if c in severe.quarterly.columns]
-    b = baseline.quarterly[cols]
-    s = severe.quarterly.loc[b.index, cols]
-    return Scenario(
-        "adverse", "Adverse (derived)", False, b + severity * (s - b),
-        source="DERIVED by CreditIQ, not published by the Federal Reserve",
-        note=(f"The Federal Reserve has published no adverse scenario since the "
-              f"2022 cycle. This path is a {severity:.0%} severity interpolation "
-              f"between the published baseline and severely adverse paths. It is "
-              f"not a supervisory scenario and is labelled as derived throughout."))
-
-
 def load_all() -> tuple[dict[str, Scenario], list[str]]:
-    pub, warns = load_published()
-    if "baseline" in pub and "severely_adverse" in pub:
-        adv = derive_adverse(pub["baseline"], pub["severely_adverse"])
-        return {"baseline": pub["baseline"], "adverse": adv,
-                "severely_adverse": pub["severely_adverse"]}, warns
-    return pub, warns
+    """Every scenario the platform offers — all of them published by the Fed.
+
+    There is deliberately no synthesised middle path here. See the module note.
+    """
+    return load_published()
 
 
 # ── splicing history to the forward path ─────────────────────────────────────

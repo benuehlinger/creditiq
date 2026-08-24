@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { Card, CardHead, Skeleton, StatusPill } from './ui'
-import { useUi } from '../lib/store'
+import { useUi, NONE } from '../lib/store'
 import { diverging, mode } from '../design/tokens'
 import type { PortfolioKey } from '../lib/api'
 
@@ -18,7 +18,7 @@ export default function CorrelationPanel({ portfolio }: { portfolio: string }) {
   })
   const [hover, setHover] = useState<{ i: number; j: number } | null>(null)
   const toggleVariable = useUi((s) => s.toggleVariable)
-  const picked = useUi((s) => s.selectedVariables[portfolio as PortfolioKey] ?? [])
+  const picked = useUi((s) => s.selectedVariables[portfolio as PortfolioKey] ?? NONE) as string[]
   const m = mode()
 
   const cell = useMemo(() => (data ? Math.max(9, Math.min(26, 620 / data.columns.length)) : 16),
@@ -80,7 +80,7 @@ export default function CorrelationPanel({ portfolio }: { portfolio: string }) {
         <Card>
           <CardHead title="High correlation pairs"
             subtitle="|r| ≥ 0.90"
-            caption="A pair this tight cannot both be in a model — the coefficients become unstable and can flip sign." />
+            caption="At this level of correlation the two variables carry close to the same information. Including both makes the individual coefficients unstable and their signs unreliable." />
           {data.high_pairs.length === 0 ? (
             <p className="px-4 py-6 text-center text-xs text-ink-muted">No pair above 0.90.</p>
           ) : (
@@ -103,7 +103,7 @@ export default function CorrelationPanel({ portfolio }: { portfolio: string }) {
         <Card>
           <CardHead title="One per cluster"
             subtitle={`${data.clusters.length} clusters at |r| ≥ 0.70`}
-            caption="The highest information value in each cluster. A suggestion to accept or reject — never something that happens to you." />
+            caption="The highest information value in each correlated cluster. Selecting from this list is optional; nothing is applied automatically." />
           <ul className="divide-y divide-hairline">
             {data.clusters.filter((c: { members: string[] }) => c.members.length > 1).map((c: { cluster: number; members: string[]; recommended: string }) => (
               <li key={c.cluster} className="px-4 py-2">

@@ -5,8 +5,8 @@ hazard process driven by real FRED macroeconomic history. It is not any
 institution's portfolio and must never be presented as one.
 
 - Accounts: 50,000
-- Account-month rows: 1,350,247
-- Window: 2015-01 to 2025-12
+- Account-month rows: 1,509,093
+- Window: 2008-01 to 2025-12
 - Target: `default_flag` — 90+ days past due or charge-off
 - EAD method: amortizing — Amortizing product. EAD is the contractual scheduled balance at the default month, projected from the current balance, the note rate and the remaining term, with an optional prepayment (CPR) haircut. No CCF applies because there is no undrawn commitment.
 
@@ -52,7 +52,7 @@ institution's portfolio and must never be presented as one.
 | `fico_orig` | float64 | 0.0% | Credit driver. higher reduces risk |
 | `dti` | float64 | 0.0% | Credit driver. higher raises risk |
 | `annual_income` | float64 | 0.0% | Credit driver. higher reduces risk |
-| `employment_tenure_months` | float64 | 30.1% | Credit driver. higher reduces risk |
+| `employment_tenure_months` | float64 | 29.8% | Credit driver. higher reduces risk |
 | `revolving_utilization` | float64 | 14.9% | Credit driver. higher raises risk |
 | `num_trades` | float64 | 0.0% | Credit driver. higher reduces risk |
 | `inquiries_6m` | float64 | 0.0% | Credit driver. higher raises risk |

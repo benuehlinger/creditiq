@@ -255,3 +255,44 @@ def test_true_dscr_never_ships_only_the_reported_one(built):
     p, a = built["cre"]
     assert "dscr" not in p.columns and "dscr" not in a.columns
     assert "dscr_reported" in p.columns
+
+
+# ── the crisis, which is the reason the panel opens in 2008 ──────────────────
+CRISIS_MULTIPLE = {"consumer": (2.0, 4.0), "mortgage": (3.5, 7.0), "cre": (4.0, 9.0)}
+
+
+@pytest.mark.parametrize("key", ["consumer", "mortgage", "cre"])
+def test_the_downturn_is_real_and_is_the_right_size(built, key):
+    """Large enough to be evidence, small enough to be a number the asset class
+    actually produced. At the pre-calibration parameters the extended window gave
+    11.6%/yr on mortgage and 23.3%/yr on commercial real estate in 2009; neither
+    has ever happened."""
+    p, _ = built[key]
+    yr = p.groupby(p.performance_date.dt.year).default_flag.mean().mul(1200)
+    benign = yr.loc[yr.index.isin(range(2013, 2020))].mean()
+    peak = yr.loc[yr.index.isin(range(2008, 2012))].max()
+    lo, hi = CRISIS_MULTIPLE[key]
+    assert lo <= peak / benign <= hi, f"{key}: {peak:.2f}/{benign:.2f} = {peak/benign:.1f}x"
+
+
+@pytest.mark.parametrize("key", ["consumer", "mortgage", "cre"])
+def test_the_2006_book_is_worse_than_the_2011_book(built, key):
+    """Underwriting quality is a function of the vintage.
+
+    Measured on the first 36 months on book so the comparison is like for like:
+    a 2006 vintage would look worse than a 2011 one purely from having lived
+    through 2009 at a higher age.
+    """
+    p, _ = built[key]                       # the assembled panel already carries vintage
+    young = p[p.months_on_book <= 36]
+    rate = young.groupby("vintage").default_flag.mean().mul(1200)
+    loose = rate.loc[rate.index.isin((2006, 2007))].mean()
+    tight = rate.loc[rate.index.isin((2011, 2012))].mean()
+    assert loose > tight, f"{key}: 2006-07 {loose:.2f} vs 2011-12 {tight:.2f}"
+
+
+def test_the_panel_opens_in_2008():
+    """Not a cosmetic date. It is what puts the supervisory scenarios inside the
+    fitted range — see docs/DECISIONS.md, 'The panel starts in 2008, not 2015'."""
+    from creditiq.data.generate import PANEL_START
+    assert PANEL_START == "2008-01-01"

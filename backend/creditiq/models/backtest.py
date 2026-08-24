@@ -19,9 +19,20 @@ import pandas as pd
 from ..analysis.rates import annualize
 from . import metrics as M
 
+# Cohorts are QUARTERS, not months. A monthly cohort on the mortgage book rests
+# on about seven defaults, and an AUC or a calibration test on seven events
+# reports noise. `min_n` below enforces the same thing from the other side.
+#
+# The name is published with the payload so the interface can LABEL its axis
+# from the data rather than from a constant someone has to keep in step. An axis
+# reading "Performance month" over quarterly cohorts is how this was noticed.
+COHORT_FREQ = "QS"
+COHORT_FREQ_LABEL = "quarter"
+VINTAGE_FREQ = "YS"
+
 
 def by_cohort(dates: np.ndarray, y: np.ndarray, p: np.ndarray,
-              freq: str = "QS", min_n: int = 400) -> list[dict]:
+              freq: str = COHORT_FREQ, min_n: int = 400) -> list[dict]:
     """Actual against predicted, plus discrimination, for each cohort."""
     df = pd.DataFrame({"d": pd.to_datetime(dates), "y": y, "p": p})
     out = []
@@ -51,7 +62,7 @@ def by_cohort(dates: np.ndarray, y: np.ndarray, p: np.ndarray,
 
 
 def rank_order_stability(dates: np.ndarray, y: np.ndarray, p: np.ndarray,
-                         deciles: int = 5, freq: str = "QS",
+                         deciles: int = 5, freq: str = COHORT_FREQ,
                          min_n: int = 800) -> dict:
     """Does the riskiest decile stay the riskiest, every single period?
 
@@ -82,7 +93,7 @@ def rank_order_stability(dates: np.ndarray, y: np.ndarray, p: np.ndarray,
 
 
 def score_psi(dates: np.ndarray, p: np.ndarray, baseline_months: int = 12,
-              freq: str = "QS") -> list[dict]:
+              freq: str = COHORT_FREQ) -> list[dict]:
     """Population stability of the SCORE itself, against the opening window."""
     df = pd.DataFrame({"d": pd.to_datetime(dates), "p": p})
     start = df["d"].min()
@@ -97,7 +108,7 @@ def score_psi(dates: np.ndarray, p: np.ndarray, baseline_months: int = 12,
 
 
 def characteristic_psi(df: pd.DataFrame, columns: list[str],
-                       baseline_months: int = 12, freq: str = "YS") -> list[dict]:
+                       baseline_months: int = 12, freq: str = VINTAGE_FREQ) -> list[dict]:
     """Characteristic-level stability (CSI) — which INPUT moved, when the score
     moved. A score PSI tells you something changed; this tells you what."""
     d = df[["performance_date", *columns]].copy()
@@ -149,7 +160,7 @@ def segment_backtest(df: pd.DataFrame, y: np.ndarray, p: np.ndarray, column: str
                      min_n: int = 2000) -> list[dict]:
     """Where does the model break? Slice by any categorical and look.
 
-    Reporting a segment the model underperforms on is worth more in the room than
+    Reporting a segment the model underperforms on is more informative than
     a clean headline. It is also the thing a validator will look for first.
     """
     d = pd.DataFrame({"g": df[column].astype(str).to_numpy(), "y": y, "p": p})
@@ -171,3 +182,25 @@ def segment_backtest(df: pd.DataFrame, y: np.ndarray, p: np.ndarray, column: str
             "bias_pct": (pred / act - 1.0) * 100.0 if act > 0 else float("nan"),
         })
     return sorted(out, key=lambda r: (r["auc"] if r["auc"] == r["auc"] else 9))
+
+
+# Frequencies the interface may re-cohort to, with what each one costs a reader.
+# Monthly is offered because the underlying data IS monthly and the question is
+# fair; it is not the default because of what the numbers below do to it.
+FREQ_CHOICES: dict[str, str] = {"MS": "month", "QS": "quarter", "YS": "year"}
+
+
+def recohort(scored: dict, freq: str) -> dict:
+    """Re-run the time-cohorted statistics at another frequency.
+
+    Uses the predictions already computed for the fit, so no refit is involved.
+    """
+    if freq not in FREQ_CHOICES:
+        raise ValueError(f"unknown frequency {freq!r}")
+    d, y, p = scored["dates"], scored["y"], scored["p"].astype(float)
+    return {
+        "cohorts": by_cohort(d, y, p, freq=freq),
+        "rank_order": rank_order_stability(d, y, p, freq=freq),
+        "score_psi": score_psi(d, p, freq=freq),
+        "period_freq": FREQ_CHOICES[freq],
+    }

@@ -7,9 +7,23 @@ Two numbers decide whether a synthetic portfolio is credible:
      low and there is nothing to model.
 
   2. AUC must land in 0.72-0.82. This is the number that gives the demo away. A
-     synthetic dataset that scores 0.97 tells the room instantly that the
-     features were reverse-engineered from the target. The frailty term is what
+     synthetic dataset that scores 0.97 indicates that the features were
+     derived from the target. The frailty term is what
      holds AUC down, and this harness is how we tune it.
+
+     It is measured HELD OUT, including the in-time figure. It used to fit and
+     score on the same rows, which read about four points high — the design
+     carries 144 metro dummies and seven seasoning knots, so there is plenty of
+     noise to fit — and, worse, it did not respond to frailty at all, because
+     the model was fitting exactly the variance frailty had just added. A
+     calibration knob that does not move the number it is supposed to move is
+     undetectable without an explicit check.
+
+  3. Since the panel opens in 2008, a third number matters: the CRISIS MULTIPLE,
+     the 2008-2011 peak year over the 2013-2019 mean. It has to be large enough
+     that the downturn is real evidence for the model and small enough to be a
+     number the asset class actually produced. Roughly 3x for unsecured
+     consumer, 4-6x for mortgage and commercial real estate.
 
 `measure` fits the same kind of model the platform will fit, so the AUC reported
 here is the AUC the demo will show — not an optimistic proxy.
@@ -44,14 +58,20 @@ class Diagnostics:
     rate_by_year: pd.Series
     rate_in_band: bool
     auc_in_band: bool
+    benign_rate: float = float("nan")
+    crisis_peak: float = float("nan")
+    crisis_year: int = 0
 
     def summary(self) -> str:
         lo, hi = TARGET_RATE[self.portfolio]
         rate_ok = "OK " if self.rate_in_band else "OUT"
         auc_ok = "OK " if self.auc_in_band else "OUT"
         mix = "  ".join(f"{k}={v:.1%}" for k, v in self.terminal_mix.items())
+        mult = self.crisis_peak / max(self.benign_rate, 1e-9)
         return (f"{self.portfolio:9s} rows={self.rows:>9,}  accts={self.accounts:>6,}  "
                 f"life={self.avg_life_months:5.1f}m\n"
+                f"          benign {self.benign_rate:4.2f}%/yr -> {self.crisis_year} peak "
+                f"{self.crisis_peak:5.2f}%/yr  = {mult:.1f}x crisis multiple\n"
                 f"          default {self.annual_default_rate:5.2f}%/yr "
                 f"[{rate_ok} target {lo}-{hi}]   "
                 f"AUC in-time {self.auc_in_time:.3f} / OOT {self.auc_out_of_time:.3f} "
@@ -105,9 +125,17 @@ def measure(spec: PortfolioSpec, seed: int = 1, oot_from: str = "2023-01-01",
     dates = panel["performance_date"].to_numpy()
     oot = dates >= np.datetime64(oot_from)
 
-    def fit_auc(train_mask, test_mask):
+    def fit_auc(train_mask, test_mask, split: bool = False):
         tr = np.intersect1d(take, np.flatnonzero(train_mask))
         te = np.intersect1d(take, np.flatnonzero(test_mask))
+        if split:                     # in-time: hold out rows, never score the fit
+            # PERMUTE first. np.intersect1d returns sorted indices and the panel
+            # is ordered by month, so slicing it straight would train on
+            # 2008-2020 and test on 2021-2022, an out-of-time split carrying an
+            # in-time label, which read six points low on mortgage.
+            tr = np.random.default_rng(seed).permutation(tr)
+            cut = int(len(tr) * 0.7)
+            tr, te = tr[:cut], tr[cut:]
         if y[tr].sum() < 20 or y[te].sum() < 20:
             return float("nan")
         m = LogisticRegression(max_iter=400, C=1.0)
@@ -116,7 +144,7 @@ def measure(spec: PortfolioSpec, seed: int = 1, oot_from: str = "2023-01-01",
         m.fit((Xtr - mu) / sd, y[tr])
         return roc_auc_score(y[te], m.predict_proba((X.iloc[te] - mu) / sd)[:, 1])
 
-    auc_it = fit_auc(~oot, ~oot)
+    auc_it = fit_auc(~oot, ~oot, split=True)
     auc_oot = fit_auc(~oot, oot)
 
     n_term = int(panel.default_flag.sum() + panel.prepaid_flag.sum()
@@ -127,14 +155,20 @@ def measure(spec: PortfolioSpec, seed: int = 1, oot_from: str = "2023-01-01",
         "matured": float(panel.matured_flag.sum()) / max(n_term, 1),
     }
     rate = float(panel.default_flag.mean() * 1200)
+    by_year = (panel.groupby(panel.performance_date.dt.year)
+                    .default_flag.mean().mul(1200).round(2))
+    crisis = by_year.loc[by_year.index.isin(range(2008, 2012))]
+    benign = by_year.loc[by_year.index.isin(range(2013, 2020))]
     lo, hi = TARGET_RATE[spec.key]
     return Diagnostics(
         portfolio=spec.key, rows=len(panel), accounts=int(panel.account_id.nunique()),
         annual_default_rate=rate, auc_in_time=auc_it, auc_out_of_time=auc_oot,
         avg_life_months=len(panel) / max(panel.account_id.nunique(), 1),
         terminal_mix=mix,
-        rate_by_year=panel.groupby(panel.performance_date.dt.year)
-                          .default_flag.mean().mul(1200).round(2),
+        rate_by_year=by_year,
+        benign_rate=float(benign.mean()) if len(benign) else float("nan"),
+        crisis_peak=float(crisis.max()) if len(crisis) else float("nan"),
+        crisis_year=int(crisis.idxmax()) if len(crisis) else 0,
         rate_in_band=lo <= rate <= hi,
         auc_in_band=TARGET_AUC[0] <= auc_it <= TARGET_AUC[1],
     )

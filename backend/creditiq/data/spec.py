@@ -91,6 +91,21 @@ class PortfolioSpec:
     lgd_betas: dict[str, float] = field(default_factory=dict)
     lgd_zero_intercept: float = 0.0         # P(no loss at all) — the boundary mass
 
+    # ── vintage: underwriting quality drifts with the credit cycle ──────────
+    # Books do not deteriorate at random. Standards loosened into 2006-07 and
+    # snapped shut in 2009-11, and a 2006 vintage defaults more than a 2011
+    # vintage at the same reported score. Part of that drift is OBSERVABLE — the
+    # tape carries the higher LTV and the lower score — and part of it never
+    # reaches a loan tape at all, because documentation standards, exception
+    # rates and appraisal pressure are not columns.
+    #
+    # Both halves are represented. `vintage_attr_shift` moves the reported
+    # attribute, so a model CAN learn it from the drivers it already has.
+    # `vintage_logodds` is the residual laxity, which shows up only as a vintage
+    # effect — which is precisely why vintage analysis exists as a discipline.
+    vintage_attr_shift: dict[str, dict[int, float]] = field(default_factory=dict)
+    vintage_logodds: dict[int, float] = field(default_factory=dict)
+
     # expected sign of each driver's effect on PD, enforced in the UI
     expected_signs: dict[str, int] = field(default_factory=dict)
 

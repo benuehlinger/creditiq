@@ -101,15 +101,16 @@ def leakage_verdict(b: Binning) -> tuple[str, str, float]:
     if lift >= LEAKAGE_LIFT and b.iv >= LEAKAGE_IV:
         return ("likely",
                 f"Bin “{where}” captures {lift:.0f}x its share of the population. "
-                f"A variable that concentrates the outcome this hard is usually a "
-                f"restatement of it, recorded at or after the event, and is not "
-                f"knowable at the decision point.", lift)
+                f"Concentration at this level is characteristic of a variable "
+                f"recorded at or after the outcome rather than before it. Confirm "
+                f"the value is available at the decision point.", lift)
     if b.iv >= 0.5:
         return ("review",
-                f"Information value {b.iv:.2f} is in the strong band, but the "
-                f"strongest bin only lifts {lift:.1f}x, which is the profile of a "
-                f"genuinely predictive variable rather than a contaminated one. "
-                f"Confirm it is knowable at the decision point.", lift)
+                f"Information value {b.iv:.2f} is in the strong band and the "
+                f"strongest bin lifts {lift:.1f}x. Concentration at this level is "
+                f"consistent with a predictive variable rather than one recorded "
+                f"after the outcome. Confirm the value is available at the "
+                f"decision point.", lift)
     return ("none", "", lift)
 
 

@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import EChart from './EChart'
-import { baseOption, escapeHtml } from './base'
+import { baseOption, escapeHtml, xName, yName, gridFor } from './base'
 import { ink, mode, status } from '../design/tokens'
 import { usd } from '../lib/format'
 
@@ -17,10 +17,13 @@ import { usd } from '../lib/format'
  * The invisible base segment is what makes a bar float. It carries no meaning and
  * is excluded from the tooltip and the table view.
  */
-export default function Waterfall({ steps, reconciles, ariaLabel }: {
+export default function Waterfall({ steps, reconciles, ariaLabel,
+  xTitle = 'Attribution step', yTitle = 'Expected credit loss (USD)' }: {
   steps: { label: string; value: number; running: number; kind: string; note: string }[]
   reconciles: { ok: boolean; residual: number }
   ariaLabel: string
+  xTitle?: string
+  yTitle?: string
 }) {
   const m = mode()
   const k = ink(m)
@@ -41,7 +44,7 @@ export default function Waterfall({ steps, reconciles, ariaLabel }: {
     })
     return {
       ...baseOption(),
-      grid: { left: 62, right: 18, top: 16, bottom: 56 },
+      grid: gridFor({ left: 74, right: 18, top: 16, bottom: 74 }),
       tooltip: {
         ...(baseOption().tooltip as object),
         trigger: 'axis' as const,
@@ -59,11 +62,13 @@ export default function Waterfall({ steps, reconciles, ariaLabel }: {
       xAxis: {
         ...(baseOption().xAxis as object), type: 'category' as const,
         data: steps.map((s) => s.label),
+        ...xName(xTitle, 56),
         axisLabel: { color: k.muted, fontSize: 10, interval: 0, width: 90,
                      overflow: 'break' as const, lineHeight: 12 },
       },
       yAxis: {
         ...(baseOption().yAxis as object), type: 'value' as const,
+        ...yName(yTitle, 58),
         axisLabel: { color: k.muted, fontSize: 10, formatter: (v: number) => usd(v) },
       },
       series: [

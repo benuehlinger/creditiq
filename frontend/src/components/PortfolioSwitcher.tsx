@@ -9,6 +9,10 @@ import { tokens } from '../design/tokens'
  *  and badge, so the user always knows where they are without reading. The three
  *  colours are palette slots 1-3, which are the three that clear the harder
  *  all-pairs gate — they appear together on the roll-up. */
+const SHORT: Record<string, string> = {
+  consumer: 'Consumer', mortgage: 'Mortgage', cre: 'CRE',
+}
+
 export default function PortfolioSwitcher() {
   const { portfolio } = useParams()
   const nav = useNavigate()
@@ -25,7 +29,7 @@ export default function PortfolioSwitcher() {
     <div
       role="tablist"
       aria-label="Portfolio"
-      className="flex items-center gap-0.5 rounded-ctl bg-sunken p-0.5"
+      className="flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded-ctl bg-sunken p-0.5"
     >
       {data.map((p) => {
         const active = p.key === portfolio
@@ -45,7 +49,10 @@ export default function PortfolioSwitcher() {
               className="h-2 w-2 shrink-0 rounded-full"
               style={{ background: `var(--series-${dot.slot})` }}
             />
-            {p.label}
+            {/* The full label needs 180px for three books and the row has other
+                work to do. Below xl the short form carries the same meaning. */}
+            <span className="hidden xl:inline">{p.label}</span>
+            <span className="xl:hidden">{SHORT[p.key] ?? p.label}</span>
           </button>
         )
       })}

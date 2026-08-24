@@ -155,7 +155,7 @@ export default function SpecificationCard({ r }: { r: FitResponse }) {
       <Card>
         <CardHead title="Scorecard"
           subtitle={`Base ${r.scorecard.base_score} at ${r.scorecard.base_odds}:1 odds · PDO ${r.scorecard.pdo}`}
-          caption="Points double the odds of being good every 20 points. A pure monotone transformation of the probability — it adds no information and makes the model legible to people who do not read log-odds." />
+          caption="A linear rescaling of the log-odds: the odds of being good double every 20 points. It is a monotone transformation of the fitted probability and carries the same information." />
         <div className="thin-scroll max-h-[320px] overflow-auto">
           <table className="w-full text-left text-xs">
             <thead className="sticky top-0 bg-surface">

@@ -141,7 +141,7 @@ def fit(design: Design, spec: ModelSpec) -> FitResult:
 
     # VIF from the design's own correlation structure, excluding the intercept.
     #
-    # A pseudo-inverse alone is NOT enough and quietly hides the worst case. With
+    # A pseudo-inverse alone is insufficient and conceals the rank-deficient case. With
     # two exactly duplicated columns the correlation matrix is singular, `pinv`
     # returns a finite pseudo-inverse, and every VIF comes back as 1.00 — the
     # guardrail reporting perfect health on a rank-deficient design. So the
@@ -230,3 +230,74 @@ def _fit_l1(X: np.ndarray, y: np.ndarray, C: float):
 
 def predict(X: np.ndarray, beta: np.ndarray) -> np.ndarray:
     return _sigmoid(X.astype(np.float64, copy=False) @ beta)
+
+
+# ── collinearity for terms that emit more than one column ────────────────────
+def generalised_vif(X: np.ndarray, groups: dict[str, list[int]]) -> list[dict]:
+    """Fox-Monette generalised variance inflation, per TERM.
+
+    The ordinary VIF is defined for one column. A treatment can emit one column
+    or eight — a spline basis, a set of bin indicators — and "the variance
+    inflation of interest_rate" is then not a single number in the usual sense.
+
+    Fox and Monette (1992) give the generalisation:
+
+        GVIF_j = det(R_jj) x det(R_-j-j) / det(R)
+
+    where R is the correlation matrix of the design's non-intercept columns,
+    R_jj is the block belonging to term j and R_-j-j the block belonging to
+    everything else. It is the factor by which the joint confidence region for
+    term j's coefficients is inflated by the rest of the design.
+
+    GVIF grows with the number of columns, so it is not comparable across terms
+    of different size. `GVIF^(1/2 df)` is, and is on the scale of a standard-
+    error inflation factor; squaring it puts it back on the familiar VIF scale,
+    where a one-column term returns exactly the ordinary VIF.
+
+    This exists because the screening panel used to compute VIF on the RAW tape
+    columns, ignoring the treatment entirely. Binned, splined and continuous
+    forms of the same variable all reported the same number, and for a binned
+    interest rate that number was 20.9 against a true worst-column value of 12.
+    """
+    if not groups:
+        return []
+    idx = sorted({i for cols in groups.values() for i in cols})
+    if len(idx) < 2:
+        return [{"term": t, "df": len(c), "gvif": 1.0, "vif": 1.0,
+                 "inflation": 1.0, "aliased": False} for t, c in groups.items()]
+
+    sub = np.asarray(X, dtype=np.float64)[:, idx]
+    pos = {c: i for i, c in enumerate(idx)}
+    R = np.nan_to_num(np.corrcoef(sub, rowvar=False), nan=0.0)
+    np.fill_diagonal(R, 1.0)
+
+    def logdet(M: np.ndarray) -> float:
+        if M.size == 0:
+            return 0.0
+        sign, ld = np.linalg.slogdet(M)
+        # A singular block means the term is an exact combination of the others.
+        return ld if sign > 0 else -np.inf
+
+    ld_full = logdet(R)
+    out: list[dict] = []
+    for term, cols in groups.items():
+        j = [pos[c] for c in cols if c in pos]
+        rest = [i for i in range(len(idx)) if i not in set(j)]
+        if not j:
+            continue
+        ld_j = logdet(R[np.ix_(j, j)])
+        ld_rest = logdet(R[np.ix_(rest, rest)]) if rest else 0.0
+        if not np.isfinite(ld_full) or not np.isfinite(ld_j) or not np.isfinite(ld_rest):
+            out.append({"term": term, "df": len(j), "gvif": float("inf"),
+                        "vif": float("inf"), "inflation": float("inf"),
+                        "aliased": True})
+            continue
+        gvif = float(np.exp(ld_j + ld_rest - ld_full))
+        gvif = max(gvif, 1.0)
+        inflation = gvif ** (1.0 / (2.0 * len(j)))       # standard-error factor
+        out.append({"term": term, "df": len(j), "gvif": gvif,
+                    # back on the ordinary VIF scale: identical for a 1-df term
+                    "vif": float(inflation ** 2), "inflation": float(inflation),
+                    "aliased": False})
+    out.sort(key=lambda r: -r["vif"])
+    return out

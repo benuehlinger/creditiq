@@ -30,6 +30,11 @@ import numpy as np
 import pandas as pd
 
 from ..analysis.binning import bin_categorical, bin_numeric
+# The spline basis lives in `analysis` because BOTH layers use it: the Explore
+# stage fits the same basis with the same estimator on the same rows, so the
+# curve it previews is the curve the model will fit. A second implementation
+# there would drift from this one.
+from ..analysis.spline import quantile_knots, spline_basis as _spline_basis  # noqa: F401
 from ..mev.panel import monthly_panel
 from .spec import MevSpec, ModelSpec, VariableSpec
 
@@ -105,6 +110,17 @@ class Design:
     means: np.ndarray
     stds: np.ndarray
     basis_maps: dict[str, dict] = field(default_factory=dict)
+    # The term each column belongs to. A treatment can emit one column or seven,
+    # so "the variance inflation of interest_rate" is only well defined against
+    # this mapping. Recorded here rather than recovered by parsing column names.
+    terms: list[str | None] = field(default_factory=list)
+
+    def term_groups(self) -> dict[str, list[int]]:
+        out: dict[str, list[int]] = {}
+        for i, t in enumerate(self.terms):
+            if t is not None:
+                out.setdefault(t, []).append(i)
+        return out
 
     @property
     def n(self) -> int:
@@ -174,10 +190,14 @@ def _dummy_matrix(x: pd.Series, m: dict) -> tuple[np.ndarray, list[str]]:
         idx = np.clip(idx, 0, max(n_bins - 1, 0))
 
     cols, names = [], []
+    # A two-bin discretisation emits a single 0/1 column. Naming it after the
+    # upper bin's interval reads as one level of a set; naming it `_flag` says
+    # what it is, and makes it recognisable on the specification card.
+    flag = n_bins == 2 and not miss.any()
     # the first bin is the reference level, so the design stays full rank
     for b in range(1, n_bins):
         cols.append(((idx == b) & ~miss).astype(float))
-        names.append(f"={labels[b]}")
+        names.append("_flag" if flag else f"={labels[b]}")
     if miss.any():
         cols.append(miss.astype(float))
         names.append("=Missing")
@@ -200,95 +220,29 @@ def _apply_woe(x: pd.Series, m: dict) -> np.ndarray:
     return out.astype(float)
 
 
-def quantile_knots(v: np.ndarray, n_knots: int = 4) -> list[float]:
-    """Interior knots at quantiles of the variable's OWN distribution.
+def apply_mev_transform(s: pd.Series, transform: str) -> pd.Series:
+    """The transform half of a macro term.
 
-    Nobody knows where to put a knot by hand, and asking is a bad interface. The
-    standard answer is to place them at quantiles, so they land where the data
-    actually is and each interval carries a similar number of observations.
-
-    This function exists because the alternative was worse than useless. The
-    spline treatment originally reused the SEASONING knots — 3, 6, 12, ... 144
-    months — for every variable. On FICO, which runs 540 to 830, every one of
-    those sits below the minimum, so `max(fico - knot, 0)` reduces to
-    `fico - knot` for every row. The hinge matrix had rank 2 and the basis
-    emitted nine columns, seven of them floating-point residue. The model then
-    fitted that residue and reported a BETTER in-sample likelihood for it.
+    Separate from `mev_series` because the SCENARIO path has to receive the same
+    treatment. It did not: the projection branch applied the lag and skipped the
+    transform, so a term fitted on year-over-year change was projected on the raw
+    level. Nothing failed, and the coefficient was simply applied to a different
+    quantity from the one it was estimated on.
     """
-    x = np.asarray(v, dtype=float)
-    x = x[np.isfinite(x)]
-    if x.size == 0:
-        return []
-    qs = np.linspace(0, 1, n_knots + 2)[1:-1]        # interior only
-    k = np.unique(np.quantile(x, qs))
-    # a knot outside the observed range contributes nothing but a rank deficiency
-    return [float(z) for z in k if x.min() < z < x.max()]
-
-
-def _spline_basis(v: np.ndarray, knots, fitted: dict | None = None
-                  ) -> tuple[np.ndarray, list[str], dict]:
-    """Piecewise-linear spline basis, ORTHOGONALIZED.
-
-    The raw hinge basis — the value plus max(value - knot, 0) at each knot — is
-    the easy way to write a piecewise-linear spline and it is catastrophically
-    collinear: every hinge is a truncated copy of the one before it. Fitted
-    directly it produced variance inflation factors above 4,700 and a pair of
-    coefficients of +21.5 and -21.8 that cancel to nothing. Those numbers are not
-    wrong, but no validator will accept a specification card that shows them.
-
-    A QR decomposition returns an orthonormal basis spanning EXACTLY the same
-    function space, so the fitted seasoning curve is identical while the variance
-    inflation drops to one. The individual coefficients then carry no separate
-    meaning — which is honest, because a spline's shape is the quantity of
-    interest, not its basis weights. The Model surface plots the curve.
-    """
-    def raw(vv, ks):
-        cols = [vv.astype(float)]
-        nm = ["value"]
-        for kk in ks:
-            cols.append(np.maximum(vv - kk, 0.0))
-            nm.append(f"gt{kk}")
-        return np.column_stack(cols), nm
-
-    if fitted is not None:
-        # APPLY a previously fitted basis. The knot set and the orthogonalising
-        # map must both come from training: a projection ages accounts past knots
-        # that were dead in the fit sample, which would otherwise change the
-        # column count, and re-running QR on new data produces a DIFFERENT basis
-        # spanning the same space — the fitted coefficients would then be applied
-        # to the wrong vectors.
-        B, _ = raw(v, fitted["knots"])
-        B = (B - np.asarray(fitted["center"])) @ np.asarray(fitted["rinv"])
-        B = B * np.asarray(fitted["signs"])
-        return B, [f"basis{i + 1}" for i in range(B.shape[1])], fitted
-
-    B, names = raw(v, knots)
-    keep = B.std(axis=0) > 1e-9              # a knot beyond the data's range is dead
-    live_knots = [k for k, kp in zip(knots, keep[1:]) if kp]
-    B = B[:, keep]
-    names = [n for n, k in zip(names, keep) if k]
-    meta: dict = {"knots": live_knots}
-    if B.shape[1] > 1:
-        center = B.mean(axis=0)
-        Bc = B - center
-        # A non-zero standard deviation is NOT enough to prove a hinge adds
-        # anything: hinges below the data's minimum are all affine copies of the
-        # variable and survive that check while contributing nothing. Truncate to
-        # the numerical rank, or the basis emits orthonormal columns of pure
-        # floating-point residue and the model happily fits them.
-        rank = int(np.linalg.matrix_rank(Bc, tol=1e-8))
-        Q, R = np.linalg.qr(Bc)
-        Q, R = Q[:, :rank], R[:rank]
-        signs = np.sign(np.sum(Q * Bc[:, :rank], axis=0))
-        signs[signs == 0] = 1.0
-        B = Q * signs
-        names = [f"basis{i + 1}" for i in range(B.shape[1])]
-        meta |= {"center": center.tolist(),
-                 "rinv": np.linalg.pinv(R).tolist(), "signs": signs.tolist()}
-    else:
-        meta |= {"center": [0.0] * B.shape[1],
-                 "rinv": np.eye(B.shape[1]).tolist(), "signs": [1.0] * B.shape[1]}
-    return B, names, meta
+    s = s.astype(float)
+    if transform == "yoy":
+        return (s / s.shift(12) - 1.0) * 100.0
+    if transform == "log_diff":
+        return np.log(s.clip(lower=1e-9)).diff()
+    if transform == "qoq_annualized":
+        return ((s / s.shift(3)) ** 4 - 1.0) * 100.0
+    if transform == "four_quarter_change":
+        return s - s.shift(12)
+    if transform == "diff":
+        return s.diff()
+    if transform == "z_score":
+        return (s - s.mean()) / (s.std(ddof=0) or 1.0)
+    return s
 
 
 def mev_series(spec: MevSpec) -> pd.Series:
@@ -296,17 +250,7 @@ def mev_series(spec: MevSpec) -> pd.Series:
     panel = monthly_panel()
     if spec.key not in panel.columns:
         raise KeyError(f"unknown MEV {spec.key!r}")
-    s = panel[spec.key].astype(float)
-    if spec.transform == "yoy":
-        s = (s / s.shift(12) - 1.0) * 100.0
-    elif spec.transform == "log_diff":
-        s = np.log(s.clip(lower=1e-9)).diff()
-    elif spec.transform == "qoq_annualized":
-        s = ((s / s.shift(3)) ** 4 - 1.0) * 100.0
-    elif spec.transform == "four_quarter_change":
-        s = s - s.shift(12)
-    elif spec.transform == "z_score":
-        s = (s - s.mean()) / (s.std(ddof=0) or 1.0)
+    s = apply_mev_transform(panel[spec.key], spec.transform)
     if spec.lag_months:
         s = s.shift(spec.lag_months)
     return s.rename(spec.label())
@@ -335,12 +279,20 @@ def build(df: pd.DataFrame, spec: ModelSpec,
     ys = pd.Series(y, index=df.index)
     blocks: list[np.ndarray] = []
     names: list[str] = []
+    # Which term owns each emitted column. Appended in step with `names`.
+    terms: list[str | None] = []
+
+    def own(term: str | None) -> None:
+        """Tag every column appended since the last call."""
+        while len(terms) < len(names):
+            terms.append(term)
     maps: dict[str, dict] = dict(woe_maps or {})
     bases: dict[str, dict] = dict(basis_maps or {})
 
     for v in spec.variables:
         if v.column not in df.columns:
             continue
+        own(None)                    # close out whatever preceded this variable
         x = df[v.column]
         enc = v.encoder
         if enc in ("woe", "dummies", "ordinal"):
@@ -382,6 +334,7 @@ def build(df: pd.DataFrame, spec: ModelSpec,
             col = pd.to_numeric(x, errors="coerce")
             blocks.append(col.fillna(col.median()).to_numpy(float)[:, None])
             names.append(v.column)
+        own(v.column)
 
     # The automatic seasoning spline is on months_on_book. If the analyst has
     # ALSO selected months_on_book explicitly, adding both puts two bases of the
@@ -406,6 +359,7 @@ def build(df: pd.DataFrame, spec: ModelSpec,
                 b, meta = got
         bases["__seasoning__"] = meta
         blocks.append(b); names += [f"seasoning_basis{i + 1}" for i in range(b.shape[1])]
+    own("seasoning")
 
     if spec.mevs:
         dates = pd.DatetimeIndex(df["performance_date"]).to_period("M").to_timestamp()
@@ -419,7 +373,10 @@ def build(df: pd.DataFrame, spec: ModelSpec,
                 # here would silently project the future using the past, which is
                 # the exact opposite of what a stress test is for.
                 if mev_override is not None and m.key in mev_override.columns:
-                    src = mev_override[m.key].astype(float)
+                    # Same transform as the fit. Applying only the lag here left
+                    # the coefficient acting on a different quantity from the one
+                    # it was estimated on.
+                    src = apply_mev_transform(mev_override[m.key], m.transform)
                     if m.lag_months:
                         src = src.shift(m.lag_months)
                     vals = src.reindex(dates).to_numpy(float)
@@ -429,6 +386,7 @@ def build(df: pd.DataFrame, spec: ModelSpec,
             # never cache an overridden column — the scenario changes under it
             blocks.append(_mk() if mev_override is not None else _cache_col(mk, _mk))
             names.append(f"mev:{m.label()}")
+            own(f"mev:{m.label()}")
 
     if spec.vintage_effect and "vintage" in df.columns:
         d = pd.get_dummies(df["vintage"].astype(int), prefix="vintage",
@@ -450,7 +408,9 @@ def build(df: pd.DataFrame, spec: ModelSpec,
         stds[stds < 1e-12] = 1.0
     X = (X - means) / stds
     X = np.column_stack([np.ones(len(df)), X]).astype(np.float32, copy=False)
+    own("vintage")                   # anything still untagged is the vintage block
     return Design(X=X, columns=["intercept", *names], y=y,
                   dates=df["performance_date"].to_numpy(),
                   accounts=df["account_id"].to_numpy(),
-                  woe_maps=maps, means=means, stds=stds, basis_maps=bases)
+                  woe_maps=maps, means=means, stds=stds, basis_maps=bases,
+                  terms=[None, *terms])

@@ -1,24 +1,42 @@
 import { useEffect } from 'react'
-import { NavLink, Outlet, useNavigate, useParams } from 'react-router-dom'
+import { NavLink, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useUi } from '../lib/store'
+import { STATE_COLOUR, rollUpState, useProgress } from '../lib/progress'
 import PortfolioSwitcher from './PortfolioSwitcher'
 import { CoBrand } from './Brand'
 import CommandPalette from './CommandPalette'
 import MethodologyDrawer from './MethodologyDrawer'
+import ModelBar from './ModelBar'
+import ProgressChip from './ProgressChip'
 
-const SURFACES = [
+/** Five destinations. Two of them have stages, which appear in the row below
+ *  rather than inline here — nesting them in one row put seven links, two group
+ *  labels, three portfolio pills and two status chips in a single 44px strip. */
+interface Surface { to: string; label: string; key: string; stages?: { to: string; label: string }[] }
+
+const SURFACES: Surface[] = [
   { to: 'data', label: 'Data', key: '1' },
-  { to: 'explore', label: 'Explore', key: '2' },
-  { to: 'model', label: 'Model', key: '3' },
-  { to: 'scenarios', label: 'Scenarios', key: '4' },
-  { to: 'versions', label: 'Versions', key: '5' },
+  { to: 'macro', label: 'Macro', key: '2' },
+  { to: 'pd', label: 'PD model', key: '3', stages: [
+    { to: 'pd/explore', label: 'Explore' }, { to: 'pd/fit', label: 'Fit' } ] },
+  { to: 'lgd', label: 'LGD model', key: '4', stages: [
+    { to: 'lgd/explore', label: 'Explore' }, { to: 'lgd/fit', label: 'Fit' } ] },
+  { to: 'scenarios', label: 'Scenarios', key: '5' },
+  { to: 'versions', label: 'Versions', key: '6' },
 ]
 
 export default function AppShell() {
   const { portfolio } = useParams()
+  const { pathname } = useLocation()
+  // Stage state rides on the navigation that already exists rather than on a row
+  // of its own: a second row listing the same destinations was duplication, and
+  // the state was the only part of it that was not.
+  const { stages: progressStages } = useProgress(portfolio)
   const nav = useNavigate()
+  const stages = SURFACES.find(
+    (s) => s.stages && pathname.startsWith(`/${portfolio}/${s.to}/`))?.stages
   const { theme, toggleTheme, setPaletteOpen } = useUi()
   const { data: health } = useQuery({ queryKey: ['health'], queryFn: api.health })
 
@@ -41,7 +59,7 @@ export default function AppShell() {
       const tag = (e.target as HTMLElement)?.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA' || e.metaKey || e.ctrlKey || e.altKey) return
       const s = SURFACES.find((x) => x.key === e.key)
-      if (s && portfolio) nav(`/${portfolio}/${s.to}`)
+      if (s && portfolio) nav(`/${portfolio}/${s.stages ? s.stages[0].to : s.to}`)
       if (e.key === '0') nav('/rollup')
     }
     window.addEventListener('keydown', onKey)
@@ -68,6 +86,22 @@ export default function AppShell() {
           <br />
           <span className="font-medium text-ink">Apollo FIG</span>
         </span>
+
+        {/* Global status. Neither of these is portfolio navigation, and the row
+            below was running out of room while this one had space to spare. */}
+        <div className="ml-6 hidden items-center gap-3 whitespace-nowrap text-micro text-ink-muted lg:flex">
+          {health && (
+            <span title={`FRED cache built ${health.mev_cache_built_at}. The app runs fully offline.`}>
+              {health.mev_series_resolved} MEV series · offline
+            </span>
+          )}
+          {/* Permanent, on every data-bearing view: it stops a screenshot being
+              mistaken for a real book. */}
+          <span className="flex items-center gap-1.5 rounded border border-hairline px-1.5 py-0.5">
+            <span className="h-1.5 w-1.5 rounded-full bg-warning" />
+            Synthetic demonstration data
+          </span>
+        </div>
 
         <div className="ml-auto flex items-center gap-2">
           <NavLink
@@ -101,48 +135,51 @@ export default function AppShell() {
         </div>
       </header>
 
-      {/* ── row 2: portfolio context and the five surfaces ── */}
-      <div className="flex h-11 shrink-0 items-center gap-5 border-b border-hairline bg-surface px-4">
+      {/* ── row 2: portfolio context and the six surfaces ── */}
+      <div className="flex h-11 shrink-0 items-center gap-4 border-b border-hairline bg-surface px-4">
         <PortfolioSwitcher />
         {portfolio && (
-          <nav className="flex items-center gap-0.5">
-            {SURFACES.map((s) => (
-              <NavLink
-                key={s.to}
-                to={`/${portfolio}/${s.to}`}
-                className={({ isActive }) =>
-                  `relative rounded-ctl px-3 py-1.5 text-xs font-medium transition-colors ${
-                    isActive ? 'text-ink' : 'text-ink-muted hover:text-ink-secondary'
-                  }`
-                }
-              >
-                {({ isActive }) => (
-                  <>
-                    {s.label}
-                    {isActive && (
-                      <span className="absolute inset-x-2 -bottom-[9px] h-0.5 rounded-full bg-accent" />
-                    )}
-                  </>
-                )}
-              </NavLink>
-            ))}
+          <nav className="flex shrink-0 items-center gap-0.5">
+            {SURFACES.map((s) => {
+              const on = s.stages
+                ? pathname.startsWith(`/${portfolio}/${s.to}/`)
+                : pathname === `/${portfolio}/${s.to}`
+              const state = rollUpState(progressStages, s.to)
+              return (
+                <NavLink
+                  key={s.to}
+                  to={`/${portfolio}/${s.stages ? s.stages[0].to : s.to}`}
+                  title={state === 'changed'
+                    ? 'Changed since the saved model was opened'
+                    : state === 'done' ? 'Complete' : 'Not started'}
+                  className={`relative flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-ctl px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                    on ? 'text-ink' : 'text-ink-muted hover:text-ink-secondary'}`}
+                >
+                  {state && (
+                    <span className="h-1.5 w-1.5 shrink-0 rounded-full ring-1"
+                          style={{ background: STATE_COLOUR[state],
+                                   // a hollow ring reads as "not started" without
+                                   // spending a colour on the absence of work
+                                   ['--tw-ring-color' as string]: state === 'todo'
+                                     ? 'var(--chrome-axis)' : 'transparent' }} />
+                  )}
+                  {s.label}
+                  {on && (
+                    <span className="absolute inset-x-2 -bottom-[9px] h-0.5 rounded-full bg-accent" />
+                  )}
+                </NavLink>
+              )
+            })}
           </nav>
         )}
 
-        <div className="ml-auto flex items-center gap-3 text-micro text-ink-muted">
-          {health && (
-            <span title={`FRED cache built ${health.mev_cache_built_at}. The app runs fully offline.`}>
-              {health.mev_series_resolved} MEV series · offline
-            </span>
-          )}
-          {/* Permanent, on every data-bearing view. Honesty is a feature, and it
-              stops a screenshot being mistaken for a real book. */}
-          <span className="flex items-center gap-1.5 rounded border border-hairline px-1.5 py-0.5">
-            <span className="h-1.5 w-1.5 rounded-full bg-warning" />
-            Synthetic demonstration data
-          </span>
+        <div className="ml-auto flex shrink-0 items-center gap-3 whitespace-nowrap text-micro text-ink-muted">
+          <ProgressChip />
         </div>
       </div>
+
+      {/* ── row 3: the stage within the current model, and which model that is ── */}
+      <ModelBar stages={stages} />
 
       <main className="thin-scroll min-h-0 flex-1 overflow-y-auto">
         <Outlet />

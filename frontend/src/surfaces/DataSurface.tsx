@@ -5,7 +5,7 @@ import { api, type ColumnProfile } from '../lib/api'
 import { Card, CardHead, Skeleton, StatTile, StatusPill } from '../components/ui'
 import { useUi } from '../lib/store'
 import EChart from '../charts/EChart'
-import { baseOption, crosshairTooltip, lineSeries, markLineAt } from '../charts/base'
+import { baseOption, crosshairTooltip, lineSeries, markLineAt, xName, gridFor } from '../charts/base'
 import { byUnit, num, pct, month } from '../lib/format'
 import { accent, ink, mode, status } from '../design/tokens'
 
@@ -57,10 +57,11 @@ export default function DataSurface() {
     const pts = ts.data.map((d) => [d.performance_date, d.annual_default_rate_pct] as [string, number])
     return {
       ...baseOption(),
-      grid: { left: 52, right: 18, top: 14, bottom: 30 },
+      grid: gridFor({ left: 62, right: 18, top: 14, bottom: 48 }),
       tooltip: crosshairTooltip((v) => `${v.toFixed(2)}%`, (d) => month(d)),
       xAxis: {
         ...(baseOption().xAxis as object),
+        ...xName('Reporting month'),
         type: 'time' as const,
         axisLabel: { color: k.muted, fontSize: 11, formatter: '{yyyy}' },
       },
@@ -145,7 +146,7 @@ export default function DataSurface() {
           <CardHead
             title="Panel integrity"
             subtitle={`${health.data?.n_rows.toLocaleString()} rows · ${health.data?.n_columns} columns`}
-            caption="Whether this is a valid panel at all. These failures do not stop a model fitting — they produce one that fits well and answers wrongly."
+            caption="Structural checks on the panel: duplicate keys, gaps in the observation grid, rows after a terminal event, and target definition consistency. A model will fit despite these failures."
             methodology="data-health"
             right={
               <StatusPill severity={failing.some((f) => f.severity === 'critical') ? 'critical'

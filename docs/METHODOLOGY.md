@@ -158,21 +158,44 @@ A logit is linear in the log-odds of its inputs. Inside the fitted range that is
 an empirical claim; outside it, it is extrapolation with no evidence and no upper
 bound.
 
-The 2026 severely adverse scenario takes commercial property growth to −24% year
-on year against a fitted floor of −10.7%, which is 4.3 standard deviations
-outside anything the model has seen. Unconstrained, the model answered with a 33%
-cumulative default rate over the horizon.
+A logit is linear in the log-odds of its inputs, so outside the fitted range it
+extrapolates without evidence and without bound. On the old 2015-2025 panel the
+2026 severely adverse scenario took commercial property growth to −24% year on
+year against a fitted floor of −10.7%, and the model answered with a 33%
+cumulative default rate.
 
-CreditIQ reports the distance in standard deviations per variable, and offers
-winsorizing the forward path to the fitted range. That is standard practice and
-it is a real trade-off — it keeps the projection inside the evidence and it
-**also caps the stress** — so both the capped and uncapped numbers are shown.
-On commercial real estate the uncapped figure is 2.3x the capped one, entirely
-from extrapolation.
+The panel now opens in January 2008, so that floor is −29.9% and the supervisory
+path is **inside** it. Commercial real estate has nothing outside its estimation
+window; mortgage house prices remain half a standard deviation past the floor.
+The check still ships, because a future scenario can leave the window again.
+
+CreditIQ reports the distance in standard deviations per variable — across the
+PD macro terms **and** the LGD drivers — and offers winsorizing the forward path
+to the fitted range as a switch. The switch is **off by default**: the projection
+runs on the Federal Reserve's published path, unmodified, because a screen
+labelled "severely adverse" must be the severely adverse scenario. Both figures
+are always priced, and the gap between them is the size of what the model has
+never seen.
 
 ---
 
 ## 7. Loss given default
+
+E[LGD | X] = sigmoid(X·β), estimated by the Papke-Wooldridge fractional response
+quasi-likelihood on `lgd_realised`. The estimator is consistent for the
+conditional mean of a proportion without the assumption that the proportion is a
+count of Bernoulli trials. Terms enter linearly.
+
+The drivers are a specification rather than a constant, and the fitted model is
+cached on the specification hash. Candidates are restricted to columns present on
+defaulted rows with at least half of those rows populated — fill rate among
+defaults rather than on the full tape — and categoricals to between 2 and 12
+levels.
+
+Macro drivers are joined at the default month, not at the reporting date and not
+at origination. Realised severity reflects the conditions in the month the loan
+defaulted, and this join is what allows predicted severity to respond to a
+scenario.
 
 A two-stage fractional response model, fitted on defaulted account-months:
 
@@ -332,7 +355,77 @@ rate. A book cannot lose 400% of itself in a year.
 
 ---
 
-## 13. Model versions
+## 13. The empirical log-odds curve
+
+Everything about how a variable enters the model is decided from one picture: its
+log-odds against its own value, cut as finely as the event count supports.
+
+Each bucket carries at least 20 defaults; thinner buckets are merged into their
+neighbour left to right rather than drawn, because a bucket with three defaults
+has an interval that spans the plot and looks like evidence. The log-odds use the
+Haldane-Anscombe correction — half an event added to each cell — so an empty
+bucket is finite and biased toward the null rather than driving the axis to minus
+infinity. The interval is the Wald interval on the log-odds,
+`+/- 1.96 * sqrt(1/(e+0.5) + 1/(n-e+0.5))`.
+
+Two reference curves are fitted through the buckets by weighted least squares,
+weighted by Fisher information `n * p * (1 - p)` so a bucket holding forty
+thousand rows is not outvoted by one holding three hundred at the end of the
+axis. One is a straight line — what a continuous term assumes. The other is a
+piecewise-linear spline at the current knots. Their R-squareds are reported
+against each other, so choosing a treatment is a measurement.
+
+Direction changes are counted with a zigzag filter rather than by the sign of the
+differences: a change is recorded only when the move against the running extreme
+exceeds `max(2 * median(standard error), 0.15)` in log-odds. Movements below that
+threshold are within the estimation error of the individual buckets.
+
+## 14. Loss given default — Explore
+
+The LGD Explore stage uses the same structure as the PD Explore stage on a
+different population and a different target. The population is defaulted
+account-months; the target is `lgd_realised`, a proportion in [0, 1].
+
+Buckets are quantiles of the driver, sized by observation count rather than event
+count, with a minimum of 30 observations per bucket. The bucket statistic is the
+mean of the proportion and its standard error is `s / sqrt(n)` from the
+within-bucket spread, rather than a binomial variance.
+
+The reference curve is a straight line on the logit scale, fitted by weighted
+least squares with weights equal to the bucket count. That is the form the fitted
+fractional logit takes, so the fit of that line indicates how well a linear term
+represents the relationship.
+
+Candidates are ranked by the absolute Spearman rank correlation between the
+driver and realised severity, with the spread between the highest and lowest
+bucket mean reported alongside it in percentage points of severity.
+
+## 15. Macro transformation search
+
+Candidates are the cross product of the projectable supervisory variables, five
+transforms (level, one-month change, twelve-month change, year-over-year percent
+change, three-month change annualised) and five lags (0, 3, 6, 9, 12 months).
+
+**Stationarity** is tested with an augmented Dickey-Fuller test with AIC lag
+selection. The null is a unit root, so a p-value below 0.05 is evidence of
+stationarity. Non-stationary candidates are excluded by default and the test is
+reported either way.
+
+**Correlation with the PD target** is Pearson between the transformed series and
+the monthly default rate on the log-odds scale, which is the scale the hazard
+model is linear in.
+
+**Correlation with the LGD target** is Spearman between the transformed series,
+joined at the default month, and realised severity, computed per resolved
+default.
+
+**Significance** uses the Bartlett-Quenouille effective sample size,
+`n_eff = n (1 - r1 s1) / (1 + r1 s1)`, where `r1` and `s1` are the lag-1
+autocorrelations of the two series. For the severity statistic `n_eff` is further
+capped at the number of distinct default months, since a macro variable takes one
+value per month.
+
+## 16. Model versions
 
 A version is a portable JSON file holding everything needed to reproduce a fit.
 Identity is a **content hash** of the canonical specification; the friendly name

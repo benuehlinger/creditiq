@@ -76,10 +76,10 @@ first terminal event.
 
 ## Residential mortgage (`mortgage`)
 
-- Accounts: 40,000
+- Accounts: 55,000
 - Target: 180+ days past due or foreclosure referral (delinquency state 6)
-- Intercept: `-6.014` (calibrated to the realised default-rate band)
-- Frailty standard deviation: `0.5`
+- Intercept: `-6.114` (calibrated to the realised default-rate band)
+- Frailty standard deviation: `0.8`
 - Seasoning (peak month, height, decay): `(42.0, 0.5, 0.02)`
 - Delinquency chain: roll-forward `0.66`, cure base `0.26`
 
@@ -87,10 +87,10 @@ first terminal event.
 
 | Driver | Coefficient | Direction |
 |---|---|---|
-| `current_ltv` | +0.620 | raises risk |
-| `fico_orig` | -0.420 | reduces risk |
-| `dti` | +0.160 | raises risk |
-| `annual_income` | -0.060 | reduces risk |
+| `current_ltv` | +0.384 | raises risk |
+| `fico_orig` | -0.260 | reduces risk |
+| `dti` | +0.099 | raises risk |
+| `annual_income` | -0.037 | reduces risk |
 
 ### Categorical level effects
 
@@ -126,26 +126,26 @@ first terminal event.
 
 | MEV | Coefficient |
 |---|---|
-| `hpi_yoy` | -0.300 |
-| `unemployment_rate` | +0.340 |
-| `mortgage_rate` | +0.050 |
+| `hpi_yoy` | -0.165 |
+| `unemployment_rate` | +0.187 |
+| `mortgage_rate` | +0.028 |
 
 ### Interactions — where the economics lives
 
-**`current_ltv` x `hpi_yoy` = -0.380**
+**`current_ltv` x `hpi_yoy` = -0.209**
 
 > A high-LTV borrower is far more sensitive to house prices than a low-LTV one: little equity means a price fall pushes them underwater. The negative sign makes a HIGH current LTV amplify the response to a FALLING HPI.
 
-**`current_ltv` x `unemployment_rate` = +0.150**
+**`current_ltv` x `unemployment_rate` = +0.083**
 
 > Negative equity plus a job loss is the classic double trigger. Neither alone drives many defaults; together they drive most.
 
 ## Commercial real estate (`cre`)
 
-- Accounts: 7,000
+- Accounts: 45,000
 - Target: Nonaccrual or downgrade to a default grade (delinquency state 3)
-- Intercept: `-6.207` (calibrated to the realised default-rate band)
-- Frailty standard deviation: `0.6`
+- Intercept: `-6.507` (calibrated to the realised default-rate band)
+- Frailty standard deviation: `0.9`
 - Seasoning (peak month, height, decay): `(48.0, 0.4, 0.015)`
 - Delinquency chain: roll-forward `0.55`, cure base `0.28`
 
@@ -153,10 +153,10 @@ first terminal event.
 
 | Driver | Coefficient | Direction |
 |---|---|---|
-| `dscr` | -0.550 | reduces risk |
-| `current_ltv` | +0.380 | raises risk |
-| `risk_rating` | +0.420 | raises risk |
-| `lease_rollover_pct` | +0.160 | raises risk |
+| `dscr` | -0.248 | reduces risk |
+| `current_ltv` | +0.171 | raises risk |
+| `risk_rating` | +0.189 | raises risk |
+| `lease_rollover_pct` | +0.072 | raises risk |
 
 ### Categorical level effects
 
@@ -176,21 +176,21 @@ first terminal event.
 
 | MEV | Coefficient |
 |---|---|
-| `cre_price_index_yoy` | -0.220 |
-| `bbb_yield` | +0.180 |
-| `real_gdp_growth` | -0.120 |
+| `cre_price_index_yoy` | -0.106 |
+| `bbb_yield` | +0.086 |
+| `real_gdp_growth` | -0.058 |
 
 ### Interactions — where the economics lives
 
-**`property_type` (level `office`) x `cre_price_index_yoy` = -0.300**
+**`property_type` (level `office`) x `cre_price_index_yoy` = -0.240**
 
-> Office is far more exposed to the commercial property cycle than the other segments. This term is what produces the post-2022 divergence the room will look for.
+> Office is more exposed to the commercial property cycle than the other segments. This term produces the divergence in office performance after 2022.
 
-**`dscr` x `cre_price_index_yoy` = +0.120**
+**`dscr` x `cre_price_index_yoy` = +0.058**
 
 > A thin-DSCR facility has no cushion, so it responds more to a fall in property values. The positive sign strengthens the response for a LOW DSCR.
 
-**`current_ltv` x `cre_price_index_yoy` = -0.100**
+**`current_ltv` x `cre_price_index_yoy` = -0.048**
 
 > High leverage amplifies the effect of a property price fall.
 

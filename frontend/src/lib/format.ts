@@ -27,11 +27,33 @@ export const ratio = (v: number | null | undefined, dp = 3) =>
   v == null || Number.isNaN(v) ? '—' : v.toFixed(dp)
 
 /** "Jan 2020" — the grain the panel actually has. */
-export const month = (iso: string) =>
-  new Date(iso + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
+/** Accepts what a chart actually hands back.
+ *
+ *  On a `type: 'time'` axis ECharts reports the axis value as a millisecond
+ *  TIMESTAMP, not as the ISO string that went in. Appending 'T00:00:00' to a
+ *  number produced `new Date("1767225600000T00:00:00")` — Invalid Date — and
+ *  every crosshair tooltip on a time axis printed "Invalid Date" as its header.
+ *  That is most of the charts in the application: the realised default rate,
+ *  the backtest panels, bin stability, the macro paths and the ECL projections.
+ */
+const asDate = (v: string | number | Date): Date =>
+  v instanceof Date ? v
+    : typeof v === 'number' ? new Date(v)
+    // A bare date needs the time appended, or it is read as UTC and can land on
+    // the previous day west of Greenwich.
+    : new Date(/^\d{4}-\d{2}-\d{2}$/.test(v) ? `${v}T00:00:00` : v)
 
-export const monthShort = (iso: string) => {
-  const d = new Date(iso + 'T00:00:00')
+export const month = (v: string | number | Date) =>
+  asDate(v).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
+
+/** Tooltip headers name the month AND the year. `monthShort` drops the year on
+ *  purpose — it labels a dense axis, where the year appears once each January
+ *  and repeating it on every tick is noise. A tooltip has no such context. */
+export const monthLong = (v: string | number | Date) =>
+  asDate(v).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
+
+export const monthShort = (v: string | number | Date) => {
+  const d = asDate(v)
   return d.getMonth() === 0
     ? String(d.getFullYear())
     : d.toLocaleDateString('en-US', { month: 'short' })

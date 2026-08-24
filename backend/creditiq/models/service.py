@@ -53,6 +53,11 @@ class ModelRun:
     n_full: int
     created_at: str
     slices: dict = field(default_factory=dict)
+    # The scored account-months, kept so the backtest can be RE-COHORTED at a
+    # different frequency without refitting. Grouping the mortgage panel costs
+    # under two seconds; refitting it costs six. Held as float32 — these are
+    # probabilities for a chart, not an input to any further estimation.
+    scored: dict = field(default_factory=dict)
 
 
 _SPLIT_CACHE: dict[tuple, dict] = {}
@@ -189,6 +194,8 @@ def run(spec: ModelSpec, force: bool = False) -> ModelRun:
         "score_psi": B.score_psi(des_all.dates, p_all),
         "vintages": B.vintage_curves(df, spec.target_column),
         "oot_from": spec.sample.oot_from,
+        # What one point on the time axis IS, so the chart can say so.
+        "period_freq": B.COHORT_FREQ_LABEL,
         "segment_column": seg_col,
         "segments": B.segment_backtest(df, des_all.y, p_all, seg_col) if seg_col else [],
     }
@@ -201,6 +208,8 @@ def run(spec: ModelSpec, force: bool = False) -> ModelRun:
     out = ModelRun(
         spec=spec, hash=key, name=spec.label or friendly_name(key), fit=res,
         diagnostics=diag, backtest=bt,
+        scored={"dates": np.asarray(des_all.dates), "y": des_all.y.astype(np.int8),
+                "p": p_all.astype(np.float32)},
         scorecard={"base_score": sc.base_score, "base_odds": sc.base_odds,
                    "pdo": sc.pdo, "factor": sc.factor, "offset": sc.offset,
                    "points": sc.points},

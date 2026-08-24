@@ -40,6 +40,9 @@ export default {
         // explicit that a display face on a hero figure reads as off-brand
         // decoration, and tabular alignment depends on the system metrics.
         display: ['Space Grotesk', ...tokens.type.sans.split(', ')],
+        // The brand face, for the CreditIQ wordmark ONLY. A serif anywhere else
+        // in this interface would read as a different product.
+        brand: ['Tinos', 'Times New Roman', 'Georgia', 'serif'],
       },
       fontSize: {
         micro: ['10px', { lineHeight: '14px', letterSpacing: '0.04em' }],

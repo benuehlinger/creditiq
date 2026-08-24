@@ -41,9 +41,19 @@ TREATMENTS: dict[str, tuple[str, str]] = {
     # name          (discretizer, encoder)
     "woe":        ("optimal", "woe"),      # scorecard convention — 1 column
     "bins":       ("optimal", "dummies"),  # free step function — k−1 columns
+    "indicator":  ("manual", "dummies"),   # one threshold — 1 column
     "continuous": ("none", "scaled"),      # linear in the log-odds — 1 column
     "spline":     ("none", "spline"),      # smooth non-linearity — k columns
 }
+
+# The two decisions a treatment is made of. A variable is either DISCRETISED —
+# in which case it has bins, a weight of evidence and an information value — or
+# kept on its CONTINUOUS SCALE, in which case it has knots and neither of those
+# three means anything. Information value in particular is a property of a
+# binning, not of a variable, and reporting it beside a spline invites a
+# comparison that does not exist.
+DISCRETISED = {"woe", "bins", "indicator"}
+CONTINUOUS_SCALE = {"continuous", "spline"}
 # Superseded, kept so saved versions still load.
 LEGACY_TRANSFORMS = {"woe": "woe", "raw": "continuous", "spline": "spline"}
 Treatment = Literal["woe", "bins", "continuous", "spline"]
@@ -89,13 +99,14 @@ class VariableSpec:
 @dataclass
 class MevSpec:
     key: str
-    transform: Literal["level", "yoy", "log_diff", "qoq_annualized", "z_score",
-                       "four_quarter_change"] = "level"
+    transform: Literal["level", "diff", "yoy", "log_diff", "qoq_annualized",
+                       "z_score", "four_quarter_change"] = "level"
     lag_months: int = 0
 
     def label(self) -> str:
-        t = {"level": "", "yoy": " YoY", "log_diff": " log-diff",
-             "qoq_annualized": " QoQ ann.", "z_score": " z", "four_quarter_change": " 4Q chg"}
+        t = {"level": "", "diff": " 1m chg", "yoy": " YoY", "log_diff": " log-diff",
+             "qoq_annualized": " QoQ ann.", "z_score": " z",
+             "four_quarter_change": " 12m chg"}
         return f"{self.key}{t.get(self.transform, '')}" + (
             f" (lag {self.lag_months}m)" if self.lag_months else "")
 
@@ -115,6 +126,143 @@ class SampleSpec:
     downsample_rows: int | None = None
 
 
+# The macro variables an LGD model may take. Severity is where a housing or
+# property stress actually bites, so these have to be reachable — and they have
+# to be joined AT THE DEFAULT MONTH, which is what `fit_lgd` does below.
+LGD_MACRO = ("unemployment_rate", "hpi_yoy", "cre_price_index_yoy", "real_gdp_growth",
+             "bbb_yield")
+
+# The DEFAULT selection per portfolio: collateral position at default, macro at
+# default, workout duration, and support. It is a starting point the analyst
+# changes, not a fixed list — see `LgdSpec`.
+LGD_DRIVERS: dict[str, list[str]] = {
+    "consumer": ["fico_orig", "months_on_book", "unemployment_rate"],
+    "mortgage": ["cltv", "current_ltv", "workout_months", "hpi_yoy", "months_on_book"],
+    "cre": ["current_ltv", "dscr_reported", "workout_months", "cre_price_index_yoy"],
+}
+CATEGORICAL_DRIVERS: dict[str, list[str]] = {
+    "consumer": [], "mortgage": ["occupancy"], "cre": ["guarantor_flag", "property_type"],
+}
+
+
+# NO weight-of-evidence option. Weight of evidence is
+# ln[(events_b / all events) / (non-events_b / all non-events)], which needs a
+# binary outcome. Realised severity has neither events nor non-events, so the
+# quantity does not exist here.
+#
+# A mean encoding on the logit scale — logit(bin mean) - logit(book mean) — IS
+# well defined and was offered for a while. It was removed: it is the same
+# binning as `bins` constrained to one coefficient, it measured worse than both
+# alternatives on this data (deviance R-squared 0.281 against 0.317 linear and
+# 0.287 binned), and calling it a weight invited exactly the confusion with
+# weight of evidence that it is not.
+LgdTreatment = Literal["bins", "continuous", "spline"]
+
+
+@dataclass(frozen=True)
+class LgdVariable:
+    """One driver, and how it enters the severity model.
+
+    The same four treatments the PD side offers, on a fractional target. The
+    weight is the severity analogue of weight of evidence — the logit shift of
+    the bin mean against the book mean — not weight of evidence itself, which is
+    defined on a binary outcome and has no meaning here.
+    """
+    column: str
+    treatment: LgdTreatment = "continuous"
+    edges: list[float] | None = None
+    knots: list[float] | None = None
+    n_knots: int = 3
+    max_bins: int = 5
+
+    def key(self) -> dict:
+        return {"column": self.column, "treatment": self.treatment,
+                "edges": self.edges, "knots": self.knots,
+                "n_knots": self.n_knots, "max_bins": self.max_bins}
+
+
+@dataclass(frozen=True)
+class LgdSpec:
+    """Which drivers enter the severity model, and in how many stages.
+
+    Thinner than `ModelSpec`. LGD is estimated on defaulted account-months only,
+    which is a few hundred rows on the commercial book. A binning and
+    weight-of-evidence apparatus over that many observations would add parameters
+    without adding information, so terms enter linearly and the specification is
+    the choice of drivers.
+    """
+    portfolio: str
+    drivers: tuple[str, ...] = ()
+    categoricals: tuple[str, ...] = ()
+    # How each driver enters. A driver absent from this map enters linearly,
+    # which is what every specification saved before treatments existed did.
+    treatments: tuple[tuple[str, str], ...] = ()
+    # Per-driver binning edges and spline knots, when they were set by hand.
+    edges: tuple[tuple[str, tuple[float, ...]], ...] = ()
+    knots: tuple[tuple[str, tuple[float, ...]], ...] = ()
+    n_knots: int = 3
+    max_bins: int = 5
+    @staticmethod
+    def default_for(portfolio: str) -> "LgdSpec":
+        return LgdSpec(portfolio=portfolio,
+                       drivers=tuple(LGD_DRIVERS.get(portfolio, [])),
+                       categoricals=tuple(CATEGORICAL_DRIVERS.get(portfolio, [])))
+
+    def treatment_of(self, column: str) -> str:
+        t = dict(self.treatments).get(column)
+        if t in ("bins", "continuous", "spline"):
+            return t
+        # `weight` was an earlier option; a saved specification carrying it is
+        # read as the binning it always was.
+        if t == "weight":
+            return "bins"
+        return "bins" if column in self.categoricals else "continuous"
+
+    def edges_of(self, column: str) -> list[float] | None:
+        e = dict(self.edges).get(column)
+        return list(e) if e else None
+
+    def knots_of(self, column: str) -> list[float] | None:
+        k = dict(self.knots).get(column)
+        return list(k) if k else None
+
+    def to_dict(self) -> dict:
+        return {"portfolio": self.portfolio, "drivers": list(self.drivers),
+                "categoricals": list(self.categoricals),
+                "treatments": [list(t) for t in self.treatments],
+                "edges": [[c, list(v)] for c, v in self.edges],
+                "knots": [[c, list(v)] for c, v in self.knots],
+                "n_knots": self.n_knots, "max_bins": self.max_bins}
+
+    @staticmethod
+    def from_dict(d: dict) -> "LgdSpec":
+        return LgdSpec(
+            portfolio=d["portfolio"], drivers=tuple(d.get("drivers", ())),
+            categoricals=tuple(d.get("categoricals", ())),
+            treatments=tuple((c, t) for c, t in d.get("treatments", [])),
+            edges=tuple((c, tuple(v)) for c, v in d.get("edges", [])),
+            knots=tuple((c, tuple(v)) for c, v in d.get("knots", [])),
+            n_knots=int(d.get("n_knots", 3)), max_bins=int(d.get("max_bins", 5)))
+
+    def hash(self) -> str:
+        """Order-insensitive: reordering the driver list is not a different model.
+        The treatments ARE part of the identity — the same drivers as splines and
+        as linear terms are different models."""
+        payload = {"portfolio": self.portfolio, "drivers": sorted(self.drivers),
+                   "categoricals": sorted(self.categoricals),
+                   "treatments": sorted(self.treatments),
+                   "edges": sorted((c, list(v)) for c, v in self.edges),
+                   "knots": sorted((c, list(v)) for c, v in self.knots),
+                   "n_knots": self.n_knots, "max_bins": self.max_bins}
+        return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]
+
+    @property
+    def macro_drivers(self) -> list[str]:
+        """Drivers that move with a scenario: the fixed macro block, plus any
+        transformed candidate promoted from the macro search."""
+        return [c for c in self.drivers if c in LGD_MACRO or "@" in c]
+
+
 @dataclass
 class ModelSpec:
     portfolio: str
@@ -125,6 +273,12 @@ class ModelSpec:
     seasoning_spline: bool = True
     vintage_effect: bool = False
     sample: SampleSpec = field(default_factory=SampleSpec)
+    # The severity half. A Model is a PD specification AND an LGD specification:
+    # an ECL number is the product of the two, so naming, hashing and versioning
+    # have to cover both or the name refers to half of what produced the figure.
+    # None means "PD fitted, LGD not chosen yet" — which is a legal working state
+    # and an illegal thing to name.
+    lgd: LgdSpec | None = None
     target_column: str = "default_flag"
     label: str | None = None
     parent_hash: str | None = None
@@ -146,14 +300,45 @@ class ModelSpec:
             "seasoning_spline": self.seasoning_spline,
             "vintage_effect": self.vintage_effect,
             "sample": asdict(self.sample),
+            "lgd": self.lgd.to_dict() if self.lgd else None,
         }
 
     def hash(self) -> str:
         blob = json.dumps(self.canonical(), sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
+    def pd_hash(self) -> str:
+        """The identity of the PROBABILITY OF DEFAULT half, on its own.
+
+        A version identifies a PD specification and an LGD specification
+        together, because expected credit loss comes from both. But the halves
+        are independent: severity is fitted on resolved defaults and never sees
+        the PD specification, so changing PD leaves the LGD model unchanged down
+        to its coefficients.
+
+        That makes reuse the normal way of working — settle on a severity model,
+        then iterate PD against it — and it leaves two versions carrying the SAME
+        severity model with no way to tell. Their bias and RMSE columns agree,
+        and nothing says whether that is one model seen twice or two models that
+        happen to agree. It matters: if that severity model is miscalibrated,
+        every version bound to it inherits the flaw.
+
+        So each half gets a visible identity. `hash()` remains the identity of
+        the pair, which is what is named, promoted and quoted.
+        """
+        c = self.canonical()
+        blob = json.dumps({k: v for k, v in c.items() if k != "lgd"},
+                          sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(blob.encode()).hexdigest()[:12]
+
+    @property
+    def is_complete(self) -> bool:
+        """Both halves fitted. The gate on naming and saving a version."""
+        return bool(self.variables) and self.lgd is not None
+
     def to_dict(self) -> dict:
         d = asdict(self)
+        d["lgd"] = self.lgd.to_dict() if self.lgd else None
         d["hash"] = self.hash()
         return d
 
@@ -176,4 +361,7 @@ class ModelSpec:
         d["variables"] = [_var(v) for v in d.get("variables", [])]
         d["mevs"] = [MevSpec(**m) for m in d.get("mevs", [])]
         d["sample"] = SampleSpec(**d.get("sample", {}))
-        return ModelSpec(**d)
+        lgd = d.get("lgd")
+        d["lgd"] = LgdSpec.from_dict(lgd) if lgd else None
+        return ModelSpec(**{k: v for k, v in d.items()
+                            if k in ModelSpec.__dataclass_fields__})

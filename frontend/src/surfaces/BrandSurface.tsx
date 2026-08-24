@@ -1,6 +1,9 @@
 import { useRef } from 'react'
 import { Card, CardHead } from '../components/ui'
-import { CreditIQHero, CreditIQLockup, CreditIQMark, CreditIQWordmark, KpmgMark } from '../components/Brand'
+import {
+  CO_BRAND_VARIANTS, CandidateLockup, CoBrand, CoBrandVariantMark, CreditIQHero,
+  CreditIQLockup, CreditIQMark, CreditIQWordmark, WORDMARK_CANDIDATES,
+} from '../components/Brand'
 import { useUi } from '../lib/store'
 
 /**
@@ -21,13 +24,13 @@ export default function BrandSurface() {
         <CardHead
           title="Brand assets"
           subtitle="Export at 3x for a deck · rendered in the current theme"
-          caption="Two marks, always separate. KPMG identifies who built it; CreditIQ identifies what it is. They sit side by side with a rule between them and are never combined into a single graphic."
+          caption="Two marks, always separate. KPMG identifies who built it; CreditIQ identifies what it is, and they are never combined into a single graphic. How much room each takes is a choice — the treatments below are the options, and the header renders whichever is adopted."
         />
         <div className="space-y-px bg-hairline">
           <Exportable name="creditiq-hero" label="Hero lockup" note="Title slides, covers">
             <CreditIQHero />
           </Exportable>
-          <Exportable name="creditiq-lockup" label="Standard lockup" note="Headers, footers, slide furniture">
+          <Exportable name="creditiq-lockup" label="Standard lockup" note="Where the mark stands alone">
             <CreditIQLockup size={40} nameSize={26} />
           </Exportable>
           <Exportable name="creditiq-mark" label="Mark only" note="Favicons, avatars, small placements">
@@ -36,20 +39,52 @@ export default function BrandSurface() {
           <Exportable name="creditiq-wordmark" label="Wordmark only" note="Where the mark would crowd">
             <CreditIQWordmark size={34} />
           </Exportable>
-          <Exportable name="kpmg-cobrand" label="Co-brand row" note="How the two appear together">
-            <span className="inline-flex items-center gap-4">
-              <KpmgMark height={30} />
-              <span className="h-8 w-px" style={{ background: 'var(--chrome-border-strong)' }} />
-              <CreditIQLockup size={34} nameSize={23} />
-            </span>
+          <Exportable name="kpmg-cobrand" label="Co-brand row" note="Exactly what the application header renders">
+            <CoBrand scale={1.35} />
           </Exportable>
+        </div>
+      </Card>
+
+      <Card>
+        <CardHead
+          title="Wordmark face — candidates"
+          subtitle="Each rendered in the real lockup, cap height matched to the KPMG letters"
+          caption="A specimen sheet is the wrong place to choose a wordmark: what matters is how the name sits against the KPMG mark at header size, and that is a relationship rather than a property of the face. Matching CAP HEIGHT rather than font size keeps the comparison like for like — a face with small caps is not penalised for looking smaller at the same point size."
+        />
+        <div className="space-y-px bg-hairline">
+          {WORDMARK_CANDIDATES.map((c) => (
+            <div key={c.key} className="flex items-center gap-6 bg-surface px-4 py-5">
+              <div className="min-w-0 flex-1">
+                <CandidateLockup stack={c.stack} weight={c.weight} cap={c.cap} scale={1.3} />
+              </div>
+              <div className="shrink-0 text-right">
+                <div className="text-xs font-medium text-ink">{c.label}</div>
+                <div className="max-w-xs text-micro leading-relaxed text-ink-muted">{c.note}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      <Card>
+        <CardHead
+          title="Co-brand treatments"
+          subtitle="Four ways to divide the room between the firm and the product"
+          caption="These differ in HIERARCHY, not decoration — which is the only thing worth having options about. All four are driven from the KPMG cap height, because that artwork is the fixed quantity: it belongs to someone else and cannot be redrawn to fit."
+        />
+        <div className="space-y-px bg-hairline">
+          {CO_BRAND_VARIANTS.map((v) => (
+            <Exportable key={v.key} name={`cobrand-${v.key}`} label={v.label} note={v.note}>
+              <CoBrandVariantMark variant={v.key} scale={1.35} />
+            </Exportable>
+          ))}
         </div>
       </Card>
 
       <div className="grid gap-3 lg:grid-cols-2">
         <Card>
           <CardHead title="What the mark means"
-            caption="A logo that decodes is easier to defend than one that just looks nice." />
+            caption="The construction of the mark, stated so it can be reproduced." />
           <div className="space-y-3 px-4 py-3 text-xs leading-relaxed text-ink-secondary">
             <p>
               Three ascending bars under a curve: a <span className="text-ink">binning</span>,
@@ -68,7 +103,7 @@ export default function BrandSurface() {
 
         <Card>
           <CardHead title="Colour and type"
-            caption="Both are constrained, and both constraints are deliberate." />
+            caption="The permitted sizes and clear space for each mark." />
           <dl className="space-y-2 px-4 py-3 text-xs">
             <Row k="Wordmark, light surface" v="#00338D — the true KPMG deep blue" />
             <Row k="Wordmark, dark surface"

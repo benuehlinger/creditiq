@@ -29,7 +29,9 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
+from ..analysis.mev_search import Candidate as MevCandidate
 from . import design as D
+from .design import apply_mev_transform
 from . import ead as EAD
 from . import lgd as LGD
 from .fit import predict
@@ -124,10 +126,29 @@ def project(spec: ModelSpec, fit_result, df: pd.DataFrame, mev_path: pd.DataFram
                   basis_maps=fit_result.basis_maps)
     pd_t = predict(des.X, fit_result.beta).reshape(n, horizon_months)
 
-    # LGD, also scenario-conditioned
-    for c in ("unemployment_rate", "hpi_yoy", "cre_price_index_yoy"):
+    # LGD, also scenario-conditioned. Every macro column the severity model is
+    # ALLOWED to be fitted on, not a hardcoded subset of them: the fit attaches
+    # all of LGD_MACRO and this attached three, so a model carrying real GDP
+    # growth or a BBB yield reached scoring with that column missing.
+    for c in LGD.LGD_MACRO:
         if c in mev_path.columns:
             proj[c] = mev_path[c].reindex(idx).to_numpy(float)
+    # Transformed macro terms promoted from the macro search. Built from the
+    # SCENARIO path, through the same function the fit used — otherwise a model
+    # whose severity depends on a lagged growth rate would be projected on
+    # whatever the fixed block above happened to contain, or on nothing at all.
+    for col in lgd_model.spec.drivers:
+        if "@" not in col:
+            continue
+        cand = MevCandidate.parse(col)
+        if cand is None or cand.key not in mev_path.columns:
+            raise ValueError(
+                f"LGD was fitted on {col!r}, which this scenario path cannot "
+                f"produce: {cand.key if cand else col!r} is not projected.")
+        srs = apply_mev_transform(mev_path[cand.key], cand.transform)
+        if cand.lag_months:
+            srs = srs.shift(cand.lag_months)
+        proj[col] = srs.reindex(idx).to_numpy(float)
     if "workout_months" in proj.columns:
         # An account that has not defaulted has no workout duration — the column
         # is zero for every open account, so imputing the median would impute

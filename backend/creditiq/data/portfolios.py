@@ -104,7 +104,7 @@ def cre_dynamics(state: dict, mev: dict, mev0: dict) -> dict:
     """NOI and DSCR, updated by the CRE price path and by property type.
 
     Office diverges after 2022 because its NOI follows the CRE index with extra
-    leverage, which is what the room will look for.
+    leverage, which is the relationship the office segment illustrates.
     """
     idx_ratio = mev["cre_price_index"] / state["cre_index_at_orig"]
     lever = state["noi_beta"]                       # property-type NOI sensitivity
@@ -204,6 +204,16 @@ CONSUMER = PortfolioSpec(
     lgd_intercept=1.45,
     lgd_betas={"fico_orig": -0.10, "unemployment_rate": 0.14, "months_on_book": -0.06},
     lgd_zero_intercept=2.60,
+        # Unsecured lending loosened into 2006-07 and the credit box shut hard in
+    # 2009-11. The score shift is what a tape would show; the log-odds drift is
+    # the exception rate and the stated-income share, which it would not.
+    vintage_attr_shift={
+        "fico_orig": {2005: -4.0, 2006: -7.0, 2007: -9.0, 2008: -4.0,
+                      2010: 9.0, 2011: 12.0, 2012: 8.0},
+        "dti": {2006: 1.6, 2007: 2.2, 2010: -1.8, 2011: -2.2},
+    },
+    vintage_logodds={2005: 0.08, 2006: 0.16, 2007: 0.22, 2008: 0.10,
+                     2010: -0.10, 2011: -0.14, 2012: -0.10},
     expected_signs={
         "fico_orig": -1, "dti": 1, "annual_income": -1, "employment_tenure_months": -1,
         "revolving_utilization": 1, "num_trades": -1, "inquiries_6m": 1,
@@ -215,7 +225,11 @@ CONSUMER = PortfolioSpec(
 MORTGAGE = PortfolioSpec(
     key="mortgage",
     label="Residential mortgage",
-    n_accounts=40_000,
+    # Sized so a MONTH carries enough resolved workouts to average a severity.
+    # The default RATE is unchanged — this is a bigger book, not a worse one.
+    # At 40,000 accounts only 139 of 211 months cleared the floor, so the
+    # severity chart was two thirds of a line.
+    n_accounts=55_000,
     accent_slot=2,
     target=TargetDef("default_flag", "180+ days past due or foreclosure referral", 6,
                      "180+ DPD"),
@@ -256,11 +270,18 @@ MORTGAGE = PortfolioSpec(
         ("annual_income", "original_balance"): 0.55,
         ("fico_orig", "doc_type"): -0.20,
     },
-    intercept=-6.014,   # calibrated: 1.25%/yr realised
-    frailty_sd=0.50,
+    # ── Calibrated 2026-08 for the 2008-2025 window ──────────────────────────
+    # Adding the financial crisis to the estimation window multiplied the crisis
+    # amplitude of every macro channel. At the old parameters mortgage peaked at
+    # 11.6%/yr in 2009 and commercial real estate at 23.3%/yr, which are not
+    # numbers either asset class produced. The driver, macro, interaction and
+    # vintage blocks were scaled down together so the SHAPE is unchanged and the
+    # amplitude is credible; the intercept then restores the benign-period rate.
+    intercept=-6.114,   # 1.0%/yr benign, 5.1%/yr peak (2009)
+    frailty_sd=0.80,
     seasoning=(42.0, 0.50, 0.020),
     numeric_betas={
-        "current_ltv": 0.62, "fico_orig": -0.42, "dti": 0.16, "annual_income": -0.06,
+        "current_ltv": 0.384, "fico_orig": -0.260, "dti": 0.099, "annual_income": -0.037,
     },
     categorical_betas={
         "msa": MSA_RISK,
@@ -271,14 +292,14 @@ MORTGAGE = PortfolioSpec(
         "property_type": {"sfr": 0.0, "condo": 0.08, "townhouse": 0.03, "2-4 unit": 0.16},
     },
     mev_keys=["hpi_yoy", "unemployment_rate", "mortgage_rate"],
-    mev_betas={"hpi_yoy": -0.30, "unemployment_rate": 0.34, "mortgage_rate": 0.05},
+    mev_betas={"hpi_yoy": -0.165, "unemployment_rate": 0.187, "mortgage_rate": 0.028},
     interactions=[
-        Interaction("current_ltv", "hpi_yoy", -0.38,
+        Interaction("current_ltv", "hpi_yoy", -0.209,
                     "A high-LTV borrower is far more sensitive to house prices than "
                     "a low-LTV one: little equity means a price fall pushes them "
                     "underwater. The negative sign makes a HIGH current LTV amplify "
                     "the response to a FALLING HPI."),
-        Interaction("current_ltv", "unemployment_rate", 0.15,
+        Interaction("current_ltv", "unemployment_rate", 0.083,
                     "Negative equity plus a job loss is the classic double trigger. "
                     "Neither alone drives many defaults; together they drive most."),
     ],
@@ -299,6 +320,20 @@ MORTGAGE = PortfolioSpec(
     lgd_betas={"cltv_at_default": 0.95, "hpi_change_since_orig": -0.70,
                "workout_months": 0.30},
     lgd_zero_intercept=0.25,
+        # The vintage curve that defines the asset class. 2006 and 2007 are the two
+    # weakest US mortgage vintages on record, and they performed worse than their
+    # reported FICO and LTV alone account for. Documentation standards, silent
+    # second liens and appraisal practice are not columns on a loan tape, so that
+    # component appears only as a vintage effect.
+    vintage_attr_shift={
+        "original_ltv": {2004: 1.5, 2005: 3.5, 2006: 5.5, 2007: 4.5, 2008: 1.5,
+                         2009: -3.0, 2010: -5.5, 2011: -6.0, 2012: -5.0},
+        "fico_orig": {2005: -7.0, 2006: -13.0, 2007: -11.0, 2008: -4.0,
+                      2010: 11.0, 2011: 14.0, 2012: 10.0},
+        "second_lien_pct": {2005: 2.5, 2006: 5.0, 2007: 4.0, 2010: -2.0},
+    },
+    vintage_logodds={2004: 0.060, 2005: 0.132, 2006: 0.228, 2007: 0.204, 2008: 0.072,
+                     2010: -0.096, 2011: -0.120, 2012: -0.090},
     expected_signs={
         "current_ltv": 1, "original_ltv": 1, "fico_orig": -1, "dti": 1,
         "annual_income": -1, "hpi_yoy": -1, "unemployment_rate": 1,
@@ -311,7 +346,11 @@ MORTGAGE = PortfolioSpec(
 CRE = PortfolioSpec(
     key="cre",
     label="Commercial real estate",
-    n_accounts=7_000,
+    # Commercial books resolve few workouts, and at 7,000 loans this one filled
+    # SEVEN of 158 months. A large bank's commercial real estate book runs to
+    # tens of thousands of loans, so this is the top of the plausible range
+    # rather than outside it — again at the same default rate.
+    n_accounts=45_000,
     accent_slot=3,
     target=TargetDef("default_flag", "Nonaccrual or downgrade to a default grade", 3,
                      "Nonaccrual"),
@@ -352,12 +391,19 @@ CRE = PortfolioSpec(
         ("risk_rating", "lease_rollover_pct"): 0.22,
         ("risk_rating", "guarantor_flag"): 0.15,
     },
-    intercept=-6.207,   # calibrated: 2.0%/yr realised
-    frailty_sd=0.60,
+    # ── Calibrated 2026-08 for the 2008-2025 window ──────────────────────────
+    # Adding the financial crisis to the estimation window multiplied the crisis
+    # amplitude of every macro channel. At the old parameters mortgage peaked at
+    # 11.6%/yr in 2009 and commercial real estate at 23.3%/yr, which are not
+    # numbers either asset class produced. The driver, macro, interaction and
+    # vintage blocks were scaled down together so the SHAPE is unchanged and the
+    # amplitude is credible; the intercept then restores the benign-period rate.
+    intercept=-6.507,   # 0.9%/yr benign, 5.9%/yr peak (2009)
+    frailty_sd=0.90,
     seasoning=(48.0, 0.40, 0.015),
     numeric_betas={
-        "dscr": -0.55, "current_ltv": 0.38, "risk_rating": 0.42,
-        "lease_rollover_pct": 0.16,
+        "dscr": -0.248, "current_ltv": 0.171, "risk_rating": 0.189,
+        "lease_rollover_pct": 0.072,
     },
     categorical_betas={
         "property_type": {"office": 0.15, "retail": 0.08, "industrial": -0.12,
@@ -372,18 +418,18 @@ CRE = PortfolioSpec(
     # log-odds, which produced near-zero defaults through 2022 and then a 15%
     # office default rate in 2024. Real books do not have a seven-year gap with
     # no losses. The divergence is preserved; only its amplitude is reduced.
-    mev_betas={"cre_price_index_yoy": -0.22, "bbb_yield": 0.18,
-               "real_gdp_growth": -0.12},
+    mev_betas={"cre_price_index_yoy": -0.106, "bbb_yield": 0.086,
+               "real_gdp_growth": -0.058},
     interactions=[
-        Interaction("property_type", "cre_price_index_yoy", -0.30,
-                    "Office is far more exposed to the commercial property cycle "
-                    "than the other segments. This term is what produces the "
-                    "post-2022 divergence the room will look for.", level="office"),
-        Interaction("dscr", "cre_price_index_yoy", 0.12,
+        Interaction("property_type", "cre_price_index_yoy", -0.240,
+                    "Office is more exposed to the commercial property cycle than "
+                    "the other segments. This term produces the divergence in "
+                    "office performance after 2022.", level="office"),
+        Interaction("dscr", "cre_price_index_yoy", 0.058,
                     "A thin-DSCR facility has no cushion, so it responds more to a "
                     "fall in property values. The positive sign strengthens the "
                     "response for a LOW DSCR."),
-        Interaction("current_ltv", "cre_price_index_yoy", -0.10,
+        Interaction("current_ltv", "cre_price_index_yoy", -0.048,
                     "High leverage amplifies the effect of a property price fall."),
     ],
     roll_forward=0.55,
@@ -402,6 +448,16 @@ CRE = PortfolioSpec(
                "workout_months": 0.35, "guarantor_flag": -0.30},
     lgd_zero_intercept=1.15,
     observed_aliases={"dscr": "dscr_reported"},
+        # 2006-07 commercial originations underwrote to pro-forma income and exit cap
+    # rates that never arrived. The reported coverage looked adequate at the time
+    # because the income in it had not been earned yet.
+    vintage_attr_shift={
+        "original_ltv": {2005: 2.0, 2006: 4.0, 2007: 5.0, 2008: 2.0,
+                         2010: -4.0, 2011: -5.0, 2012: -4.0},
+        "dscr_orig": {2006: -0.10, 2007: -0.15, 2010: 0.12, 2011: 0.15},
+    },
+    vintage_logodds={2005: 0.055, 2006: 0.110, 2007: 0.154, 2008: 0.066,
+                     2010: -0.066, 2011: -0.088, 2012: -0.066},
     expected_signs={
         "dscr_reported": -1, "current_ltv": 1, "original_ltv": 1, "risk_rating": 1,
         "lease_rollover_pct": 1, "cre_price_index_yoy": -1, "bbb_yield": 1,

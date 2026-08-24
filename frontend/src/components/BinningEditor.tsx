@@ -3,8 +3,8 @@ import type { BinningResult } from '../lib/api'
 import { diverging, mode, sequential } from '../design/tokens'
 import { num, pct } from '../lib/format'
 
-const H = 236
-const PAD = { l: 8, r: 8, t: 10, b: 34 }
+const H = 254
+const PAD = { l: 8, r: 8, t: 10, b: 52 }
 const HIST_H = 34
 const BAR_TOP = 56
 const BAR_H = 104
@@ -28,6 +28,39 @@ const SHARE_H = 16
  * impossible value — a DTI of 900 — would otherwise compress the whole
  * distribution into the leftmost two pixels and make dragging pointless.
  */
+/** What the editor actually needs, independent of which model it serves.
+ *
+ *  The PD and severity binnings measure different things — an event rate against
+ *  a mean realised severity, a weight of evidence against a logit shift — but the
+ *  INTERACTION is identical: drag an edge, double-click a bin to split, double-
+ *  click an edge to remove. Two copies of a drag implementation is two places for
+ *  the gesture to drift apart, so both books normalise into this shape and share
+ *  one editor. */
+export interface EditableBinning {
+  column: string
+  edges: number[] | null
+  domain: [number, number] | null
+  histogram: { bounds: number[]; counts: number[] } | null
+  bins: {
+    label: string
+    /** Bar height: an event rate for PD, a mean realised severity for LGD. */
+    value: number
+    /** Diverging fill: weight of evidence for PD, logit shift for LGD. Signed,
+     *  and zero is the book mean either way. */
+    tone: number
+    /** Footer band: this bin's share of the population. */
+    share: number
+    n: number
+    /** Extra lines for the hover readout, already formatted by the caller. */
+    detail: string[]
+  }[]
+  /** Names the quantity the bars encode, for the band label and the tooltip. */
+  valueLabel: string
+  formatValue: (v: number) => string
+  toneLabel: string
+}
+
+/** The PD binning, adapted. */
 export default function BinningEditor({
   result, onEdgesChange, pending,
 }: {
@@ -35,6 +68,34 @@ export default function BinningEditor({
   onEdgesChange: (edges: number[]) => void
   pending: boolean
 }) {
+  const view: EditableBinning = useMemo(() => ({
+    column: result.column,
+    edges: result.edges,
+    domain: result.domain,
+    histogram: result.histogram,
+    valueLabel: 'Event rate',
+    formatValue: (v) => pct(v * 100, 2),
+    toneLabel: 'Weight of evidence',
+    bins: result.bins.filter((b) => !b.is_special).map((b) => ({
+      label: b.label, value: b.event_rate || 0, tone: b.woe || 0,
+      share: b.pct_of_total, n: b.count,
+      detail: [
+        `Event rate ${pct((b.event_rate || 0) * 100, 3)}`,
+        `WoE ${b.woe.toFixed(4)}   IV contribution ${b.iv_contribution.toFixed(4)}`,
+      ],
+    })),
+  }), [result])
+  return <Editor view={view} onEdgesChange={onEdgesChange} pending={pending} />
+}
+
+export function Editor({
+  view, onEdgesChange, pending,
+}: {
+  view: EditableBinning
+  onEdgesChange: (edges: number[]) => void
+  pending: boolean
+}) {
+  const result = view
   const wrapRef = useRef<HTMLDivElement>(null)
   const svgRef = useRef<SVGSVGElement>(null)
   const [W, setW] = useState(720)
@@ -71,10 +132,10 @@ export default function BinningEditor({
 
   useEffect(() => { setDragEdges(null) }, [result.column])
 
-  const realBins = result.bins.filter((b) => !b.is_special)
-  const maxRate = Math.max(...realBins.map((b) => b.event_rate || 0), 1e-9)
-  const maxWoe = Math.max(...realBins.map((b) => Math.abs(b.woe) || 0), 1e-9)
-  const maxShare = Math.max(...realBins.map((b) => b.pct_of_total), 1e-9)
+  const realBins = result.bins
+  const maxRate = Math.max(...realBins.map((b) => b.value || 0), 1e-9)
+  const maxWoe = Math.max(...realBins.map((b) => Math.abs(b.tone) || 0), 1e-9)
+  const maxShare = Math.max(...realBins.map((b) => b.share), 1e-9)
   const hist = result.histogram
   const maxCount = hist ? Math.max(...hist.counts, 1) : 1
   const m = mode()
@@ -129,34 +190,43 @@ export default function BinningEditor({
           return <rect key={i} x={x0} y={PAD.t + HIST_H - h} width={Math.max(x1 - x0 - 1, 1)}
                        height={h} fill={sequential(0.2, m)} opacity={0.55} rx={1} />
         })}
-        <text x={PAD.l} y={PAD.t + 9} fontSize={9} fill="var(--ink-muted)">population</text>
+        <text x={PAD.l} y={PAD.t + 9} fontSize={9} fill="var(--ink-muted)">
+          Accounts per slice · peak {num(maxCount)}
+        </text>
         <line x1={PAD.l} y1={PAD.t + HIST_H} x2={W - PAD.r} y2={PAD.t + HIST_H}
               stroke="var(--chrome-grid)" strokeWidth={1} />
 
         {/* One block per bin: height is the event rate, fill is the weight of
             evidence on the diverging ramp (blue safer, magenta riskier). */}
         {geoms.map((g, i) => {
-          const h = ((g.bin.event_rate || 0) / maxRate) * BAR_H
+          const h = ((g.bin.value || 0) / maxRate) * BAR_H
           const w = Math.max(g.x1 - g.x0 - 2, 1)      // the 2px surface gap
-          const sh = Math.max((g.bin.pct_of_total / maxShare) * SHARE_H, 1)
+          const sh = Math.max((g.bin.share / maxShare) * SHARE_H, 1)
           return (
             <g key={i} onPointerEnter={() => setHover(i)} onPointerLeave={() => setHover(null)}
                onDoubleClick={() => splitBin(g.v0, g.v1)} style={{ cursor: 'zoom-in' }}>
               <rect x={g.x0} y={BAR_TOP} width={w} height={BAR_H + SHARE_H + 4} fill="transparent" />
               <rect x={g.x0} y={BAR_TOP + BAR_H - h} width={w} height={h} rx={3}
-                    fill={diverging((g.bin.woe || 0) / maxWoe, m)}
+                    fill={diverging((g.bin.tone || 0) / maxWoe, m)}
                     opacity={hover === i ? 1 : 0.9} />
               <rect x={g.x0} y={BAR_TOP + BAR_H + 4} width={w} height={sh} rx={1.5}
                     fill="var(--deemphasis)" opacity={0.55} />
               <title>
-                {`${g.bin.label}\n${num(g.bin.count)} rows (${(g.bin.pct_of_total * 100).toFixed(1)}% of book)`
-                 + `\nEvent rate ${(g.bin.event_rate * 100).toFixed(3)}%`
-                 + `\nWoE ${g.bin.woe.toFixed(4)}   IV contribution ${g.bin.iv_contribution.toFixed(4)}`
-                 + `\n\nDouble-click to split this bin`}
+                {[`${g.bin.label}`,
+                  `${num(g.bin.n)} rows (${(g.bin.share * 100).toFixed(1)}% of book)`,
+                  ...g.bin.detail, '', 'Double-click to split this bin in two',
+                 ].join('\n')}
               </title>
             </g>
           )
         })}
+        <text x={PAD.l} y={BAR_TOP - 3} fontSize={9} fill="var(--ink-muted)">
+          {result.valueLabel} · full height {result.formatValue(maxRate)}
+        </text>
+        <text x={W - PAD.r} y={BAR_TOP - 3} textAnchor="end" fontSize={9}
+              fill="var(--ink-muted)">
+          Share of book · full height {pct(maxShare * 100, 1)}
+        </text>
         <line x1={PAD.l} y1={BAR_TOP + BAR_H} x2={W - PAD.r} y2={BAR_TOP + BAR_H}
               stroke="var(--chrome-axis)" strokeWidth={1} />
 
@@ -170,14 +240,18 @@ export default function BinningEditor({
             <g key={i}>
               <rect x={x - 12} y={PAD.t} width={24} height={BAR_TOP + BAR_H - PAD.t}
                     fill="transparent" style={{ cursor: 'ew-resize' }}
-                    onPointerDown={(ev) => { ev.preventDefault(); setDragging(i) }} />
+                    onPointerDown={(ev) => { ev.preventDefault(); setDragging(i) }}
+                    onDoubleClick={(ev) => { ev.stopPropagation(); removeEdge(i) }}>
+                <title>Drag to move this edge. Double-click to remove it, which merges the two bins either side.</title>
+              </rect>
               <line x1={x} y1={PAD.t} x2={x} y2={BAR_TOP + BAR_H}
                     stroke="var(--accent)" strokeWidth={on ? 2 : 1} opacity={on ? 1 : 0.8}
                     style={{ pointerEvents: 'none' }} />
               <circle cx={x} cy={PAD.t} r={on ? 5 : 4} fill="var(--accent)"
                       stroke="var(--surface-chart)" strokeWidth={2}
                       style={{ cursor: 'ew-resize' }}
-                      onPointerDown={(ev) => { ev.preventDefault(); setDragging(i) }} />
+                      onPointerDown={(ev) => { ev.preventDefault(); setDragging(i) }}
+                      onDoubleClick={(ev) => { ev.stopPropagation(); removeEdge(i) }} />
               {on && (
                 <text x={x} y={PAD.t + HIST_H + 14} textAnchor="middle" fontSize={10}
                       fill="var(--accent)" style={{ pointerEvents: 'none' }}>
@@ -196,19 +270,23 @@ export default function BinningEditor({
         })}
 
         {ticks.map((t, i) => (
-          <text key={i} x={toX(t)} y={H - 4} fontSize={10} fill="var(--ink-muted)"
+          <text key={i} x={toX(t)} y={H - 22} fontSize={10} fill="var(--ink-muted)"
                 textAnchor={i === 0 ? 'start' : i === ticks.length - 1 ? 'end' : 'middle'}>
             {fmtNum(t)}
           </text>
         ))}
+        <text x={PAD.l + (W - PAD.l - PAD.r) / 2} y={H - 5} textAnchor="middle"
+              fontSize={10} fill="var(--ink-secondary)">
+          {result.column} — 1st to 99th percentile
+        </text>
       </svg>
 
       <p className="px-4 pb-1 text-micro text-ink-muted">
-        Drag an edge to rebin · double-click a bin to split · × removes an edge
+        Drag an edge to move it · double-click a bin to split it · double-click an edge (or ×) to remove it
         {hover !== null && geoms[hover] && (
           <span className="ml-2 text-ink-secondary">
-            — {geoms[hover].bin.label}: {pct(geoms[hover].bin.event_rate * 100, 3)} event rate,
-            WoE {geoms[hover].bin.woe.toFixed(3)}, {num(geoms[hover].bin.count)} rows
+            — {geoms[hover].bin.label}: {geoms[hover].bin.detail.join(', ')},
+            {' '}{num(geoms[hover].bin.n)} rows
           </span>
         )}
       </p>

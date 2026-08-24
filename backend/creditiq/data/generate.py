@@ -37,7 +37,13 @@ from .copula import build_correlation, draw
 from .portfolios import CRE_NOI_BETA
 from .spec import PortfolioSpec
 
-PANEL_START = "2015-01-01"
+# The panel opens in 2008 ON PURPOSE. A model estimated on 2015-2025 has never
+# seen a downturn, so every supervisory scenario is extrapolation and the only
+# defences are winsorizing the path (which caps the stress) or overlaying
+# judgement. Estimating through the financial crisis is the actual fix: the
+# fitted range then contains a house-price fall and a commercial property fall,
+# and severely adverse becomes interpolation.
+PANEL_START = "2008-01-01"
 PANEL_END = "2025-12-01"
 
 # Columns that exist only because we generated the data. They are the answer key,
@@ -84,7 +90,11 @@ def generate(spec: PortfolioSpec, seed: int = 20260819,
     # ── macro: real history, standardized over the panel window ──────────────
     need = sorted(set(spec.mev_keys) | {"hpi", "cre_price_index", "unemployment_rate",
                                         "mortgage_rate"})
-    mev_raw = panel_for(need, start="2000-01-01", end=end).ffill().bfill()
+    # History reaches back further than the panel because accounts originated
+    # long before it: a 2003 mortgage needs its origination-month HPI to carry a
+    # current LTV. Accounts whose origination month falls outside this range are
+    # never marked alive, so too short a history silently deletes old vintages.
+    mev_raw = panel_for(need, start="1990-01-01", end=end).ffill().bfill()
     win = mev_raw.loc[(mev_raw.index >= months[0]) & (mev_raw.index <= months[-1])]
     mu, sd = win.mean(), win.std(ddof=0).replace(0, 1.0)
     mev_z = (mev_raw - mu) / sd
@@ -110,6 +120,18 @@ def generate(spec: PortfolioSpec, seed: int = 20260819,
         from .portfolios import MSA_STATE
         attrs["state"] = np.array([MSA_STATE.get(m, "??") for m in attrs["msa"]],
                                   dtype=object)
+
+    # ── vintage: underwriting quality drifts with the credit cycle ──────────
+    vintage_year = pd.DatetimeIndex(orig_date).year.to_numpy()
+    for col, by_year in spec.vintage_attr_shift.items():
+        if col not in attrs:
+            continue
+        base = np.asarray(attrs[col], dtype=float)
+        shift = np.array([by_year.get(int(y), 0.0) for y in vintage_year])
+        # Clipped to the marginal's own support: a vintage shift moves the
+        # distribution, it does not invent a 340 FICO or a 130 LTV.
+        attrs[col] = np.clip(base + shift, base.min(), base.max())
+    vintage_lp = np.array([spec.vintage_logodds.get(int(y), 0.0) for y in vintage_year])
 
     term = rng.choice(np.asarray(spec.term_choices), size=n,
                       p=np.asarray(spec.term_probs)).astype(np.int32)
@@ -187,7 +209,7 @@ def generate(spec: PortfolioSpec, seed: int = 20260819,
                 raise KeyError(f"{spec.key}: no source for driver {k!r}")
             zs[k] = _zstats(np.asarray(src, dtype=float))
 
-    lp_static = np.full(n, spec.intercept) + frailty
+    lp_static = np.full(n, spec.intercept) + frailty + vintage_lp
     for k, b in spec.numeric_betas.items():
         if k in attrs:
             m, s = zs[k]

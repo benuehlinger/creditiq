@@ -30,11 +30,20 @@ PROJECTION_MEVS = ["hpi", "hpi_yoy", "cre_price_index", "cre_price_index_yoy",
                    "nominal_gdp_growth"]
 
 
-def lgd_model(portfolio: str) -> LGD.LgdModel:
-    if portfolio not in _LGD_CACHE:
-        df = store.analysis_frame(portfolio)
-        _LGD_CACHE[portfolio] = LGD.fit_lgd(df, portfolio, mevpanel.monthly_panel())
-    return _LGD_CACHE[portfolio]
+def lgd_model(portfolio: str, spec: LGD.LgdSpec | None = None) -> LGD.LgdModel:
+    """Cached on the LGD SPECIFICATION, not on the portfolio.
+
+    It used to be keyed on the portfolio alone. Once the drivers became a choice
+    that would have served the first analyst's severity model to everyone who
+    asked afterwards, which is the same class of bug as saving a version with the
+    wrong macro terms: silent, and only visible in the number.
+    """
+    spec = spec or LGD.LgdSpec.default_for(portfolio)
+    key = spec.hash()
+    if key not in _LGD_CACHE:
+        df = store.analysis_frame(spec.portfolio)
+        _LGD_CACHE[key] = LGD.fit_lgd(df, spec, mevpanel.monthly_panel())
+    return _LGD_CACHE[key]
 
 
 @dataclass
@@ -51,16 +60,18 @@ class Extrapolation:
 
 
 def extrapolation_check(path: pd.DataFrame, keys: list[str], as_of: pd.Timestamp,
-                        fit_from: str = "2015-01-01") -> list[Extrapolation]:
+                        fit_from: str | pd.Timestamp = "2008-01-01") -> list[Extrapolation]:
     """A scenario that takes a driver outside its estimation window is the single
     most important caveat on a stress number, and almost nothing surfaces it.
 
     A logit is linear in the log-odds of its inputs. Inside the fitted range that
     is an empirical claim; outside it, it is pure extrapolation with no evidence
-    behind it and no upper bound. The 2026 severely adverse scenario takes
-    commercial property growth to -24% year on year against a fitted floor of
-    -10.7% — 4.3 standard deviations out — and the unconstrained model answered
-    with a 33% cumulative default rate.
+    behind it and no upper bound. On the old 2015-2025 panel the 2026 severely
+    adverse scenario took commercial property growth to -24% year on year against
+    a fitted floor of -10.7%, and the unconstrained model answered with a 33%
+    cumulative default rate. Opening the panel in 2008 is what fixed that; this
+    check stays because a future scenario can leave the window again, and a
+    caveat has to be visible on the day it becomes true.
     """
     out: list[Extrapolation] = []
     for k in keys:
@@ -85,10 +96,22 @@ def extrapolation_check(path: pd.DataFrame, keys: list[str], as_of: pd.Timestamp
     return out
 
 
+def estimation_window(portfolio: str) -> pd.Timestamp:
+    """The first month the model could have been estimated on.
+
+    This used to be the literal string "2015-01-01" in two function signatures.
+    When the panel moved back to 2008 the constant did not, so the extrapolation
+    panel went on reporting a fitted house-price floor of -0.3% for a model that
+    had by then been estimated straight through a -16% year. A hardcode that
+    describes the data is a hardcode that goes stale silently.
+    """
+    return pd.Timestamp(store.analysis_frame(portfolio)["performance_date"].min())
+
+
 def scenario_mev_path(name: str, as_of: pd.Timestamp,
                       custom: dict[str, dict[str, float]] | None = None,
                       cap_to_fitted_range: bool = False,
-                      fit_from: str = "2015-01-01") -> pd.DataFrame:
+                      fit_from: str | pd.Timestamp = "2008-01-01") -> pd.DataFrame:
     """History spliced to the scenario's forward path, on the monthly grid.
 
     `custom` lets the scenario editor override individual variables: a mapping of
@@ -150,22 +173,33 @@ class ScenarioRun:
     shapley: dict[str, float] = field(default_factory=dict)
     ead: EAD.EadAssumption | None = None
     lgd: LGD.LgdModel | None = None
+    # The fitted PD model, so callers can check the specification that produced
+    # these numbers without refitting it.
+    pd_fit: object | None = None
     weights: dict[str, float] = field(default_factory=dict)
     weighted_ecl: float = 0.0
     timings: dict[str, float] = field(default_factory=dict)
     extrapolation: list = field(default_factory=list)
-    uncapped_ecl: dict[str, float] = field(default_factory=dict)
-    capped: bool = True
+    #: ECL under the OPPOSITE capping choice, for comparison.
+    alternative_ecl: dict[str, float] = field(default_factory=dict)
+    capped: bool = False
 
 
 def run(spec: ModelSpec, scenarios: list[str] | None = None,
         weights: dict[str, float] | None = None,
         custom: dict[str, dict[str, float]] | None = None,
         fixed_ccf: float | None = None, cpr: float = 0.0,
-        cap_to_fitted_range: bool = True,
+        # Off by default. Winsorizing the forward path is a defensible technique
+        # On the CRE book it clips the Fed's commercial property fall from -24.1%
+        # to whatever the panel's own floor is, which removes a large part of the
+        # loss. A headline that says "severely adverse" while quietly running a
+        # milder path reports the wrong figure.
+        # The Fed's path is the default; the constrained view is one click away
+        # and both figures are always reported.
+        cap_to_fitted_range: bool = False,
         bridge_from: str = "baseline", bridge_to: str = "severely_adverse",
         force: bool = False) -> ScenarioRun:
-    scenarios = scenarios or ["baseline", "adverse", "severely_adverse"]
+    scenarios = scenarios or ["baseline", "severely_adverse"]
     key = (spec.hash(), tuple(scenarios), fixed_ccf, cpr, cap_to_fitted_range,
            tuple(sorted((k, tuple(sorted(v.items()))) for k, v in (custom or {}).items())))
     if not force and key in _ECL_CACHE:
@@ -177,7 +211,7 @@ def run(spec: ModelSpec, scenarios: list[str] | None = None,
     t["pd_model"] = time.perf_counter() - t0
 
     t1 = time.perf_counter()
-    lg = lgd_model(spec.portfolio)
+    lg = lgd_model(spec.portfolio, spec.lgd)
     t["lgd_model"] = time.perf_counter() - t1
 
     df = store.analysis_frame(spec.portfolio)
@@ -185,6 +219,7 @@ def run(spec: ModelSpec, scenarios: list[str] | None = None,
     ead_assumption = EAD.assumption_for(spec.portfolio, pf.spec.ead_method,
                                         pf.panel, cpr=cpr, fixed_ccf=fixed_ccf)
     as_of = df["performance_date"].max()
+    fit_from = estimation_window(spec.portfolio)
     all_sc, _ = scen.load_all()
     horizon = all_sc[scenarios[0]].horizon_quarters * 3
 
@@ -194,23 +229,35 @@ def run(spec: ModelSpec, scenarios: list[str] | None = None,
     t2 = time.perf_counter()
     results: dict[str, ECL.EclResult] = {}
     extrap: list[Extrapolation] = []
-    uncapped: dict[str, float] = {}
-    model_mevs = [m.key for m in spec.mevs]
+    alternative: dict[str, float] = {}
+    # The check must cover EVERY macro variable that reaches a number, not just
+    # the PD model's terms. Mortgage LGD takes hpi_yoy as a driver, so clipping
+    # the house-price fall from -16.3% to -0.3% moved mortgage ECL from 181M to
+    # 122M while the extrapolation panel reported nothing out of range — it was
+    # only inspecting spec.mevs. Severity is where a housing stress actually
+    # bites, so missing it is not a small omission.
+    lgd_spec = spec.lgd or LGD.LgdSpec.default_for(spec.portfolio)
+    lgd_macro = [c for c in lgd_spec.drivers if c in PROJECTION_MEVS]
+    model_mevs = sorted({m.key for m in spec.mevs} | set(lgd_macro))
     for name in scenarios:
-        raw_path = scenario_mev_path(name, as_of, custom if name == bridge_to else None)
         if not extrap:
             extrap = extrapolation_check(
-                scenario_mev_path(bridge_to, as_of, custom), model_mevs, as_of)
+                scenario_mev_path(bridge_to, as_of, custom, fit_from=fit_from),
+                model_mevs, as_of, fit_from=fit_from)
         path = scenario_mev_path(name, as_of, custom if name == bridge_to else None,
-                                 cap_to_fitted_range=cap_to_fitted_range)
+                                 cap_to_fitted_range=cap_to_fitted_range,
+                                 fit_from=fit_from)
         results[name] = ECL.project(spec, pd_run.fit, df, path, lg, ead_assumption,
                                     name, horizon, as_of=as_of, segment_column=seg)
-        if cap_to_fitted_range and any(e.outside for e in extrap):
-            # report what the UNCAPPED path would have produced, so the cap is a
-            # visible choice rather than a silent one
-            u = ECL.project(spec, pd_run.fit, df, raw_path, lg, ead_assumption,
-                            name, horizon, as_of=as_of)
-            uncapped[name] = u.ecl
+        # Always price the OTHER choice too, so the difference between the Fed's
+        # path and a constrained one is on screen rather than implied.
+        if any(e.outside for e in extrap):
+            other = scenario_mev_path(name, as_of, custom if name == bridge_to else None,
+                                      cap_to_fitted_range=not cap_to_fitted_range,
+                                      fit_from=fit_from)
+            alternative[name] = ECL.project(spec, pd_run.fit, df, other, lg,
+                                            ead_assumption, name, horizon,
+                                            as_of=as_of).ecl
     t["projection"] = time.perf_counter() - t2
 
     steps, recon, shap = [], (True, 0.0), {}
@@ -223,7 +270,10 @@ def run(spec: ModelSpec, scenarios: list[str] | None = None,
         shap = BR.contributions_shapley(results[bridge_from].components,
                                         results[bridge_to].components)
 
-    w = weights or {"baseline": 0.5, "adverse": 0.3, "severely_adverse": 0.2}
+    # A CECL weighting is a management assumption, not a supervisory number, and
+    # the editor exposes it. This default leans on the baseline the way a
+    # practitioner would and keeps a real tail weight rather than a token one.
+    w = weights or {"baseline": 0.75, "severely_adverse": 0.25}
     tot = sum(w.get(k, 0.0) for k in results) or 1.0
     weighted = sum(results[k].ecl * w.get(k, 0.0) for k in results) / tot
     t["total"] = time.perf_counter() - t0
@@ -232,10 +282,11 @@ def run(spec: ModelSpec, scenarios: list[str] | None = None,
         portfolio=spec.portfolio, model_hash=spec.hash(),
         as_of=as_of.strftime("%Y-%m-%d"), horizon_months=horizon,
         results=results, bridge=steps, bridge_reconciles=recon, shapley=shap,
-        ead=ead_assumption, lgd=lg,
+        ead=ead_assumption, lgd=lg, pd_fit=pd_run.fit,
         weights={k: w.get(k, 0.0) / tot for k in results}, weighted_ecl=weighted,
         timings={k: round(v, 2) for k, v in t.items()},
-        extrapolation=extrap, uncapped_ecl=uncapped, capped=cap_to_fitted_range,
+        extrapolation=extrap, alternative_ecl=alternative,
+        capped=cap_to_fitted_range,
     )
     if len(_ECL_CACHE) > 12:
         _ECL_CACHE.pop(next(iter(_ECL_CACHE)))

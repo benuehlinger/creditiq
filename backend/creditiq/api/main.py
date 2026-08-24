@@ -7,6 +7,7 @@ No key, no network, no configuration.
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -20,6 +21,7 @@ from ..analysis.rates import annualize
 from ..data.build import PLANTED_NOTES
 from ..data.portfolios import PORTFOLIOS
 from ..mev import panel as mev_panel
+from ..mev import panel as mevpanel
 from ..mev import scenarios as scen
 from ..mev.registry import PORTFOLIO_MEVS, by_key
 
@@ -96,19 +98,37 @@ def portfolios():
     return out
 
 
-@app.get("/api/portfolios/{key}/health")
-def portfolio_health(key: str):
-    if key not in PORTFOLIOS:
-        raise HTTPException(404, f"unknown portfolio {key!r}")
+@lru_cache(maxsize=8)
+def _health(key: str) -> dict:
+    """Structural checks and a column profile for the whole panel.
+
+    Cached because the panel is STATIC for the life of the process and this is
+    the most expensive read in the application: every integrity check and a
+    profile of forty-two columns across the full tape, which came to 6.7 seconds
+    on the mortgage book. It is also the first request a portfolio switch makes,
+    because the Data surface is where a switch lands — so the cost was paid
+    again on every switch, and again on every switch back, on a result that
+    could not have changed. `store.clear()` drops it with the panels.
+    """
     pf = store.load(key)
     df = store.analysis_frame(key)
     issues = prof.check_integrity(pf.panel, pf.spec)
     cols = prof.profile_columns(df, pf.spec, notes=PLANTED_NOTES)
-    return _jsonable({
+    return {
         "portfolio": key, "n_rows": len(df), "n_accounts": len(pf.accounts),
         "n_columns": len(df.columns), "score": prof.health_score(issues),
         "issues": issues, "columns": cols,
-    })
+    }
+
+
+store.register_dependent_cache(_health.cache_clear)
+
+
+@app.get("/api/portfolios/{key}/health")
+def portfolio_health(key: str):
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+    return _jsonable(_health(key))
 
 
 @app.get("/api/portfolios/{key}/timeseries")
@@ -198,7 +218,7 @@ def scenarios():
 
 
 @app.get("/api/scenarios/{name}/spliced")
-def scenario_spliced(name: str, keys: str = Query(...), history_from: str = "2015-01-01"):
+def scenario_spliced(name: str, keys: str = Query(...), history_from: str = "2008-01-01"):
     """History joined to the forward path, with the seam reported, not hidden."""
     sc, _ = scen.load_all()
     if name not in sc:
@@ -228,9 +248,9 @@ def design_tokens():
 
 
 # ── explore ──────────────────────────────────────────────────────────────────
-from functools import lru_cache                                        # noqa: E402
 
 from ..analysis import binning as binmod                               # noqa: E402
+from ..analysis import curve as curvemod                               # noqa: E402
 
 
 def binmod_knots(x, n_knots: int) -> list[float]:
@@ -321,9 +341,9 @@ def screen_variables(key: str):
             "once per data type, not per column."),
         "sample_note": (
             f"Screened on {res['n_rows']:,} account-months"
-            + (" — a deterministic, event-preserving subsample. Every default is "
-               "kept and only non-events are thinned, so no rare target is made "
-               "rarer. Final model fits use the full panel."
+            + (" — a deterministic subsample. Every default is retained and only "
+               "non-events are thinned, so the event rate is not reduced. Model "
+               "fits use the full panel."
                if res["sampled"] else " — the full panel.")),
     })
 
@@ -428,6 +448,50 @@ def bivariate(key: str, column: str, edges: str | None = None, freq: str = "QS")
     })
 
 
+@app.get("/api/portfolios/{key}/curve/{column}")
+def curve(key: str, column: str, knots: str | None = None, resolution: int = 30):
+    """The empirical log-odds curve at a resolution you can place a knot from.
+
+    The optimal binning gives six to eight bins, which is right for a WoE table
+    and useless for deciding between a straight term and a spline: three of those
+    bins are a straight run and the bend is inside the fourth. This cuts as fine
+    as the event count supports and shows the shape with its uncertainty.
+    """
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+    df, sampled = store.screening_frame(key)
+    if column not in df.columns:
+        raise HTTPException(404, f"unknown column {column!r}")
+    x, y = df[column], df[PORTFOLIOS[key].target.column]
+    numeric = pd.api.types.is_numeric_dtype(x) and x.nunique(dropna=True) > 12
+    if numeric:
+        ks = [float(k) for k in knots.split(",") if k.strip()] if knots else \
+            binmod_knots(x, 4)
+        out = curvemod.numeric_curve(x, y, knots=ks, resolution=resolution)
+        out["candidate_knots"] = ks
+    else:
+        out = curvemod.categorical_curve(x, y)
+    return _jsonable({**out, "column": column, "sampled": sampled})
+
+
+@app.get("/api/portfolios/{key}/knots/{column}")
+def suggest_knots(key: str, column: str, n_knots: int = 4):
+    """Place knots where they most improve the fit, rather than at quantiles.
+
+    Quantile placement puts a knot where the DATA is dense and ignores the
+    response, so on a variable that bends once at a thin point it puts every knot
+    in the straight run. This searches positions against the fit.
+    """
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+    df, _ = store.screening_frame(key)
+    if column not in df.columns:
+        raise HTTPException(404, f"unknown column {column!r}")
+    return _jsonable(curvemod.auto_knots(df[column],
+                                         df[PORTFOLIOS[key].target.column],
+                                         n_knots=n_knots))
+
+
 @app.get("/api/portfolios/{key}/psi/{column}")
 def psi_series(key: str, column: str):
     df, _ = store.screening_frame(key)
@@ -452,12 +516,54 @@ def correlation(key: str, columns: str | None = None, method: str = "pearson"):
 
 
 @app.get("/api/portfolios/{key}/vif")
-def vif_for(key: str, columns: str = Query(...)):
-    df, _ = store.screening_frame(key)
+def vif_for(key: str, columns: str = Query(...), treatments: str = Query("")):
+    """Variance inflation for the current selection, on the columns the model
+    will actually contain.
+
+    `treatments` is `column:treatment` pairs. Without them this measured the
+    correlation of the RAW tape columns, so a variable reported the same
+    inflation whether it entered as a spline, as bin indicators or as a
+    continuous term — three designs with entirely different column structures.
+    A binned interest rate read 20.9 against a true value of 2.4.
+    """
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+    df, sampled = store.screening_frame(key)
     cols = [c.strip() for c in columns.split(",") if c.strip() and c.strip() in df.columns]
-    numeric = [c for c in cols if pd.api.types.is_numeric_dtype(df[c])]
-    return _jsonable({"vif": screen.vif(df, numeric),
-                      "skipped": [c for c in cols if c not in numeric]})
+    if not cols:
+        return _jsonable({"vif": [], "skipped": [], "sampled": sampled})
+    tmap = dict(t.split(":", 1) for t in treatments.split(",") if ":" in t)
+
+    spec = ModelSpec(
+        portfolio=key,
+        variables=[VariableSpec(c, treatment=tmap.get(c, "woe")) for c in cols],  # type: ignore[arg-type]
+        target_column=PORTFOLIOS[key].target.column,
+        # The seasoning basis is in every fitted design, so it belongs in the
+        # collinearity picture: it is seven columns of months on book, and a
+        # selected variable correlated with age competes with all of them.
+        seasoning_spline=True,
+    )
+    try:
+        des = design.build(df, spec)
+    except Exception as e:                                              # noqa: BLE001
+        raise HTTPException(400, f"{type(e).__name__}: {e}") from e
+
+    groups = des.term_groups()
+    rows = modelfit.generalised_vif(np.asarray(des.X, dtype=float), groups)
+    by_term = {r["term"]: r for r in rows}
+    return _jsonable({
+        "vif": [{"column": c,
+                 "vif": by_term.get(c, {}).get("vif", 1.0),
+                 "gvif": by_term.get(c, {}).get("gvif", 1.0),
+                 "df": by_term.get(c, {}).get("df", 1),
+                 "aliased": by_term.get(c, {}).get("aliased", False),
+                 "treatment": tmap.get(c, "woe")}
+                for c in cols if c in by_term],
+        "seasoning": by_term.get("seasoning"),
+        "n_columns": len(des.columns) - 1,
+        "skipped": [c for c in cols if c not in by_term],
+        "sampled": sampled,
+    })
 
 
 @app.on_event("startup")
@@ -474,6 +580,16 @@ def _warm() -> None:
             try:
                 store.analysis_frame(k)
                 _screen_all(k)
+                # The panel profile is the single most expensive read in the
+                # application — 7.4 seconds on the mortgage book — and it is the
+                # FIRST request a portfolio switch makes, because a switch lands
+                # on the Data surface. It was absent from this list, so the one
+                # call worth warming was the one not warmed.
+                _health(k)
+                # The macro search enumerates 325 candidate terms per book and
+                # runs a stationarity test on each. Roughly a second, paid on
+                # the first visit to the Macro stage.
+                mevsearch.library(k)
             except Exception:                                           # noqa: BLE001
                 pass                                    # a warm-up failure is not fatal
         try:
@@ -486,11 +602,14 @@ def _warm() -> None:
 
 
 # ── model ────────────────────────────────────────────────────────────────────
-from pydantic import BaseModel                                          # noqa: E402
+from pydantic import BaseModel, field_validator                         # noqa: E402
 
+from ..models import fit as modelfit                                    # noqa: E402
+from ..models import design                                             # noqa: E402
 from ..models import service as modelsvc                                # noqa: E402
 from ..models.naming import friendly_name                               # noqa: E402
-from ..models.spec import MevSpec, ModelSpec, SampleSpec, VariableSpec  # noqa: E402
+from ..models.spec import (LgdSpec, MevSpec, ModelSpec, SampleSpec,  # noqa: E402
+                           VariableSpec)
 
 
 class FitRequest(BaseModel):
@@ -506,6 +625,9 @@ class FitRequest(BaseModel):
     downsample_rows: int | None = None
     label: str | None = None
     parent_hash: str | None = None
+    # The severity half. Absent means the PD model is being worked on alone,
+    # which is a legal working state — it is naming and saving that require both.
+    lgd: dict | None = None
 
     def to_spec(self) -> ModelSpec:
         return ModelSpec(
@@ -518,6 +640,8 @@ class FitRequest(BaseModel):
             vintage_effect=self.vintage_effect,
             sample=SampleSpec(test_fraction=self.test_fraction, oot_from=self.oot_from,
                               downsample_rows=self.downsample_rows),
+            lgd=LgdSpec.from_dict({**self.lgd, "portfolio": self.portfolio})
+            if self.lgd else None,
             target_column=PORTFOLIOS[self.portfolio].target.column,
             label=self.label, parent_hash=self.parent_hash,
         )
@@ -622,6 +746,35 @@ def name_for(hash_: str):
     return {"hash": hash_, "name": friendly_name(hash_)}
 
 
+@app.post("/api/model/identity")
+def model_identity(req: FitRequest):
+    """The Model ID for a PD specification AND an LGD specification together.
+
+    A Model is both halves. An ECL number is PD x LGD x EAD, so a name that
+    covers only the hazard model refers to half of what produced the figure —
+    two "models" with the same name could carry severity specifications that
+    differ by twenty points of downturn LGD.
+
+    So this is deliberately NOT willing to name a half-built model. Until both
+    halves exist it returns the working hash and no name, and the UI says which
+    half is missing rather than offering a name it would have to revoke.
+    """
+    spec = req.to_spec()
+    missing = []
+    if not spec.variables:
+        missing.append("PD variables")
+    if spec.lgd is None or not (spec.lgd.drivers or spec.lgd.categoricals):
+        missing.append("LGD drivers")
+    h = spec.hash()
+    return {
+        "hash": h, "complete": not missing, "missing": missing,
+        "name": friendly_name(h) if not missing else None,
+        "pd_variables": [v.column for v in spec.variables],
+        "lgd_drivers": list(spec.lgd.drivers) if spec.lgd else [],
+        "lgd_categoricals": list(spec.lgd.categoricals) if spec.lgd else [],
+    }
+
+
 @app.post("/api/segment-backtest")
 def segment_backtest(portfolio: str, hash_: str, column: str):
     r = modelsvc.cached(hash_)
@@ -643,15 +796,17 @@ def segment_backtest(portfolio: str, hash_: str, column: str):
 
 # ── scenarios and ECL ────────────────────────────────────────────────────────
 from ..models import scenario_service as scensvc                        # noqa: E402
+from ..models import lgd_diag as lgddiag                                # noqa: E402
+from ..analysis import severity_binning as sevbin                      # noqa: E402
 
 
 class EclRequest(FitRequest):
-    scenarios: list[str] = ["baseline", "adverse", "severely_adverse"]
+    scenarios: list[str] = ["baseline", "severely_adverse"]
     weights: dict[str, float] | None = None
     custom: dict[str, dict[str, float]] | None = None
     fixed_ccf: float | None = None
     cpr: float = 0.0
-    cap_to_fitted_range: bool = True
+    cap_to_fitted_range: bool = False
     bridge_from: str = "baseline"
     bridge_to: str = "severely_adverse"
 
@@ -682,7 +837,7 @@ def project_ecl(req: EclRequest):
             "ecl": v.ecl, "ecl_bps": v.ecl_bps,
             "weighted_pd_12m": v.weighted_pd_12m, "weighted_lgd": v.weighted_lgd,
             "monthly": v.monthly, "by_segment": v.by_segment, "ifrs9": v.ifrs9,
-            "uncapped_ecl": r.uncapped_ecl.get(k),
+            "alternative_ecl": r.alternative_ecl.get(k),
         } for k, v in r.results.items()],
         "weights": r.weights, "weighted_ecl": r.weighted_ecl,
         "bridge": [{"label": s.label, "value": s.value, "running": s.running,
@@ -699,7 +854,7 @@ def project_ecl(req: EclRequest):
                 "mean_severity_given_loss": r.lgd.mean_severity_given_loss,
                 "mean_workout_months": r.lgd.mean_workout_months,
                 "calibration": r.lgd.calibration, "note": r.lgd.fit_note,
-                "drivers": scensvc.LGD.LGD_DRIVERS.get(r.portfolio, [])},
+                "spec": r.lgd.spec.to_dict(), "drivers": list(r.lgd.spec.drivers)},
     })
 
 
@@ -720,6 +875,340 @@ def editable_scenario(name: str, keys: str = Query(...)):
                       "note": sc[name].note, "series": out})
 
 
+
+# ── loss given default ───────────────────────────────────────────────────────
+# ── macro transformation search ──────────────────────────────────────────────
+from ..analysis import mev_search as mevsearch                          # noqa: E402
+
+
+@app.get("/api/portfolios/{key}/macro/library")
+def macro_library(key: str):
+    """Every candidate macro term for this book, with its stationarity test and
+    its correlation with both targets."""
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+    return _jsonable(mevsearch.library(key))
+
+
+@app.get("/api/portfolios/{key}/macro/series")
+def macro_series(key: str, column: str = Query(...)):
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+    try:
+        return _jsonable(mevsearch.series_for(key, column))
+    except KeyError as e:
+        raise HTTPException(404, str(e)) from e
+
+
+def _lgd_frame(key: str, extra: str = "") -> pd.DataFrame:
+    """Defaulted rows with the macro block attached, plus any shortlisted
+    candidate terms named `key@transform@lag`."""
+    df = store.analysis_frame(key)
+    d = df.loc[df["default_flag"] == 1].copy()
+    cols = tuple(c for c in extra.split(",") if "@" in c)
+    return scensvc.LGD.attach_macro(d, mevpanel.monthly_panel(), cols)
+
+
+@app.get("/api/portfolios/{key}/lgd/screen")
+def lgd_screen(key: str, extra: str = Query("")):
+    """Rank the candidate severity drivers on the defaulted population.
+
+    Ordered by the absolute Spearman rank correlation with realised severity.
+    The spread column gives the same relationship in percentage points: the
+    difference between the highest and lowest bucket mean.
+    """
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+    d = _lgd_frame(key, extra)
+    cand = scensvc.LGD.candidates(store.analysis_frame(key), key,
+                                  mevpanel.monthly_panel())
+    # Shortlisted macro terms are ranked beside the tape columns, on the same
+    # population and the same statistic.
+    for col in (c for c in extra.split(",") if "@" in c and c in d.columns):
+        cand["numeric"].append({"column": col, "filled": float(d[col].notna().mean()),
+                                "kind": "numeric", "macro": True})
+    y = d["lgd_realised"]
+    rows = []
+    for c in cand["numeric"]:
+        r = curvemod.severity_curve(d[c["column"]], y)
+        if not r.get("points"):
+            continue
+        rows.append({**c, "spearman": r["spearman"], "spread": r["spread"],
+                     "linear_r2": r["linear"]["pseudo_r2"], "buckets": r["resolution"]})
+    for c in cand["categorical"]:
+        r = curvemod.severity_by_level(d[c["column"]], y)
+        if not r.get("points"):
+            continue
+        rows.append({**c, "spearman": None, "spread": r["spread"],
+                     "linear_r2": None, "buckets": len(r["points"])})
+    for r in rows:
+        name = r["column"]
+        r["caution"] = any(t in name for t in
+                           ("_id", "id_", "_code", "_seq", "batch", "vintage"))
+    rows.sort(key=lambda r: (abs(r["spearman"] or 0.0), r["spread"]), reverse=True)
+    return _jsonable({
+        "portfolio": key, "n_defaults": int(len(d)),
+        "mean_lgd": float(y.mean()), "zero_loss_share": float((y <= 1e-9).mean()),
+        "rows": rows, "default_spec": LgdSpec.default_for(key).to_dict(),
+    })
+
+
+@app.get("/api/portfolios/{key}/lgd/curve/{column}")
+def lgd_curve(key: str, column: str, resolution: int = 12,
+              knots: str | None = None):
+    """Mean realised severity across the range of one driver, with volume."""
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+    d = _lgd_frame(key, column if "@" in column else "")
+    if column not in d.columns:
+        raise HTTPException(404, f"unknown column {column!r}")
+    x, y = d[column], d["lgd_realised"]
+    numeric = pd.api.types.is_numeric_dtype(x) and x.nunique(dropna=True) > 8
+    if numeric:
+        ks = ([float(k) for k in knots.split(",") if k.strip()] if knots
+              else curvemod.auto_knots_severity(x, y, 3).get("quantile_knots", []))
+        out = curvemod.severity_curve(x, y, resolution=resolution, knots=ks)
+        out["candidate_knots"] = ks
+    else:
+        out = curvemod.severity_by_level(x, y)
+    return _jsonable({**out, "column": column, "n_defaults": int(len(d))})
+
+
+@app.get("/api/portfolios/{key}/lgd/distribution")
+def lgd_distribution(key: str):
+    """The distribution of realised severity on this book."""
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+    y = np.clip(_lgd_frame(key)["lgd_realised"].to_numpy(float), 0.0, 1.0)
+    edges = np.linspace(0.0, 1.0, 21)
+    counts, _ = np.histogram(y[y > 1e-9], bins=edges)
+    return _jsonable({
+        "portfolio": key, "n_defaults": int(len(y)), "mean_lgd": float(y.mean()),
+        "median_lgd": float(np.median(y)),
+        "zero_loss_share": float((y <= 1e-9).mean()),
+        "total_loss_share": float((y >= 0.999).mean()),
+        "histogram": ([{"lo": 0.0, "hi": 0.0, "n": int((y <= 1e-9).sum()), "zero": True}]
+                      + [{"lo": float(edges[i]), "hi": float(edges[i + 1]),
+                          "n": int(counts[i]), "zero": False}
+                         for i in range(len(counts))]),
+    })
+
+
+@app.get("/api/portfolios/{key}/lgd/candidates")
+def lgd_candidates(key: str):
+    """What a severity model on this book is allowed to see, and the default pick.
+
+    Severity is fitted on defaulted account-months only. On the commercial book
+    that is a few hundred rows, so the candidate list carries the fill rate and
+    the default count beside it — a driver that is 60% missing among defaults is
+    a different proposition from the same driver on the full tape.
+    """
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+    df = store.analysis_frame(key)
+    c = scensvc.LGD.candidates(df, key, mevpanel.monthly_panel())
+    for row in c["numeric"] + c["categorical"]:
+        name = row["column"]
+        # Operational identifiers ride along on a real tape and are not drivers.
+        row["caution"] = any(t in name for t in
+                             ("_id", "id_", "_code", "_seq", "batch", "vintage"))
+    return _jsonable({**c, "default_spec": LgdSpec.default_for(key).to_dict()})
+
+
+class LgdFitRequest(BaseModel):
+    portfolio: str
+    drivers: list[str] = []
+    categoricals: list[str] = []
+    # column -> treatment, and per-column binning edges / spline knots
+    # These accept EITHER a mapping or the list-of-pairs form.
+    #
+    # `LgdSpec` is frozen, so it stores these as tuples of pairs and
+    # `to_dict()` serialises them as lists — which is the form written into
+    # every saved version. Declaring only `dict` here meant the endpoint
+    # rejected the application's own output: opening a saved model and pressing
+    # Fit LGD posted the stored specification straight back and got three
+    # validation errors, one per field. An API that cannot read what it writes
+    # is the bug; normalising at the boundary is the fix.
+    treatments: dict[str, str] = {}
+    edges: dict[str, list[float]] = {}
+    knots: dict[str, list[float]] = {}
+
+    @field_validator("treatments", "edges", "knots", mode="before")
+    @classmethod
+    def _accept_pairs(cls, v):
+        if isinstance(v, list):
+            return {k: val for k, val in (pair for pair in v)}
+        return v
+    n_knots: int = 3
+    max_bins: int = 5
+    oot_from: str = "2022-01-01"
+    # How the severity backtest groups its cohorts. Monthly by default because
+    # the panel is monthly; the response reports how many periods were too thin
+    # to average, which is the whole story on a book that resolves few workouts.
+    freq: str = "MS"
+
+    def to_spec(self) -> LgdSpec:
+        return LgdSpec(
+            portfolio=self.portfolio, drivers=tuple(self.drivers),
+            categoricals=tuple(self.categoricals),
+            treatments=tuple(sorted(self.treatments.items())),
+            edges=tuple((c, tuple(v)) for c, v in sorted(self.edges.items())),
+            knots=tuple((c, tuple(v)) for c, v in sorted(self.knots.items())),
+            n_knots=self.n_knots, max_bins=self.max_bins)
+
+
+@app.post("/api/lgd/fit")
+def lgd_fit(req: LgdFitRequest):
+    """Fit the severity model and return its coefficients and diagnostics."""
+    if req.portfolio not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {req.portfolio!r}")
+    spec = req.to_spec()
+    if not spec.drivers and not spec.categoricals:
+        raise HTTPException(400, "select at least one driver")
+    try:
+        m = scensvc.lgd_model(req.portfolio, spec)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    d = _lgd_frame(req.portfolio,
+                   ",".join(c for c in spec.drivers if "@" in c))
+    diag = lgddiag.diagnostics(m, d)
+    return _jsonable({
+        "portfolio": req.portfolio, "spec": spec.to_dict(), "hash": spec.hash(),
+        "columns": m.columns, "diagnostics": diag,
+        "n_defaults": m.n_defaults, "mean_lgd": m.mean_lgd,
+        "zero_loss_share": m.zero_loss_share,
+        "mean_severity_given_loss": m.mean_severity_given_loss,
+        "mean_workout_months": m.mean_workout_months,
+        "coefficients": m.coefficients, "calibration": m.calibration,
+        "severity_histogram": m.severity_histogram,
+        "macro_drivers": spec.macro_drivers, "dropped": m.dropped, "note": m.fit_note,
+    })
+
+
+@app.post("/api/lgd/backtest")
+def lgd_backtest(req: LgdFitRequest):
+    """Refit on defaults before the boundary and score the ones after it."""
+    if req.portfolio not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {req.portfolio!r}")
+    spec = req.to_spec()
+    if not spec.drivers and not spec.categoricals:
+        raise HTTPException(400, "select at least one driver")
+    m = scensvc.lgd_model(req.portfolio, spec)
+    d = _lgd_frame(req.portfolio, ",".join(c for c in spec.drivers if "@" in c))
+    return _jsonable(lgddiag.backtest(m, d, req.oot_from, freq=req.freq))
+
+
+@app.get("/api/portfolios/{key}/lgd/severity-over-time")
+def lgd_severity_over_time(key: str, freq: str = "MS"):
+    """The DEPENDENT VARIABLE through time, before any model.
+
+    The severity distribution shows the shape of the target — a mass at full
+    recovery and a mass near total loss — but says nothing about when. Severity
+    on a secured book is a function of collateral values, so it moves with the
+    cycle, and a driver's usefulness depends on whether it tracks that movement.
+    """
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+    if freq not in lgddiag.SEVERITY_FREQ_CHOICES:
+        raise HTTPException(
+            400, f"unknown frequency {freq!r}; "
+                 f"choose one of {sorted(lgddiag.SEVERITY_FREQ_CHOICES)}")
+    d = _lgd_frame(key)
+    return _jsonable({
+        "portfolio": key, "freq": freq,
+        "period_freq": lgddiag.SEVERITY_FREQ_CHOICES[freq],
+        "n_defaults": int(len(d)),
+        "mean": float(np.clip(d["lgd_realised"].to_numpy(float), 0, 1).mean()),
+        **lgddiag.severity_coverage(d, freq),
+        "points": lgddiag.severity_over_time(d, freq=freq),
+    })
+
+
+@app.get("/api/portfolios/{key}/lgd/binning/{column}")
+def lgd_binning(key: str, column: str, max_bins: int = 5, edges: str | None = None):
+    """Bin a driver against realised severity.
+
+    The bin statistic is a MEAN, not an event rate, and the strength measure is a
+    deviance R-squared rather than an information value — see
+    `analysis/severity_binning.py` for why an information value has no referent
+    on a fractional target.
+    """
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+    d = _lgd_frame(key, column if "@" in column else "")
+    if column not in d.columns:
+        raise HTTPException(404, f"unknown column {column!r}")
+    ed = [float(e) for e in edges.split(",") if e.strip()] if edges else None
+    b = sevbin.bin_severity(d[column], d["lgd_realised"], max_bins=max_bins, edges=ed)
+    numeric = b.kind == "numeric"
+    v = pd.to_numeric(d[column], errors="coerce").dropna() if numeric else None
+    dom = ([float(np.nanpercentile(v, 1)), float(np.nanpercentile(v, 99))]
+           if numeric and len(v) else None)
+    hist = None
+    if dom and dom[1] > dom[0]:
+        counts, bounds = np.histogram(np.clip(v, *dom), bins=32, range=tuple(dom))
+        hist = {"bounds": [float(z) for z in bounds],
+                "counts": [int(z) for z in counts]}
+    n_real = len(b.bins)
+    return _jsonable({
+        **b.to_dict(), "domain": dom, "histogram": hist,
+        "supports_continuous": bool(numeric),
+        "column_costs": {"weight": 1, "bins": max(n_real - 1, 0),
+                         "continuous": 1 if numeric else None,
+                         "spline": None if not numeric else None},
+    })
+
+
+@app.get("/api/portfolios/{key}/lgd/knots/{column}")
+def lgd_suggest_knots(key: str, column: str, n_knots: int = 3):
+    """Place severity knots by search rather than at quantiles."""
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+    d = _lgd_frame(key, column if "@" in column else "")
+    if column not in d.columns:
+        raise HTTPException(404, f"unknown column {column!r}")
+    return _jsonable(curvemod.auto_knots_severity(d[column], d["lgd_realised"],
+                                                  n_knots=n_knots))
+
+
+@app.get("/api/portfolios/{key}/lgd/sensitivity")
+def lgd_sensitivity(key: str, drivers: str = Query(""), categoricals: str = Query("")):
+    """Predicted mean LGD as each macro driver is moved one standard deviation.
+
+    A severity model that does not move with the cycle is the most common thing a
+    validator writes up, and it is invisible in a coefficient table when the
+    driver is standardised. This makes it a number in dollars-per-point terms.
+    """
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+    spec = LgdSpec(portfolio=key,
+                   drivers=tuple(x for x in drivers.split(",") if x),
+                   categoricals=tuple(x for x in categoricals.split(",") if x))
+    if not spec.drivers and not spec.categoricals:
+        spec = LgdSpec.default_for(key)
+    m = scensvc.lgd_model(key, spec)
+    df = store.analysis_frame(key)
+    d = scensvc.LGD.attach_macro(df.loc[df["default_flag"] == 1].copy(),
+                                 mevpanel.monthly_panel(),
+                                 tuple(c for c in spec.drivers if "@" in c))
+    base = float(m.predict(scensvc.LGD.design_for(d, m)).mean())
+    out = []
+    for c in spec.macro_drivers:
+        if c not in d.columns:
+            continue
+        sd = float(pd.to_numeric(d[c], errors="coerce").std())
+        if not np.isfinite(sd) or sd <= 0:
+            continue
+        row = {"driver": c, "sd": sd, "base": base}
+        for sign, label in ((1.0, "up"), (-1.0, "down")):
+            shocked = d.copy()
+            shocked[c] = pd.to_numeric(shocked[c], errors="coerce") + sign * sd
+            row[label] = float(m.predict(scensvc.LGD.design_for(shocked, m)).mean())
+        out.append(row)
+    return _jsonable({"portfolio": key, "spec": spec.to_dict(), "base": base,
+                      "sensitivity": out})
+
+
 # ── versions ─────────────────────────────────────────────────────────────────
 from ..models import versions as vstore                                 # noqa: E402
 
@@ -728,6 +1217,75 @@ class SaveVersionRequest(EclRequest):
     notes: str = ""
     tags: list[str] = []
     with_ecl: bool = False
+    # Hash of a version this supersedes. The replaced version is removed and its
+    # status, tags and starred flag transfer to this one.
+    replaces: str | None = None
+
+
+def _lgd_metrics_for(spec) -> dict:
+    """Score the SEVERITY half of a saved model.
+
+    A version used to record PD statistics only, so half of what produced the
+    loss number went unmeasured.
+
+    **Both figures are out of time.** In sample they say nothing: a fractional
+    logit carrying an intercept reproduces the book mean exactly, so in-sample
+    bias is identically zero for every specification. Only a holdout reveals
+    whether the level survives.
+
+    **Calibration bias** — mean predicted minus mean realised severity, in LGD
+    points. The headline, because it is the only severity statistic that
+    converts directly into an error in the loss figure: severity enters expected
+    credit loss multiplicatively, so a model 28 points high on a book averaging
+    0.12 overstates lifetime ECL several times over. Rank ordering carries no
+    such consequence — a model can order every default correctly and still be
+    wrong on the level.
+
+    **RMSE** — root mean squared error on realised severity, in the same units.
+    Bias is a mean, so it cancels: a model that is 20 points high on half the
+    book and 20 points low on the other half reports no bias at all. RMSE does
+    not cancel, so the pair decomposes the error — bias is the level, and the
+    gap between RMSE and bias is the dispersion.
+
+    Rank statistics are recorded but not shown in the version list. Deviance R²
+    is also kept; it goes NEGATIVE out of time when a model predicts worse than
+    the book mean, which is informative but reads poorly as a table column.
+
+    Where a book cannot support the split, the in-sample figures are stored and
+    the basis is recorded, so the interface says which it is rather than passing
+    one off as the other.
+    """
+    if spec.lgd is None or not (spec.lgd.drivers or spec.lgd.categoricals):
+        return {}
+    try:
+        m = scensvc.lgd_model(spec.portfolio, spec.lgd)
+        d = _lgd_frame(spec.portfolio,
+                       ",".join(c for c in spec.lgd.drivers if "@" in c))
+        bt = lgddiag.backtest(m, d, LgdFitRequest.model_fields["oot_from"].default)
+    except Exception as e:                                              # noqa: BLE001
+        return {"lgd_error": f"{type(e).__name__}: {e}"}
+
+    if bt.get("usable") and bt.get("test"):
+        t, basis, note = bt["test"], "out of time", f"defaults from {bt['oot_from']}"
+    else:
+        t = lgddiag.diagnostics(m, d)
+        basis, note = "in sample", bt.get("note", "")
+
+    return {
+        "lgd_bias": float(t["mean_predicted"] - t["mean_actual"]),
+        "lgd_rmse": t.get("rmse"),
+        "lgd_mae": t.get("mae"),
+        "lgd_deviance_r2": t.get("deviance_r2"),
+        "lgd_spearman": t.get("spearman"),
+        "lgd_mean_predicted": t["mean_predicted"],
+        "lgd_mean_actual": t["mean_actual"],
+        "lgd_n": t["n"],
+        "lgd_basis": basis,
+        "lgd_basis_note": note,
+        "n_lgd_drivers": len(spec.lgd.drivers) + len(spec.lgd.categoricals),
+        "lgd_hash": spec.lgd.hash(),
+        "pd_hash": spec.pd_hash(),
+    }
 
 
 def _metrics_for(r) -> dict:
@@ -750,9 +1308,48 @@ def _metrics_for(r) -> dict:
     }
 
 
+class RecohortRequest(FitRequest):
+    """A fit request plus the frequency to report its backtest at."""
+    freq: str = "QS"
+
+
+@app.post("/api/backtest/recohort")
+def backtest_recohort(req: RecohortRequest):
+    """Report an already-fitted model's backtest at another frequency.
+
+    The data is monthly and quarterly cohorts are a REPORTING choice, so the
+    choice belongs to the reader. It costs no refit: the scored account-months
+    are kept on the cached run and only the grouping is redone.
+
+    Quarterly is the default because of what monthly does to the statistics on a
+    book this size — around nine defaults a month, against twenty-six a quarter.
+    An area under the curve computed on nine events ranged from 0.30 to 0.95
+    across the mortgage panel, and a value below 0.5 reads as a model ranking
+    backwards when it is only sampling noise. The event count travels with every
+    point so the interface can say how much is behind it.
+    """
+    if req.freq not in modelsvc.B.FREQ_CHOICES:
+        raise HTTPException(
+            400, f"unknown frequency {req.freq!r}; "
+                 f"choose one of {sorted(modelsvc.B.FREQ_CHOICES)}")
+    run = modelsvc.run(req.to_spec())
+    if not run.scored:
+        raise HTTPException(409, "this run predates re-cohorting; refit it first")
+    return _jsonable(modelsvc.B.recohort(run.scored, req.freq))
+
+
 @app.post("/api/versions")
 def save_version(req: SaveVersionRequest):
     spec = req.to_spec()
+    # Naming is gated on BOTH halves. A saved version is meant to be the thing
+    # that produced an ECL number, and half of that number comes from severity.
+    if not spec.variables:
+        raise HTTPException(400, "no PD variables — nothing to save")
+    if spec.lgd is None or not (spec.lgd.drivers or spec.lgd.categoricals):
+        raise HTTPException(
+            400, "fit an LGD model before naming this one. A Model ID covers the "
+                 "PD specification and the LGD specification together, because "
+                 "both of them produced the loss number.")
     run = modelsvc.run(spec)
     ecl_summary: dict = {}
     if req.with_ecl:
@@ -763,14 +1360,37 @@ def save_version(req: SaveVersionRequest):
             ecl_summary["weighted_ecl"] = sr.weighted_ecl
         except Exception as e:                                          # noqa: BLE001
             ecl_summary = {"error": f"{type(e).__name__}: {e}"}
-    v = vstore.save(spec, _metrics_for(run), ecl_summary, label=req.label,
-                    notes=req.notes, tags=req.tags, parent_hash=req.parent_hash)
-    return _jsonable(v.to_dict())
+    v = vstore.save(spec, _metrics_for(run) | _lgd_metrics_for(spec), ecl_summary,
+                    label=req.label,
+                    notes=req.notes, tags=req.tags, parent_hash=req.parent_hash,
+                    replaces=req.replaces)
+    return _jsonable(_version_payload(v))
+
+
+def _version_payload(v) -> dict:
+    return {**v.to_dict(), "data_is_current": v.data_is_current(),
+            "current_data_fingerprint": vstore.data_fingerprint(v.portfolio)}
 
 
 @app.get("/api/versions")
 def list_versions(portfolio: str | None = None):
-    return _jsonable([v.to_dict() for v in vstore.list_all(portfolio)])
+    return _jsonable([_version_payload(v) for v in vstore.list_all(portfolio)])
+
+
+@app.get("/api/versions/{hash_}")
+def get_version(hash_: str):
+    """One saved model, whole, so the app can be put back into it.
+
+    The whole specification comes back — variables with their binning maps, macro
+    terms with lags, the LGD drivers, the sample design. Loading it and replaying
+    it is what makes the reproducibility claim checkable rather than asserted:
+    the same specification produces the same hash, so if the replayed model has a
+    different ID, something moved underneath it.
+    """
+    v = vstore.load(hash_)
+    if v is None:
+        raise HTTPException(404, "unknown version")
+    return _jsonable(_version_payload(v))
 
 
 @app.get("/api/versions/compare")
@@ -813,7 +1433,7 @@ def export_version(hash_: str):
     v = vstore.load(hash_)
     if v is None:
         raise HTTPException(404, "unknown version")
-    return _jsonable(v.to_dict())
+    return _jsonable(_version_payload(v))
 
 
 @app.post("/api/versions/import")
@@ -854,13 +1474,24 @@ from ..models import rollup as rollupsvc                                # noqa: 
 
 
 @app.get("/api/rollup")
-def rollup(tornado: bool = True):
-    r = rollupsvc.run(with_tornado=tornado)
+def rollup(tornado: bool = True, select: str = Query("")):
+    """Every book on one page.
+
+    `select` is `portfolio:version_hash` pairs and overrides which saved model a
+    book is reported on. Absent, each book uses its champion, and a book with no
+    champion uses the documented default. A selection that differs from the
+    champions is an exploratory figure, not the adopted position, and the
+    response says which it is rather than leaving it to be read off a dropdown.
+    """
+    selection = dict(x.split(":", 1) for x in select.split(",") if ":" in x)
+    r = rollupsvc.run(with_tornado=tornado, selection=selection)
     champs = {p: vstore.champion(p) for p in store.available()}
     return _jsonable({
         "scenarios": r.scenarios, "portfolios": r.portfolios, "totals": r.totals,
         "monthly": r.monthly, "tornado": r.tornado,
         "concentration": r.concentration, "timings": r.timings,
+        "is_adopted": r.is_adopted, "selection": r.selection,
+        "available": r.available,
         "champions": {k: (v.to_dict() if v else None) for k, v in champs.items()},
         "note": ("Each book is projected with its promoted champion model where one "
                  "exists, and with a documented default specification where none "

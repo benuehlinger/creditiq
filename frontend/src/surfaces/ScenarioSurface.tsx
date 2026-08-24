@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation } from '@tanstack/react-query'
 import { api, type EclResponse, type PortfolioKey } from '../lib/api'
 import { Card, CardHead, EmptyState, HeroFigure, StatTile, StatusPill } from '../components/ui'
@@ -8,7 +8,7 @@ import Legend from '../charts/Legend'
 import Waterfall from '../charts/Waterfall'
 import ScenarioEditor from '../components/ScenarioEditor'
 import MacroPanel from '../components/MacroPanel'
-import { baseOption, crosshairTooltip, lineSeries } from '../charts/base'
+import { baseOption, crosshairTooltip, lineSeries, xName, yName, gridFor } from '../charts/base'
 import { ink, mode, ordinal } from '../design/tokens'
 import { useUi } from '../lib/store'
 import { month, num, pct, usd } from '../lib/format'
@@ -18,20 +18,29 @@ const DEFAULT_MEVS: Record<string, string[]> = {
   mortgage: ['unemployment_rate'],
   cre: ['cre_price_index_yoy', 'bbb_yield'],
 }
-const ORDER = ['baseline', 'adverse', 'severely_adverse']
+// The two the Federal Reserve publishes. There is deliberately no middle path:
+// an interpolated "adverse" line is indistinguishable from a supervisory one on
+// a chart, and the label was the only thing separating them.
+const ORDER = ['baseline', 'severely_adverse']
 
 export default function ScenarioSurface() {
   const { portfolio = 'consumer' } = useParams()
   const theme = useUi((s) => s.theme)
-  const fitted = useUi((s) => s.fitted[portfolio as PortfolioKey])
+  const nav = useNavigate()
+  const pk = portfolio as PortfolioKey
+  const fitted = useUi((s) => s.fitted[pk])
+  const fittedLgd = useUi((s) => s.fittedLgd[pk])
   const [res, setRes] = useState<EclResponse | null>(null)
-  const [capped, setCapped] = useState(true)
+  const [capped, setCapped] = useState(false)
   const [ifrs9, setIfrs9] = useState(false)
   const [custom, setCustom] = useState<Record<string, Record<string, number>>>({})
-  const [weights] = useState({ baseline: 0.5, adverse: 0.3, severely_adverse: 0.2 })
+  // A CECL weighting is a management assumption, not a supervisory number.
+  const [weights] = useState({ baseline: 0.75, severely_adverse: 0.25 })
   const [tab, setTab] = useState<'ecl' | 'macro'>('ecl')
 
   useEffect(() => { setRes(null); setCustom({}) }, [portfolio])
+
+  const loaded = useUi((s) => s.loaded[pk])
 
   const run = useMutation({
     // Project the model that was FITTED, not a specification rebuilt from the
@@ -42,6 +51,10 @@ export default function ScenarioSurface() {
       if (!fitted) throw new Error('Fit a model on the Model surface first.')
       return api.ecl({
         ...fitted.request,
+        // Severity is half the loss number, so it has to be the LGD model the
+        // analyst actually fitted — not whatever the portfolio default happens
+        // to be. Absent, the engine falls back to the documented default.
+        lgd: fittedLgd?.spec ?? fitted.request.lgd ?? null,
         cap_to_fitted_range: capped,
         custom: over ?? custom,
         weights,
@@ -49,6 +62,13 @@ export default function ScenarioSurface() {
     },
     onSuccess: setRes,
   })
+
+  // A saved model has been opened: project it so this surface shows that model's
+  // loss numbers rather than an empty state.
+  useEffect(() => {
+    if (loaded && fitted && !res && !run.isPending) run.mutate(undefined)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded?.hash, fitted?.hash])
 
   const byKey = useMemo(
     () => Object.fromEntries((res?.scenarios ?? []).map((s) => [s.key, s])), [res])
@@ -59,13 +79,13 @@ export default function ScenarioSurface() {
     const k = ink(mode())
     return {
       ...baseOption(),
-      grid: { left: 62, right: 18, top: 14, bottom: 30 },
+      grid: gridFor({ left: 74, right: 18, top: 14, bottom: 46 }),
       tooltip: crosshairTooltip((v) => usd(v), (d) => month(d)),
       xAxis: { ...(baseOption().xAxis as object), type: 'time' as const,
+               ...xName('Projection month', 28),
                axisLabel: { color: k.muted, fontSize: 10, formatter: '{yyyy}' } },
       yAxis: { ...(baseOption().yAxis as object), type: 'value' as const,
-               name: 'Cumulative expected loss', nameLocation: 'middle' as const,
-               nameGap: 48, nameTextStyle: { color: k.muted, fontSize: 10 },
+               ...yName('Cumulative expected loss (USD)', 56),
                axisLabel: { color: k.muted, fontSize: 10, formatter: (v: number) => usd(v) } },
       // Severity is ORDERED, so a one-hue ramp — not three categorical colours.
       series: ordered.map((s, i) => lineSeries({
@@ -91,9 +111,8 @@ export default function ScenarioSurface() {
           <Card>
             <CardHead title="Scenarios" subtitle={portfolio} />
             <EmptyState title="No fitted model to project">
-              The scenario engine projects a fitted PD model forward — it does not
-              refit one. Select variables on Explore, fit on Model, then come back.
-              The macro variables tab works without a model.
+This surface projects a fitted PD model forward and does not estimate one.
+              Fit a PD model first. The macro variables tab is available without one.
             </EmptyState>
           </Card>
         )}
@@ -120,19 +139,36 @@ export default function ScenarioSurface() {
       {tab === 'macro' && <MacroPanel portfolio={portfolio} />}
 
       {tab === 'ecl' && (<>
+      {!fittedLgd?.hash && (
+        <Card>
+          <div className="flex items-start gap-3 px-4 py-2.5">
+            <StatusPill severity="warning">Severity model not fitted</StatusPill>
+            <p className="min-w-0 flex-1 text-tiny leading-relaxed text-ink-secondary">
+              These figures use the documented default LGD specification for this
+              book, not one you fitted. Half of every loss number below comes from
+              severity, so a projection on a substituted severity model is not the
+              projection of your model.{' '}
+              <button onClick={() => nav(`/${portfolio}/lgd/fit`)}
+                className="font-medium text-accent underline">Fit the LGD model</button>.
+            </p>
+          </div>
+        </Card>
+      )}
       <Card>
         <div className="flex flex-wrap items-center gap-4 px-4 py-3">
           <div className="text-xs text-ink-secondary">
             Projecting <span className="font-medium text-ink">{fitted.name}</span>
-            {' '}· {fitted.request.variables.length} variables,
+            {' '}· PD {fitted.request.variables.length} variables,
             {' '}{fitted.request.mevs.length} macro terms
+            {fittedLgd && <> · LGD {fittedLgd.spec.drivers.length +
+              fittedLgd.spec.categoricals.length} drivers</>}
             {' '}· <span className="font-mono text-tiny">{fitted.hash}</span>
           </div>
           <label className="flex items-center gap-1.5 text-tiny text-ink-muted"
-            title="Winsorizes the forward macro path to the range the model was fitted on. Keeps the projection inside the evidence — and caps the stress. Both numbers are reported.">
+            title="Off by default: the projection uses the Federal Reserve's published path unmodified. When on, the forward path is winsorised to the range the model was estimated on. That keeps the projection within the observed range and also reduces the size of the shock. Both figures are reported either way.">
             <input type="checkbox" checked={capped}
               onChange={(e) => { setCapped(e.target.checked); setRes(null) }} />
-            Cap macro path to the fitted range ⓘ
+            Constrain macro path to the fitted range ⓘ
           </label>
           <label className="flex items-center gap-1.5 text-tiny text-ink-muted">
             <input type="checkbox" checked={ifrs9} onChange={(e) => setIfrs9(e.target.checked)} />
@@ -168,13 +204,29 @@ export default function ScenarioSurface() {
           <div className="mt-1.5 space-y-1 text-xs leading-relaxed text-ink">
             {flags.map((f) => <p key={f.key}>{f.note}</p>)}
           </div>
-          {res?.capped && sa?.uncapped_ecl != null && (
-            <p className="mt-2 text-tiny text-ink-secondary">
-              The macro path is currently capped to the fitted range. Uncapping it takes
-              severely adverse ECL from <span className="tnum">{usd(sa.ecl)}</span> to{' '}
-              <span className="tnum">{usd(sa.uncapped_ecl)}</span> —{' '}
-              <span className="tnum">{(sa.uncapped_ecl / sa.ecl).toFixed(1)}x</span>, entirely
-              from extrapolation rather than evidence.
+          {sa?.alternative_ecl != null && (
+            <p className="mt-2 text-tiny leading-relaxed text-ink-secondary">
+              {res?.capped ? (
+                <>
+                  The forward path is constrained to the estimation range, so the figure
+                  above is not the Federal Reserve's published scenario. On the published
+                  path, severely adverse ECL is{' '}
+                  <span className="tnum text-ink">{usd(sa.alternative_ecl)}</span> against{' '}
+                  <span className="tnum">{usd(sa.ecl)}</span> here, a reduction of{' '}
+                  <span className="tnum">{(1 - sa.ecl / sa.alternative_ecl).toLocaleString(undefined, { style: 'percent' })}</span>.
+                </>
+              ) : (
+                <>
+                  This projection uses the Federal Reserve's published path, part of which
+                  lies outside the range the model was estimated on. Constraining the path
+                  to that range gives{' '}
+                  <span className="tnum text-ink">{usd(sa.alternative_ecl)}</span> instead of{' '}
+                  <span className="tnum">{usd(sa.ecl)}</span>, a reduction of{' '}
+                  <span className="tnum">{(1 - sa.alternative_ecl / sa.ecl).toLocaleString(undefined, { style: 'percent' })}</span>.
+                  The difference between the two figures indicates how much of the response
+                  falls outside the estimation range.
+                </>
+              )}
             </p>
           )}
         </div>
@@ -206,7 +258,7 @@ export default function ScenarioSurface() {
             <Card>
               <CardHead title="ECL attribution bridge"
                 subtitle={`${res.bridge[0]?.label} to ${res.bridge.at(-1)?.label}`}
-                caption="Why the number moved. Sequential substitution: one component swapped at a time, with the residual reported rather than absorbed."
+                caption="Sequential substitution: each component is moved from its baseline value to its stressed value one at a time. The interaction term is the residual, reported rather than distributed across the other steps."
                 methodology="ecl" />
               <Waterfall steps={res.bridge} reconciles={res.bridge_reconciles}
                 ariaLabel="ECL attribution bridge" />
@@ -215,10 +267,10 @@ export default function ScenarioSurface() {
             <Card>
               <CardHead title="Cumulative expected loss over the horizon"
                 subtitle="Survival-adjusted, discounted at the effective interest rate"
-                caption="Severity is an ordered dimension, so the three scenarios take one hue light to dark rather than three separate colours." />
+                caption="Scenario severity is an ordered dimension, so the scenarios take one hue from light to dark rather than separate colours." />
               <Legend items={ordered.map((s, i) => ({ name: s.label, color: ordinal(i, ordered.length) }))} />
               {projection && (
-                <EChart option={projection} height={230} ariaLabel="Cumulative ECL by scenario"
+                <EChart option={projection} height={230} ariaLabel="Cumulative ECL by scenario" externalLegend
                   table={{ columns: ['Month', ...ordered.map((s) => s.label)],
                            rows: (ordered[0]?.monthly ?? []).map((m, i) =>
                              [m.month, ...ordered.map((s) => Math.round(s.monthly[i]?.cumulative_loss ?? 0))]) }} />
@@ -228,7 +280,7 @@ export default function ScenarioSurface() {
 
           <Card>
             <CardHead title="Scenario comparison"
-              caption="Every scenario on the same book, at the same date. Published paths are marked; the derived one is labelled as derived." />
+              caption="Each scenario applied to the same book at the same reporting date. Both paths are published by the Federal Reserve; a path edited in the scenario editor is marked as custom." />
             <table className="w-full text-left text-xs">
               <thead>
                 <tr className="border-b border-hairline text-tiny text-ink-muted">
@@ -253,7 +305,7 @@ export default function ScenarioSurface() {
                     </td>
                     <td className="px-3 py-1.5">
                       <StatusPill severity={s.published ? 'good' : 'warning'}>
-                        {s.published ? 'Federal Reserve' : 'derived by CreditIQ'}
+                        {s.published ? 'Federal Reserve' : 'custom path'}
                       </StatusPill>
                     </td>
                     <td className="px-3 py-1.5 text-right tnum text-ink-secondary">{pct(s.weighted_pd_12m * 100)}</td>
@@ -294,7 +346,7 @@ export default function ScenarioSurface() {
           <div className="grid gap-3 lg:grid-cols-2">
             <Card>
               <CardHead title="Exposure at default" subtitle={`Method: ${res.ead.method}`}
-                caption="Stated in plain English and carried into every ECL number on this page." />
+                caption="The exposure assumption applied to every account, and the parameters it was estimated from. It is carried into each ECL figure on this page." />
               <div className="px-4 py-3 text-xs leading-relaxed text-ink-secondary">
                 {res.ead.plain_english}
                 {res.ead.ccf_note && (
@@ -304,12 +356,12 @@ export default function ScenarioSurface() {
             </Card>
             <Card>
               <CardHead title="Loss given default"
-                subtitle={`Two-stage · fitted on ${num(res.lgd.n_defaults)} defaults`}
-                caption="P(loss > 0) times E[loss | loss > 0]. The mass at exactly zero is the part a single beta model cannot represent." />
+                subtitle={`Fractional logit · fitted on ${num(res.lgd.n_defaults)} defaults`}
+                caption="E[LGD] = sigmoid(X·β), estimated by fractional response quasi-likelihood on realised severity. Macro drivers are joined at the default month." />
               <div className="grid grid-cols-3 divide-x divide-hairline">
                 <StatTile label="Mean LGD" value={res.lgd.mean_lgd.toFixed(3)} />
                 <StatTile label="Zero-loss share" value={pct(res.lgd.zero_loss_share * 100, 1)}
-                  explain="Defaults that liquidated whole with no economic loss." />
+                  explain="Defaults where recovery covered the balance in full." />
                 <StatTile label="Severity given loss"
                   value={res.lgd.mean_severity_given_loss.toFixed(3)} />
               </div>

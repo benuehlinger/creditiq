@@ -102,7 +102,7 @@ export default function FitDiagnostics({ r }: { r: FitResponse }) {
       <div className="grid gap-3 lg:grid-cols-3">
         <Card>
           <CardHead title="ROC curve" subtitle={`${ref} slice`}
-            caption="How well the model ranks. The diagonal is a coin flip." />
+            caption="True positive rate against false positive rate across all thresholds. The diagonal represents no discrimination." />
           <Legend items={[{ name: 'Model', color: accent() },
                           { name: 'No skill', color: deemphasis(m) }]} />
           <EChart option={roc} height={210} ariaLabel="ROC curve"
@@ -148,7 +148,7 @@ export default function FitDiagnostics({ r }: { r: FitResponse }) {
 
         <Card>
           <CardHead title="Slice comparison"
-            caption="The gap between test and out of time is the number that matters. A model that only holds up in sample has not been tested." />
+            caption="Test is a held-out sample of accounts from the fitting period. Out of time is a later period the model was not fitted on. The difference between them indicates how the model transfers across periods." />
           <table className="w-full text-left text-xs">
             <thead>
               <tr className="border-b border-hairline text-tiny text-ink-muted">

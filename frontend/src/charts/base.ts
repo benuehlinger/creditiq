@@ -56,13 +56,61 @@ export function baseOption(): EChartsOption {
   }
 }
 
+/** Axis titles.
+ *
+ *  Every axis carries a title naming the QUANTITY and its UNIT. A tick reading
+ *  "3" is not a number anyone can act on until the axis says whether it is a
+ *  percent, a count or a standard deviation. These helpers exist so the title
+ *  sits in the same place with the same weight on every chart, and so the gutter
+ *  reserved for it is never guessed per call site.
+ *
+ *  The y-title is rotated into the left gutter rather than floated above the
+ *  plot. A floated title is clipped by the grid the moment the chart is short,
+ *  which is exactly what happened on the macro series panel.
+ */
+export function yName(name: string, gap = 44) {
+  const k = ink(mode())
+  return {
+    name,
+    nameLocation: 'middle' as const,
+    nameRotate: 90,
+    nameGap: gap,
+    nameTextStyle: { color: k.muted, fontSize: 10 },
+  }
+}
+
+export function xName(name: string, gap = 30) {
+  const k = ink(mode())
+  return {
+    name,
+    nameLocation: 'middle' as const,
+    nameGap: gap,
+    nameTextStyle: { color: k.muted, fontSize: 10 },
+  }
+}
+
+/** Grid padding that leaves room for a rotated y-title and an x-title. Pass the
+ *  extra a chart needs — a legend on top, wide tick labels on the left. */
+export function gridFor(o: { top?: number; left?: number; right?: number; bottom?: number } = {}) {
+  return {
+    left: o.left ?? 66,
+    right: o.right ?? 20,
+    top: o.top ?? 16,
+    bottom: o.bottom ?? 48,
+    containLabel: false,
+  }
+}
+
 /** Crosshair tooltip for line and area charts.
  *
  *  The reader aims at a DATE, never at a 2px line, and one readout lists every
  *  series at that x — so the pointer never has to land on a stroke to get a
  *  value. */
 export function crosshairTooltip(
-  formatValue: (v: number) => string,
+  // The second argument is the ECharts param for that series, so a caller can
+  // reach extra data dimensions it carried through — e.g. a published value
+  // sitting beside a plotted z-score.
+  formatValue: (v: number, p?: any) => string,
   formatAxis?: (v: string) => string,
 ) {
   const m = mode()
@@ -88,7 +136,7 @@ export function crosshairTooltip(
           return (
             `<div style="display:flex;align-items:center;gap:8px;margin-top:3px">` +
             `<span style="display:inline-block;width:10px;height:2px;border-radius:1px;background:${p.color}"></span>` +
-            `<span style="font-variant-numeric:tabular-nums;font-weight:600;color:${k.primary}">${formatValue(v)}</span>` +
+            `<span style="font-variant-numeric:tabular-nums;font-weight:600;color:${k.primary}">${formatValue(v, p)}</span>` +
             `<span style="color:${k.muted};margin-left:auto">${escapeHtml(p.seriesName)}</span>` +
             `</div>`
           )
@@ -117,7 +165,10 @@ export function escapeHtml(s: unknown): string {
  *  8px, and a 10% area wash where an area is wanted (never a saturated block). */
 export function lineSeries(opts: {
   name: string
-  data: [string | number, number | null][]
+  // A third element is an extra data dimension: ECharts plots [0] and [1] and
+  // carries the rest to the tooltip. Used to keep a published value beside a
+  // plotted z-score.
+  data: ([string | number, number | null] | [string | number, number | null, number | null])[]
   color: string
   area?: boolean
   dashed?: boolean

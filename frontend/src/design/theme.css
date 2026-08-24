@@ -1,3 +1,25 @@
+/* Merriweather Bold, the CreditIQ wordmark face. The LATIN subset only: the
+   wordmark is one word in Latin script, and the full package ships Cyrillic,
+   Greek and Vietnamese cuts that would be downloaded and never drawn. Bundled at
+   build time from node_modules, so there is no runtime network call and the
+   offline guarantee holds.
+
+   To change the face: swap this import, then set BRAND_FACE in components/Brand
+   to the matching entry in WORDMARK_CANDIDATES. The candidates render side by
+   side against the real mark on the brand page (Cmd-K, "Brand assets"). */
+@import '@fontsource/merriweather/latin-700.css';
+
+/* The unchosen candidates, imported only so the brand page can show them
+   against the real mark. Remove these and the packages once the face is
+   settled — a font nobody renders is dead weight in the bundle. */
+@import '@fontsource/inter/latin-600.css';
+@import '@fontsource/tinos/latin-700.css';
+@import '@fontsource/dm-sans/latin-500.css';
+@import '@fontsource/manrope/latin-600.css';
+@import '@fontsource-variable/instrument-sans/standard.css';
+@import '@fontsource/lora/latin-600.css';
+@import '@fontsource/fraunces/latin-600.css';
+
 /* Space Grotesk, self-hosted. A fonts.googleapis.com link would be a network
    dependency, and the brief requires this to run in a conference room with
    hostile WiFi. One variable file covers every weight. */

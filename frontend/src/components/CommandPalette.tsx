@@ -24,7 +24,11 @@ export default function CommandPalette() {
         run: () => nav('/brand') },
     ]
     for (const p of portfolios ?? []) {
-      for (const [s, l] of [['data', 'Data'], ['explore', 'Explore'], ['model', 'Model'],
+      for (const [s, l] of [['data', 'Data'],
+                            ['pd/explore', 'PD model → Explore'],
+                            ['pd/fit', 'PD model → Fit'],
+                            ['lgd/explore', 'LGD model → Explore'],
+                            ['lgd/fit', 'LGD model → Fit'],
                             ['scenarios', 'Scenarios'], ['versions', 'Versions']]) {
         out.push({
           id: `${p.key}-${s}`,

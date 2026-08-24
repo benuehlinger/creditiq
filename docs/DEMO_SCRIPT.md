@@ -14,9 +14,9 @@ click goes astray.
 
 **Screen:** Portfolio Roll-Up.
 
-> "This is the whole book — three portfolios, twenty-six billion of exposure.
-> Under the Fed's 2026 severely adverse scenario, expected credit loss is 2.3
-> billion. That's 7.4 times baseline, and 915 basis points.
+> "This is the whole book — three portfolios, twenty-one billion of exposure.
+> Under the Fed's 2026 severely adverse scenario, expected credit loss is 1.96
+> billion. That's 7.8 times baseline, and 947 basis points.
 >
 > Everything behind this number was built this morning. Let me show you how, and
 > then we'll come back here."
@@ -47,7 +47,7 @@ and close it.
 
 ---
 
-## 2:15 — The leakage guardrail (2 minutes) — **the first big moment**
+## 2:15 — The leakage guardrail (2 minutes) — **the first key point**
 
 **Click:** Explore.
 
@@ -74,7 +74,7 @@ Point at the amber *Review* banner, which says exactly that.
 
 ---
 
-## 4:15 — The binning editor (90 seconds) — **the second big moment**
+## 4:15 — The binning editor (90 seconds) — **the second key point**
 
 Still on `current_ltv`.
 
@@ -94,7 +94,36 @@ Point at **Monotonic ✓ decreasing** and **Economic sign ✓ matches prior**.
 
 ---
 
-## 5:45 — Fit and backtest (2 minutes)
+## 5:45 — Where the knot goes (60 seconds) — **the third key point**
+
+**Scroll** to **Shape**, still on `current_ltv`.
+
+> "Eight bins tell you a variable is predictive. They cannot tell you what shape
+> it is, because three of them are a straight run and the bend is inside the
+> fourth. So here it is at thirty buckets, on the log-odds scale — which is the
+> scale a logistic regression is actually linear in. The whiskers are 95%
+> intervals. A bucket whose whisker spans the plot is not telling you anything.
+>
+> Grey is a straight line. That is precisely what a continuous term assumes, and
+> it gets 90%."
+
+**Click** **Spline** in the treatment control. The green curve and four knots appear.
+
+> "The spline at quantile knots gets 99%. But look where the bend actually is."
+
+**Drag** the rightmost knot onto the bend at about 90 LTV.
+
+> "0.996. The knot is now at the point where the relationship changes slope, and
+> the fit improved measurably. The model refits on that placement."
+
+Point at the volume strip below the plot.
+
+> "Below it, the number of observations behind each point. A bucket rate is only
+> interpretable alongside its volume, so both are on the same axis."
+
+---
+
+## 6:45 — Fit and backtest (2 minutes)
 
 **Click:** the suggested variables in the tray — `current_ltv`, `fico_orig`,
 `dti`, `occupancy`. Then **Model** → **Fit model**.
@@ -146,7 +175,7 @@ Point at the seam on the left-hand chart.
 
 ---
 
-## 9:00 — ECL and the bridge (90 seconds) — **the third big moment**
+## 9:00 — ECL and the bridge (90 seconds) — **the fourth key point**
 
 **Click:** Scenarios & ECL → **Run scenarios**. Eight seconds.
 
@@ -175,14 +204,47 @@ Scroll to the **Scenario editor**. Drag an unemployment quarter upward. Click
 
 ---
 
-## 11:15 — Save, compare, and close on the roll-up (45 seconds)
+## 11:15 — Severity, then save (90 seconds)
 
-**Click:** Versions → **Save current specification**.
+**Click:** LGD model.
 
-> "`hardy-colonnade-28`. The name comes from a hash of the configuration, so the
-> same specification always gets the same name — a duplicate is visible
-> immediately. Export it, email it, re-run it: identical numbers to twelve
-> decimal places. That's the reproducibility story."
+> "Expected credit loss is PD times LGD times exposure, so severity is half the
+> calculation. This stage has the same structure as the PD side: an Explore
+> stage that ranks candidate drivers on the defaulted population, and a Fit
+> stage.
+>
+> The model is a fractional logit on realised severity. Coefficients are per
+> standard deviation of the driver. Twenty-three percent of these defaults
+> resolved with no loss at all, which is reported here as a descriptive
+> statistic."
+
+Point at **Downturn response**.
+
+> "Commercial property prices down one standard deviation take mean predicted
+> severity from twenty-eight percent to sixty-one. This is the test for whether
+> the severity model responds to a scenario at all."
+
+**Click:** Versions → **Save this model**.
+
+> "`patient-quarry-92`. The name is a hash of the configuration — the PD
+> specification and the LGD specification together, because both of them produced
+> that loss number. Fit only the hazard model and this button tells you what is
+> missing rather than giving you a name it would have to take back.
+>
+> Export it, email it, re-run it: identical numbers. And it records which panel it
+> was fitted on, so a version from superseded data says so instead of quietly
+> being wrong."
+
+**Click** `open` on an earlier version.
+
+> "And you can get back into one. That replays the whole specification across
+> every screen — it does not show you a stored result. If replaying it came back
+> with a different Model ID, something underneath had moved, and this is where
+> you would find out."
+
+**Change** a macro term. The confirm appears.
+
+> "A saved model does not change. That is what makes it worth referring to."
 
 Tick two versions to compare.
 
@@ -196,13 +258,25 @@ Tick two versions to compare.
 
 Point at it.
 
-> "The severely adverse scenario takes commercial property growth four standard
-> deviations outside anything our model was fitted on. We could just print the
-> number. Instead we tell you that the response out there is extrapolation, not
-> evidence — and that uncapping it makes the CRE loss 2.3 times larger.
+> "This panel asks one question: does the scenario take any driver outside the
+> range the model was actually estimated on? Because a logit does not stop at the
+> edge of its evidence. It just keeps going.
 >
-> That's the difference between a model that produces a number and a model you
-> can defend."
+> On commercial real estate the answer today is no. The supervisory path takes
+> property growth to minus twenty-four percent, and our fitted floor is minus
+> thirty — because this panel opens in January 2008 and the model has seen a
+> property crash. Severely adverse is interpolation for this book, not
+> extrapolation.
+>
+> It was not always. On a 2015-start panel that same scenario sat two standard
+> deviations outside the floor and sixty percent of the stressed loss was
+> extrapolation. The fix was not a technique. It was estimating on a window with
+> a downturn in it.
+>
+> Mortgage still shows a flag — house prices go half a standard deviation past
+> our floor. So we price both: the Fed's path, and the path constrained to our
+> evidence. The gap is two percent. That is a caveat you can read and dismiss,
+> which is the whole idea."
 
 ---
 

@@ -40,6 +40,11 @@ export default function ScenarioEditor({ portfolio, mevs, onApply, busy }: {
 
   const keys = useMemo(
     () => mevs.map((k) => (k.endsWith('_yoy') ? k.slice(0, -4) : k)), [mevs])
+  // The y-axis names the series and its published unit. A bare "278.0" is not a
+  // number anyone can drag with intent.
+  const catalog = useQuery({ queryKey: ['mevcat'], queryFn: api.mevCatalog })
+  const meta = catalog.data?.variables?.find((x) => x.key === variable)
+  const yTitle = meta ? `${meta.label}${meta.unit ? ` (${meta.unit})` : ''}` : variable
   const { data, isLoading } = useQuery({
     queryKey: ['editable', keys.join(',')],
     queryFn: () => api.editableScenario('severely_adverse', keys),
@@ -52,8 +57,8 @@ export default function ScenarioEditor({ portfolio, mevs, onApply, busy }: {
     edited: edits[variable]?.[p.quarter] != null,
   }))
 
-  const H = 190
-  const PAD = { l: 46, r: 14, t: 14, b: 30 }
+  const H = 206
+  const PAD = { l: 62, r: 14, t: 14, b: 44 }
   const plotW = W - PAD.l - PAD.r
   const plotH = H - PAD.t - PAD.b
   const vals = [...published.map((p) => p.value), ...points.map((p) => p.value)]
@@ -141,11 +146,20 @@ export default function ScenarioEditor({ portfolio, mevs, onApply, busy }: {
             </g>
           ))}
           {points.filter((_, i) => i % 4 === 0).map((p, j) => (
-            <text key={p.quarter} x={toX(j * 4)} y={H - 8} textAnchor="middle"
+            <text key={p.quarter} x={toX(j * 4)} y={H - 22} textAnchor="middle"
                   fontSize={9} fill="var(--ink-muted)">
               {p.quarter.slice(0, 4)}
             </text>
           ))}
+          {/* axis titles: rotated into the left gutter, centred under the plot */}
+          <text transform={`translate(14,${PAD.t + plotH / 2}) rotate(-90)`}
+                textAnchor="middle" fontSize={10} fill="var(--ink-secondary)">
+            {yTitle}
+          </text>
+          <text x={PAD.l + (W - PAD.l - PAD.r) / 2} y={H - 5} textAnchor="middle"
+                fontSize={10} fill="var(--ink-secondary)">
+            Projection quarter
+          </text>
         </svg>
       </div>
       <p className="px-4 pb-2 text-micro text-ink-muted">

@@ -21,13 +21,45 @@ export interface TableView {
  * gives the card a tiny nested scrollbar, which is the single most common chart
  * layout bug.
  */
+/** Development-only invariant check.
+ *
+ *  Two rules are easy to satisfy once and easy to lose on the next chart: every
+ *  axis names its quantity, and two or more series carry a legend so identity is
+ *  never colour-alone. Both are checked here rather than in a test that reads
+ *  source text, because the option object is the thing that actually renders.
+ *  Silent in production. */
+function auditChart(option: EChartsOption, ariaLabel: string, externalLegend: boolean) {
+  const problems: string[] = []
+  const axes = (a: unknown) => (Array.isArray(a) ? a : a ? [a] : []) as any[]
+  for (const [which, list] of [['x', axes(option.xAxis)], ['y', axes(option.yAxis)]] as const) {
+    list.forEach((ax, i) => {
+      if (ax?.show === false) return
+      if (!ax?.name) problems.push(`${which}-axis${list.length > 1 ? ` #${i}` : ''} has no title`)
+    })
+  }
+  // A `silent` series is scaffolding — the transparent stack base under a
+  // waterfall, for one. It carries no identity, so it needs no legend entry.
+  const named = axes(option.series).filter((sr) => sr?.name && !sr?.silent)
+  if (named.length >= 2 && !externalLegend && !(option.legend as any)?.show) {
+    problems.push(`${named.length} named series but no legend`)
+  }
+  if (problems.length) {
+    console.warn(`[chart] "${ariaLabel}": ${problems.join('; ')}`)
+  }
+}
+
 export default function EChart({
   option, height = 260, table, ariaLabel, refetching = false, onReady,
+  externalLegend = false,
 }: {
   option: EChartsOption
   height?: number
   table?: TableView
   ariaLabel: string
+  /** The card draws its own <Legend/> beside the chart — the house pattern,
+   *  which keeps legend text on the card surface rather than inside the plot.
+   *  Tells the development-time audit that identity is already covered. */
+  externalLegend?: boolean
   /** While data reloads the chart HOLDS its previous render at reduced opacity —
    *  no skeleton flash, no layout jump. */
   refetching?: boolean
@@ -49,10 +81,11 @@ export default function EChart({
   }, [])
 
   useEffect(() => {
+    if (import.meta.env.DEV) auditChart(option, ariaLabel, externalLegend)
     // notMerge on a theme change, because chrome colours live all through the
     // option tree and a merge would leave the old ones in place.
     inst.current?.setOption(option, { notMerge: true })
-  }, [option, theme])
+  }, [option, theme, ariaLabel, externalLegend])
 
   const exportImage = (type: 'png' | 'svg') => {
     if (!inst.current) return

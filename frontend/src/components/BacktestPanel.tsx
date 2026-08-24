@@ -1,10 +1,10 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { api, type FitResponse } from '../lib/api'
+import { api, type FitRequest, type FitResponse } from '../lib/api'
 import { Card, CardHead, StatTile, StatusPill } from './ui'
 import EChart from '../charts/EChart'
 import Legend from '../charts/Legend'
-import { baseOption, crosshairTooltip, lineSeries, markLineAt } from '../charts/base'
+import { baseOption, crosshairTooltip, lineSeries, markLineAt, xName, yName, gridFor } from '../charts/base'
 import { accent, ink, mode, ordinal, series, status } from '../design/tokens'
 import { useUi } from '../lib/store'
 import { month, num, pct } from '../lib/format'
@@ -16,13 +16,72 @@ import { month, num, pct } from '../lib/format'
  * statistic here is per performance-date cohort, and the out-of-time boundary is
  * marked on every chart. Where the model breaks is reported, not smoothed.
  */
-export default function BacktestPanel({ r, portfolio }: {
-  r: FitResponse; portfolio: string
+const median = (v: number[]) => {
+  if (!v.length) return 0
+  const a = [...v].sort((x, y) => x - y)
+  return a[Math.floor(a.length / 2)]
+}
+
+/** Monthly or quarterly cohorts.
+ *
+ *  The panel is scored on monthly account-level data; the cohort is a REPORTING
+ *  choice and belongs to the reader. Quarterly is the default because of what
+ *  monthly does to the statistics on a book this size — around nine defaults a
+ *  month against twenty-six a quarter. Nine events give an area under the curve
+ *  that ranged from 0.30 to 0.95 across the mortgage panel, and a value under
+ *  0.5 reads as a model ranking BACKWARDS when it is only sampling noise. The
+ *  option is offered anyway, with the cost stated rather than the choice
+ *  removed. */
+function FreqToggle({ freq, setFreq, busy, available }: {
+  freq: 'MS' | 'QS'
+  setFreq: (f: 'MS' | 'QS') => void
+  busy: boolean
+  available: boolean
 }) {
+  if (!available) return null
+  return (
+    <div className="flex items-center gap-1 text-micro">
+      <span className="text-ink-muted">Cohort</span>
+      {([['QS', 'quarter'], ['MS', 'month']] as const).map(([f, label]) => (
+        <button key={f} onClick={() => setFreq(f)} disabled={busy}
+          title={f === 'QS'
+            ? 'Group by quarter. Roughly three times the defaults behind each point, so the bands are narrower and a rank-ordering statistic is worth reading.'
+            : 'Group by month — the frequency of the underlying data. Around nine defaults sit behind each point on this book, so the credible band is about two thirds as wide as the rate itself and the per-point AUC is mostly noise. No refit: only the grouping changes.'}
+          className={`rounded-ctl border px-1.5 py-0.5 transition-colors ${
+            freq === f ? 'border-accent bg-accent-soft text-ink'
+                       : 'border-hairline text-ink-muted hover:text-ink'} disabled:opacity-50`}>
+          {label}
+        </button>
+      ))}
+      {busy && <span className="text-ink-muted">regrouping…</span>}
+    </div>
+  )
+}
+
+export default function BacktestPanel({ r, portfolio, request }: {
+  r: FitResponse; portfolio: string; request?: FitRequest
+}) {
+
   const theme = useUi((s) => s.theme)
   const m = mode()
   const k = ink(m)
-  const bt = r.backtest
+  // The data is monthly; quarterly cohorts are a REPORTING choice, so the
+  // choice belongs to the reader. Switching costs no refit — the scored
+  // account-months are held on the cached run and only the grouping is redone.
+  const [freq, setFreq] = useState<'MS' | 'QS'>('QS')
+  const alt = useQuery({
+    queryKey: ['recohort', r.hash, freq],
+    queryFn: () => api.recohort(request!, freq),
+    enabled: freq !== 'QS' && !!request,
+  })
+  const bt = (freq === 'QS' || !alt.data
+    ? r.backtest
+    : { ...r.backtest, ...alt.data }) as FitResponse['backtest']
+  // The backend publishes what one point IS. Reading it from the data rather
+  // than hard-coding a word is what stops the axis claiming "month" over
+  // quarterly cohorts — which it did.
+  const periodAxis = `Performance ${(bt as { period_freq?: string }).period_freq ?? 'period'}`
+  const medianEvents = median(bt.cohorts.map((c) => c.events))
   const [segCol, setSegCol] = useState<string>(bt.segment_column ?? '')
 
   const seg = useQuery({
@@ -36,13 +95,13 @@ export default function BacktestPanel({ r, portfolio }: {
     const c = bt.cohorts
     return {
       ...baseOption(),
-      grid: { left: 52, right: 18, top: 14, bottom: 30 },
+      grid: gridFor({ left: 62, right: 18, top: 14, bottom: 46 }),
       tooltip: crosshairTooltip((v) => `${v.toFixed(2)}%`, (d) => month(d)),
       xAxis: { ...(baseOption().xAxis as object), type: 'time' as const,
+               ...xName(periodAxis, 28),
                axisLabel: { color: k.muted, fontSize: 10, formatter: '{yyyy}' } },
       yAxis: { ...(baseOption().yAxis as object), type: 'value' as const,
-               name: 'Default rate (% / yr)', nameLocation: 'middle' as const, nameGap: 38,
-               nameTextStyle: { color: k.muted, fontSize: 10 },
+               ...yName('Default rate (% / yr)', 40),
                axisLabel: { color: k.muted, fontSize: 10, formatter: (v: number) => `${v}%` } },
       series: [
         // The realised rate's credible band first, so the lines sit on top of it.
@@ -70,11 +129,13 @@ export default function BacktestPanel({ r, portfolio }: {
     const c = bt.cohorts.filter((x) => x.auc === x.auc)
     return {
       ...baseOption(),
-      grid: { left: 44, right: 16, top: 12, bottom: 28 },
+      grid: gridFor({ left: 56, right: 16, top: 12, bottom: 46 }),
       tooltip: crosshairTooltip((v) => v.toFixed(3), (d) => month(d)),
       xAxis: { ...(baseOption().xAxis as object), type: 'time' as const,
+               ...xName(periodAxis, 28),
                axisLabel: { color: k.muted, fontSize: 10, formatter: '{yyyy}' } },
       yAxis: { ...(baseOption().yAxis as object), type: 'value' as const, min: 0.5, max: 1,
+               ...yName('AUC / KS', 38),
                axisLabel: { color: k.muted, fontSize: 10 } },
       series: [
         { ...lineSeries({ name: 'AUC', color: accent(),
@@ -90,13 +151,13 @@ export default function BacktestPanel({ r, portfolio }: {
     const v = bt.vintages.filter((x) => x.points.length > 6)
     return {
       ...baseOption(),
-      grid: { left: 44, right: 16, top: 12, bottom: 30 },
+      grid: gridFor({ left: 58, right: 16, top: 12, bottom: 46 }),
       tooltip: crosshairTooltip((x) => `${x.toFixed(2)}%`, (d) => `${d} months on book`),
       xAxis: { ...(baseOption().xAxis as object), type: 'value' as const,
-               name: 'Months on book', nameLocation: 'middle' as const, nameGap: 20,
-               nameTextStyle: { color: k.muted, fontSize: 10 },
+               ...xName('Months on book', 28),
                axisLabel: { color: k.muted, fontSize: 10 } },
       yAxis: { ...(baseOption().yAxis as object), type: 'value' as const,
+               ...yName('Cumulative default rate (%)', 40),
                axisLabel: { color: k.muted, fontSize: 10, formatter: (x: number) => `${x}%` } },
       // Vintage is an ORDERED dimension, so it takes a one-hue ramp. Seventeen
       // categorical hues would be both illegal under the series cap and unreadable.
@@ -109,12 +170,14 @@ export default function BacktestPanel({ r, portfolio }: {
 
   const psi = useMemo(() => ({
     ...baseOption(),
-    grid: { left: 40, right: 16, top: 12, bottom: 28 },
+    grid: gridFor({ left: 54, right: 16, top: 12, bottom: 46 }),
     tooltip: crosshairTooltip((v) => v.toFixed(4), (d) => month(d)),
     xAxis: { ...(baseOption().xAxis as object), type: 'time' as const,
+             ...xName(periodAxis, 28),
              axisLabel: { color: k.muted, fontSize: 10, formatter: '{yyyy}' } },
     yAxis: { ...(baseOption().yAxis as object), type: 'value' as const, min: 0,
              max: (v: { max: number }) => Math.max(0.3, v.max * 1.15),
+             ...yName('PSI', 38),
              axisLabel: { color: k.muted, fontSize: 10 } },
     series: [{
       ...lineSeries({ name: 'Score PSI', color: accent(),
@@ -122,9 +185,11 @@ export default function BacktestPanel({ r, portfolio }: {
       markLine: {
         silent: true, symbol: 'none',
         lineStyle: { color: k.muted, width: 1, type: [3, 3] as number[] },
-        label: { color: k.muted, fontSize: 9, position: 'insideEndTop' as const },
-        data: [{ yAxis: 0.10, label: { formatter: 'some shift' } },
-               { yAxis: 0.25, label: { formatter: 'unstable' } }],
+        label: { color: k.muted, fontSize: 9 },
+        data: [{ yAxis: 0.10,
+                 label: { formatter: '0.10 some shift', position: 'insideStartTop' as const } },
+               { yAxis: 0.25,
+                 label: { formatter: '0.25 unstable', position: 'insideEndTop' as const } }],
       },
     }],
   }), [bt, theme])
@@ -154,14 +219,17 @@ export default function BacktestPanel({ r, portfolio }: {
       <Card>
         <CardHead
           title="Actual against predicted, by performance date"
-          subtitle="Quarterly · the shaded band is the Jeffreys 95% credible interval of the realised rate"
-          caption="The headline backtest. The model is fitted only on months to the left of the boundary; everything to the right is a period it never saw."
+          subtitle={`${bt.cohorts.length} points · median ${medianEvents} defaults behind each one`
+            + ' · the shaded band is the Jeffreys 95% credible interval of the realised rate'}
+          caption="The model is fitted on months to the left of the boundary only. Months to the right were not used in estimation."
           methodology="default-rate"
+          right={<FreqToggle freq={freq} setFreq={setFreq}
+                             busy={alt.isFetching} available={!!request} />}
         />
         <Legend items={[{ name: 'Actual', color: accent() },
                         { name: 'Predicted', color: series(2, m) }]} />
         <EChart option={actualVsPredicted} height={240}
-          ariaLabel="Actual against predicted default rate by performance date"
+          ariaLabel="Actual against predicted default rate by performance date" externalLegend
           table={{ columns: ['Period', 'Rows', 'Events', 'Actual (%/yr)', 'Predicted (%/yr)', 'Calibrated'],
                    rows: bt.cohorts.map((c) => [c.period, c.n, c.events,
                      Number(c.actual_annual.toFixed(3)), Number(c.predicted_annual.toFixed(3)),
@@ -172,9 +240,9 @@ export default function BacktestPanel({ r, portfolio }: {
         <Card>
           <CardHead title="Discriminatory power over time"
             subtitle="AUC and KS per cohort"
-            caption="One AUC hides this. A model whose ranking power decays through the cycle will still show a respectable headline number." />
+            caption="AUC computed within each period separately. A single pooled AUC averages over these and does not show whether discrimination changes through the cycle." />
           <Legend items={[{ name: 'AUC', color: accent() }, { name: 'KS', color: series(1, m) }]} />
-          <EChart option={discrimination} height={200} ariaLabel="AUC and KS by cohort"
+          <EChart option={discrimination} height={200} ariaLabel="AUC and KS by cohort" externalLegend
             table={{ columns: ['Period', 'AUC', 'KS', 'Gini', 'Rows'],
                      rows: bt.cohorts.map((c) => [c.period, Number((c.auc || 0).toFixed(4)),
                        Number((c.ks || 0).toFixed(4)), Number((c.gini || 0).toFixed(4)), c.n]) }} />
@@ -193,11 +261,11 @@ export default function BacktestPanel({ r, portfolio }: {
       <Card>
         <CardHead title="Vintage curves"
           subtitle={`Cumulative default rate by months on book · ${bt.vintages.length} origination vintages`}
-          caption="Each line is one origination year, aged. Later vintages sitting above earlier ones at the same age means underwriting loosened — or the economy turned." />
+          caption="Each line is one origination year, plotted against months on book. Differences between vintages at the same age reflect underwriting standards, the economic conditions those loans aged through, or both." />
         <Legend kind="line"
           items={bt.vintages.filter((x) => x.points.length > 6)
             .map((x, i, arr) => ({ name: String(x.vintage), color: ordinal(i, arr.length) }))} />
-        <EChart option={vintages} height={230} ariaLabel="Vintage curves"
+        <EChart option={vintages} height={230} ariaLabel="Vintage curves" externalLegend
           table={{ columns: ['Vintage', 'Months on book', 'Cumulative default (%)', 'Rows'],
                    rows: bt.vintages.flatMap((v) => v.points.map((p) =>
                      [v.vintage, p.mob, Number(p.cumulative_default_pct.toFixed(3)), p.n])) }} />
@@ -207,7 +275,7 @@ export default function BacktestPanel({ r, portfolio }: {
         <CardHead
           title="Segment backtest"
           subtitle="Where does the model break?"
-          caption="Finding a segment the model underperforms on, and saying so, is more persuasive than a clean chart. It is also the first thing a validator looks for."
+          caption="Discrimination measured separately within each segment. Segments with materially lower AUC than the book indicate where the model performs least well."
           right={
             <select value={segCol} onChange={(e) => setSegCol(e.target.value)}
               className="rounded-ctl border border-hairline bg-sunken px-2 py-1 text-xs text-ink">

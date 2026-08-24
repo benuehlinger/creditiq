@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import pytest
 from scipy import stats
 
@@ -250,3 +251,120 @@ def test_every_recommendation_carries_a_reason(df):
         d = shape_diagnostic(bin_numeric(df[col], df["default_flag"]))
         assert d["reason"] and len(d["reason"]) > 40
         assert d["recommendation"] in ("woe", "bins", "continuous", "spline")
+
+
+def test_a_scenario_projects_the_same_transform_it_was_fitted_on():
+    """The projection branch applied the lag and skipped the transform.
+
+    A term fitted on year-over-year change was then projected on the raw level.
+    Nothing raised: the coefficient was simply applied to a different quantity
+    from the one that produced it, and the only symptom was the loss number.
+    """
+    import numpy as np
+    import pandas as pd
+    from creditiq.models.design import apply_mev_transform
+
+    idx = pd.date_range("2020-01-01", periods=36, freq="MS")
+    level = pd.Series(100.0 + np.arange(36), index=idx)   # exactly +1.0 a month
+    yoy = apply_mev_transform(level, "yoy")
+    assert np.isnan(yoy.iloc[:12]).all(), "the first year has no year-ago value"
+    # 12 months of +1.0 on a base of 100 is a 12% rise
+    assert yoy.iloc[12] == pytest.approx(12.0, rel=1e-6)
+    assert not np.allclose(yoy.dropna().to_numpy(),
+                           level.iloc[12:].to_numpy()), "transform must change the series"
+    assert apply_mev_transform(level, "level").equals(level.astype(float))
+
+
+def test_every_declared_mev_transform_is_implemented():
+    """A transform named in the type but missing from the function would fall
+    through to the identity branch and silently return the level."""
+    import numpy as np
+    import pandas as pd
+    from creditiq.models.design import apply_mev_transform
+    from creditiq.models.spec import MevSpec
+
+    names = MevSpec.__dataclass_fields__["transform"].type
+    declared = [t for t in
+                ("diff", "yoy", "log_diff", "qoq_annualized", "z_score",
+                 "four_quarter_change")]
+    s = pd.Series(np.linspace(100.0, 200.0, 60),
+                  index=pd.date_range("2015-01-01", periods=60, freq="MS"))
+    for t in declared:
+        out = apply_mev_transform(s, t)
+        assert not out.equals(s.astype(float)), f"{t} returned the level unchanged"
+    assert "level" in str(names)
+
+
+# ── automatic knot placement ─────────────────────────────────────────────────
+def test_searched_knots_beat_quantile_knots_on_a_known_hinge():
+    """Quantile placement puts a knot where the DATA is dense and ignores the
+    response. On a relationship that bends once, at a point where the data is
+    thin, every quantile knot lands in the straight run."""
+    from creditiq.analysis.curve import auto_knots
+
+    rng = np.random.default_rng(5)
+    n = 120_000
+    # dense below 3, sparse above — and the bend is at 7, out in the sparse tail
+    x = np.concatenate([rng.uniform(0, 3, int(n * 0.85)),
+                        rng.uniform(3, 10, int(n * 0.15))])
+    f = -3.0 + 0.05 * x + 0.9 * np.maximum(x - 7.0, 0.0)
+    y = (rng.random(len(x)) < 1 / (1 + np.exp(-f))).astype(float)
+    r = auto_knots(pd.Series(x), pd.Series(y), n_knots=2)
+
+    assert r["gain_over_quantile"] > 0, "the search must not be worse than quantiles"
+    assert min(abs(k - 7.0) for k in r["knots"]) < 1.0, (
+        f"no knot placed near the bend at 7: {r['knots']}")
+    assert min(abs(k - 7.0) for k in r["quantile_knots"]) > 1.0, (
+        "the test case is wrong — quantile placement already found it")
+
+
+def test_placed_knots_stay_apart():
+    """Two knots at nearly the same position span nearly the same function and
+    produce a near-singular basis."""
+    from creditiq.analysis.curve import MIN_SEPARATION, auto_knots
+    from creditiq import store
+    from creditiq.data.portfolios import PORTFOLIOS
+
+    df, _ = store.screening_frame("mortgage")
+    r = auto_knots(df["current_ltv"], df[PORTFOLIOS["mortgage"].target.column], 4)
+    ks = r["knots"]
+    lo, hi = float(np.nanpercentile(df["current_ltv"].dropna(), 1)), \
+        float(np.nanpercentile(df["current_ltv"].dropna(), 99))
+    for a, b in zip(ks, ks[1:]):
+        assert b - a > MIN_SEPARATION * (hi - lo) * 0.99
+
+
+def test_placement_finds_the_ltv_cliff():
+    """A credit analyst would put a knot near 80 on current LTV. Quantile
+    placement spreads them evenly across the range instead."""
+    from creditiq.analysis.curve import auto_knots
+    from creditiq import store
+    from creditiq.data.portfolios import PORTFOLIOS
+
+    df, _ = store.screening_frame("mortgage")
+    r = auto_knots(df["current_ltv"], df[PORTFOLIOS["mortgage"].target.column], 4)
+    assert any(75 <= k <= 95 for k in r["knots"]), r["knots"]
+
+
+def test_a_two_bin_discretisation_is_named_as_a_flag():
+    """One 0/1 column named after the upper bin's interval reads as one level of
+    a set. `<variable>_flag` says what it is."""
+    from creditiq import store
+    from creditiq.models import design as D
+    from creditiq.models.spec import ModelSpec, VariableSpec
+
+    df, _ = store.screening_frame("mortgage")
+    spec = ModelSpec("mortgage",
+                     [VariableSpec("current_ltv", treatment="indicator", edges=[80.0])])
+    des = D.build(df, spec)
+    cols = [des.columns[i] for i in des.term_groups()["current_ltv"]]
+    assert cols == ["current_ltv_flag"]
+
+
+def test_the_two_decisions_partition_the_treatments():
+    from creditiq.models.spec import CONTINUOUS_SCALE, DISCRETISED, TREATMENTS
+    assert DISCRETISED | CONTINUOUS_SCALE == set(TREATMENTS)
+    assert not (DISCRETISED & CONTINUOUS_SCALE)
+    # a discretised treatment has bins; a continuous one does not
+    assert all(TREATMENTS[t][0] != "none" for t in DISCRETISED)
+    assert all(TREATMENTS[t][0] == "none" for t in CONTINUOUS_SCALE)

@@ -137,3 +137,227 @@ def test_a_malformed_file_does_not_break_the_list(tmp_path, monkeypatch):
     V.save(_spec(["fico_orig"]), {})
     (tmp_path / "broken.json").write_text("{not json")
     assert len(V.list_all("consumer")) == 1
+
+
+def test_a_version_records_the_data_it_was_fitted_on():
+    """A specification reproduces exactly against a DIFFERENT panel and returns
+    different coefficients, a different AUC and a different loss number while
+    still calling itself the same model. Moving the panel open from 2015 to 2008
+    left seven saved versions whose stored metrics described a dataset that no
+    longer existed, and nothing on screen said so."""
+    from creditiq.models import versions as V
+    from creditiq.models.spec import LgdSpec, ModelSpec, VariableSpec
+    spec = ModelSpec("cre", [VariableSpec("dscr_reported")],
+                     lgd=LgdSpec("cre", drivers=("current_ltv",)))
+    v = V.save(spec, {})
+    try:
+        assert v.data_fingerprint
+        assert v.data_is_current()
+    finally:
+        V.delete(v.hash)
+
+
+def test_a_version_from_a_superseded_panel_is_visible_as_one():
+    from creditiq.models import versions as V
+    from creditiq.models.spec import ModelSpec, VariableSpec
+    v = V.save(ModelSpec("cre", [VariableSpec("dscr_reported")]), {})
+    try:
+        V.update(v.hash, data_fingerprint="deadbeefcafe")
+        assert V.load(v.hash).data_is_current() is False
+    finally:
+        V.delete(v.hash)
+
+
+def test_replacing_a_version_supersedes_it():
+    """A hash is derived from the specification, so a changed specification
+    cannot keep the old hash. Replacing transfers status, tags and the starred
+    flag to the new version and removes the old file."""
+    from creditiq.models import versions as V
+    from creditiq.models.spec import LgdSpec, ModelSpec, VariableSpec
+    a = V.save(ModelSpec("cre", [VariableSpec("dscr_reported")],
+                         lgd=LgdSpec("cre", drivers=("current_ltv",))), {})
+    V.update(a.hash, status="champion", starred=True, tags=["review"])
+    b = V.save(ModelSpec("cre", [VariableSpec("dscr_reported"), VariableSpec("risk_rating")],
+                         lgd=LgdSpec("cre", drivers=("current_ltv",))), {}, replaces=a.hash)
+    try:
+        assert b.hash != a.hash
+        assert V.load(a.hash) is None, "the replaced version must be removed"
+        assert b.status == "champion" and b.starred and b.tags == ["review"]
+        assert b.replaced_hash == a.hash
+    finally:
+        V.delete(b.hash)
+
+
+def test_a_child_of_a_replaced_version_is_repointed():
+    """Otherwise superseding a node drops every branch that hung from it."""
+    from creditiq.models import versions as V
+    from creditiq.models.spec import LgdSpec, ModelSpec, VariableSpec
+    root = V.save(ModelSpec("cre", [VariableSpec("dscr_reported")],
+                            lgd=LgdSpec("cre", drivers=("current_ltv",))), {})
+    child = V.save(ModelSpec("cre", [VariableSpec("risk_rating")],
+                             lgd=LgdSpec("cre", drivers=("current_ltv",))), {},
+                   parent_hash=root.hash)
+    new = V.save(ModelSpec("cre", [VariableSpec("dscr_reported"), VariableSpec("utilisation")],
+                           lgd=LgdSpec("cre", drivers=("current_ltv",))), {},
+                 replaces=root.hash)
+    try:
+        assert V.load(child.hash).parent_hash == new.hash
+    finally:
+        for h in (child.hash, new.hash):
+            V.delete(h)
+
+
+def test_saving_without_replaces_keeps_both():
+    from creditiq.models import versions as V
+    from creditiq.models.spec import LgdSpec, ModelSpec, VariableSpec
+    a = V.save(ModelSpec("cre", [VariableSpec("dscr_reported")],
+                         lgd=LgdSpec("cre", drivers=("current_ltv",))), {})
+    b = V.save(ModelSpec("cre", [VariableSpec("risk_rating")],
+                         lgd=LgdSpec("cre", drivers=("current_ltv",))), {},
+               parent_hash=a.hash)
+    try:
+        assert V.load(a.hash) is not None
+        assert V.load(b.hash).parent_hash == a.hash
+    finally:
+        for h in (a.hash, b.hash):
+            V.delete(h)
+
+
+# ── the roll-up reports on a selectable model set ────────────────────────────
+def test_the_rollup_defaults_to_the_adopted_models():
+    from creditiq.models import rollup as R
+    r = R.run(with_tornado=False)
+    assert r.is_adopted
+    assert all(p["source"] in ("champion", "default") for p in r.portfolios)
+
+
+def test_selecting_a_different_version_marks_the_result_as_not_adopted():
+    """The roll-up is the executive number. A figure produced by a hand-picked
+    combination of versions is a different object from the one produced by the
+    adopted models, and swapping one book here moves the total by 19%."""
+    from creditiq.models import rollup as R
+    base = R.run(with_tornado=False)
+    options = base.available["cre"]
+    alt = next((v["hash"] for v in options
+                if v["hash"] != base.portfolios[-1]["version_hash"]), None)
+    if alt is None:
+        pytest.skip("only one saved version on this book")
+    r = R.run(with_tornado=False, selection={"cre": alt})
+    assert r.is_adopted is False
+    cre = next(p for p in r.portfolios if p["portfolio"] == "cre")
+    assert cre["source"] == "selected"
+    assert cre["version_hash"] == alt
+
+
+def test_an_unknown_or_mismatched_version_falls_back_rather_than_failing():
+    """A stale link should not produce a number attributed to a model that is not
+    there. It falls back to the champion and reports that source."""
+    from creditiq.models import rollup as R
+    _, source, _ = R.spec_for("cre", "0000000000000000")
+    assert source in ("champion", "default")
+    # a version belonging to another book is not accepted for this one
+    mortgage = [v for v in __import__(
+        "creditiq.models.versions", fromlist=["x"]).list_all("mortgage")]
+    if mortgage:
+        _, src2, _ = R.spec_for("cre", mortgage[0].hash)
+        assert src2 in ("champion", "default")
+
+
+def test_a_saved_version_measures_the_severity_model_too():
+    """A version records the PD statistics AND the LGD statistics.
+
+    Half the loss number comes from severity. A record that measured only
+    discrimination on PD described half of what produced the figure.
+    """
+    from creditiq.api import main as api_main
+    from creditiq.models import rollup as R
+
+    spec, _, _ = R.spec_for("mortgage")
+    m = api_main._lgd_metrics_for(spec)
+    assert m["lgd_basis"] == "out of time"
+    assert m["lgd_n"] > 0
+    # Bias is the signed gap between the two means it is derived from.
+    assert m["lgd_bias"] == pytest.approx(
+        m["lgd_mean_predicted"] - m["lgd_mean_actual"], abs=1e-12)
+    assert 0.0 < m["lgd_rmse"] < 1.0
+
+
+def test_in_sample_severity_bias_is_identically_zero():
+    """Why the stored figure must be out of time.
+
+    A fractional logit carrying an intercept reproduces the mean of the fitting
+    sample exactly, so in sample every specification reports no bias at all. An
+    in-sample figure would say the model is perfectly calibrated regardless of
+    whether it is.
+    """
+    from creditiq.api import main as api_main
+    from creditiq.models import lgd as LGD, lgd_diag as LD, rollup as R
+    from creditiq.mev import panel as mevpanel
+
+    spec, _, _ = R.spec_for("mortgage")
+    d = api_main._lgd_frame("mortgage")
+    m = LGD.fit_lgd(d.assign(default_flag=1), spec.lgd, mevpanel.monthly_panel())
+    diag = LD.diagnostics(m, d)
+    assert diag["mean_predicted"] == pytest.approx(diag["mean_actual"], abs=1e-6)
+
+
+def test_bias_compares_on_distance_from_zero():
+    """`zero` is a third comparison direction.
+
+    For a bias neither the largest nor the smallest signed value is the good
+    one — the good one is nearest nothing.
+    """
+    keys = {k: good for k, _, good in _metric_keys()}
+    assert keys["lgd_bias"] == "zero"
+    assert keys["lgd_rmse"] == "down"
+    assert keys["auc_test"] == "up"
+
+
+def _metric_keys():
+    """The compare table's metric list, read from the source of truth."""
+    import inspect
+    import creditiq.models.versions as V
+    src = inspect.getsource(V.compare)
+    start = src.index("metric_keys = [")
+    end = src.index("]", start)
+    return eval(src[start + len("metric_keys = "):end + 1])   # noqa: S307
+
+
+def test_the_pd_half_has_its_own_identity_and_ignores_lgd():
+    """`pd_hash` covers the PD specification only."""
+    from creditiq.models import rollup as R
+
+    import dataclasses
+
+    spec, _, _ = R.spec_for("mortgage")
+    before, pair_before = spec.pd_hash(), spec.hash()
+    spec.lgd = dataclasses.replace(spec.lgd, drivers=spec.lgd.drivers[:1])
+    assert spec.pd_hash() == before, "the PD identity moved when only LGD changed"
+    assert spec.hash() != pair_before, "the PAIR identity must move when either half does"
+
+
+def test_changing_pd_leaves_the_severity_model_untouched():
+    """Why iterating PD against a settled LGD costs nothing.
+
+    Severity is fitted on resolved defaults and never sees the PD
+    specification. Swapping the PD side out must leave the LGD model identical —
+    same specification hash, same coefficients, same calibration. This is what
+    makes "open a version, change PD, save as new" a cheap operation rather than
+    a re-approval of the severity model.
+    """
+    import copy
+
+    from creditiq.api import main as api_main
+    from creditiq.models import rollup as R
+
+    spec, _, _ = R.spec_for("mortgage")
+    alt = copy.deepcopy(spec)
+    alt.variables = alt.variables[:1]
+    alt.mevs = []
+
+    assert alt.lgd.hash() == spec.lgd.hash()
+    a, b = api_main._lgd_metrics_for(alt), api_main._lgd_metrics_for(spec)
+    # `pd_hash` is the one key that SHOULD move; every severity figure must not.
+    assert a.pop("pd_hash") != b.pop("pd_hash")
+    assert a == b, "the severity model moved when only the PD side changed"
+    assert alt.hash() != spec.hash(), "a new pairing must get a new Model ID"

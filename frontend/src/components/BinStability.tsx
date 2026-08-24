@@ -4,7 +4,7 @@ import { api } from '../lib/api'
 import { Card, CardHead, Skeleton, StatusPill } from './ui'
 import EChart from '../charts/EChart'
 import Legend from '../charts/Legend'
-import { baseOption, crosshairTooltip, lineSeries, markLineAt } from '../charts/base'
+import { baseOption, crosshairTooltip, lineSeries, markLineAt, xName, yName, gridFor } from '../charts/base'
 import { ink, mode, ordinal, status } from '../design/tokens'
 import { month } from '../lib/format'
 import { useUi } from '../lib/store'
@@ -48,11 +48,13 @@ export default function BinStability({ portfolio, column, edges }: {
     return {
       option: {
         ...baseOption(),
-        grid: { left: 48, right: 14, top: 10, bottom: 26 },
+        grid: gridFor({ left: 58, right: 14, top: 10, bottom: 44 }),
         tooltip: crosshairTooltip((v) => `${v.toFixed(2)}%`, (d) => month(d)),
         xAxis: { ...(baseOption().xAxis as object), type: 'time' as const,
+                 ...xName('Performance quarter', 26),
                  axisLabel: { color: k.muted, fontSize: 10, formatter: '{yyyy}' } },
         yAxis: { ...(baseOption().yAxis as object), type: 'value' as const,
+                 ...yName('Event rate (% / yr)', 40),
                  axisLabel: { color: k.muted, fontSize: 10, formatter: (v: number) => `${v}%` } },
         series: series.map((s, i) =>
           i === 0 ? { ...s, markLine: markLineAt('2020-03-01', '', status.serious) } : s),
@@ -71,11 +73,13 @@ export default function BinStability({ portfolio, column, edges }: {
     const pts = psi.data.points.map((p) => [p.period, p.psi] as [string, number])
     return {
       ...baseOption(),
-      grid: { left: 40, right: 14, top: 10, bottom: 26 },
+      grid: gridFor({ left: 54, right: 14, top: 10, bottom: 44 }),
       tooltip: crosshairTooltip((v) => v.toFixed(4), (d) => month(d)),
       xAxis: { ...(baseOption().xAxis as object), type: 'time' as const,
+               ...xName('Performance quarter', 26),
                axisLabel: { color: k.muted, fontSize: 10, formatter: '{yyyy}' } },
       yAxis: { ...(baseOption().yAxis as object), type: 'value' as const,
+               ...yName('PSI', 38),
                axisLabel: { color: k.muted, fontSize: 10 } },
       series: [{
         ...lineSeries({ name: 'PSI', data: pts, color: 'var(--accent)' }),
@@ -100,13 +104,14 @@ export default function BinStability({ portfolio, column, edges }: {
         <CardHead
           title="Event rate over time, by bin"
           subtitle={`${column} · quarterly · cells under 250 account-months are dropped as unestimable`}
-          caption="Do the bins stay in rank order through the cycle? Lines that cross mean the variable separates in one period and not another — which a static bad-rate chart cannot show."
+          caption="Event rate per bin, by period. Bins that hold their rank order separate the population consistently. Lines that cross indicate the variable discriminates in some periods and not others."
         />
         {biv.isLoading || !option ? <Skeleton className="h-[200px]" /> : (
           <>
             <Legend items={legend} kind="line" />
             <EChart option={option} height={196} table={table}
                     ariaLabel={`${column} event rate over time by bin`}
+                    externalLegend
                     refetching={biv.isFetching && !biv.isLoading} />
           </>
         )}
@@ -116,7 +121,7 @@ export default function BinStability({ portfolio, column, edges }: {
         <CardHead
           title="Population stability"
           subtitle={`PSI against the first 12 months`}
-          caption="Whether the population itself has drifted out of the bins the variable was fitted on. Time-instability is often the real reason to drop a variable."
+          caption="Population stability index against the first twelve months. It measures whether the distribution of the variable across its bins has moved since the model was fitted."
           right={
             <StatusPill severity={worstPsi > 0.25 ? 'critical' : worstPsi > 0.10 ? 'warning' : 'good'}>
               max {worstPsi.toFixed(3)}

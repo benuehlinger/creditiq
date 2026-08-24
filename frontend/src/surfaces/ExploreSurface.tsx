@@ -4,11 +4,13 @@ import { useQuery } from '@tanstack/react-query'
 import { api, type PortfolioKey, type ScreenRow } from '../lib/api'
 import { Card, CardHead, Skeleton, StatusPill } from '../components/ui'
 import BinningEditor from '../components/BinningEditor'
+import VariableViews from '../components/VariableViews'
 import SelectionTray from '../components/SelectionTray'
 import CorrelationPanel from '../components/CorrelationPanel'
 import BinStability from '../components/BinStability'
 import TreatmentControl from '../components/TreatmentControl'
-import { useUi } from '../lib/store'
+import { useUi, NONE, NO_MAP } from '../lib/store'
+import { isDiscretised } from '../lib/api'
 import { num, pct } from '../lib/format'
 import { diverging, mode } from '../design/tokens'
 
@@ -16,12 +18,20 @@ type Tab = 'variables' | 'correlation'
 
 export default function ExploreSurface() {
   const { portfolio = 'consumer' } = useParams()
-  const treatments = useUi((s) => s.treatments[portfolio as PortfolioKey] ?? {})
+  const treatments = useUi((s) => s.treatments[portfolio as PortfolioKey] ?? NO_MAP)
   const setTreatment = useUi((s) => s.setTreatment)
+  const knots = useUi((s) => s.knots[portfolio as PortfolioKey] ?? NO_MAP)
+  const picked = useUi((s) => s.selectedVariables[portfolio as PortfolioKey] ?? NONE) as string[]
+  const toggleVariable = useUi((s) => s.toggleVariable)
+  const setKnots = useUi((s) => s.setKnots)
+
   const [tab, setTab] = useState<Tab>('variables')
   const [column, setColumn] = useState<string | null>(null)
   const [edges, setEdges] = useState<number[] | undefined>(undefined)
   const [maxBins, setMaxBins] = useState(8)
+  // Which of the two decisions this variable is currently on. Drives which
+  // editor and which diagnostics the page shows.
+  const treatment = (column ? treatments[column] : undefined) ?? 'woe'
   const [nKnots, setNKnots] = useState(4)
 
   const screen = useQuery({ queryKey: ['screen', portfolio], queryFn: () => api.screen(portfolio) })
@@ -52,6 +62,11 @@ export default function ExploreSurface() {
   return (
     <div className="p-4">
       <div className="mb-3 flex items-center gap-1">
+        <span className="mr-2 text-xs font-semibold text-ink">PD model — Explore</span>
+        <span className="mr-3 text-tiny text-ink-muted">
+          Candidate variables for the probability of default model, screened on
+          account-months.
+        </span>
         {(['variables', 'correlation'] as Tab[]).map((t) => (
           <button key={t} onClick={() => setTab(t)}
             className={`rounded-ctl px-3 py-1 text-xs font-medium capitalize transition-colors ${
@@ -67,6 +82,8 @@ export default function ExploreSurface() {
       ) : (
         <div className="grid gap-3 lg:grid-cols-[300px_minmax(0,1fr)_260px]">
           <IvRanking rows={screen.data!.rows} selected={column} onSelect={setColumn}
+                     picked={picked}
+                     onToggle={(c) => toggleVariable(portfolio as PortfolioKey, c)}
                      floors={screen.data!.floors} nullNote={screen.data!.null_note} />
 
           <div className="min-w-0 space-y-3">
@@ -80,57 +97,115 @@ export default function ExploreSurface() {
                 )}
                 <Card>
                   <CardHead
-                    title={`Binning — ${binning.data.column}`}
-                    subtitle={`${binning.data.bins.length} bins · ${num(binning.data.n_total)} account-months · ${num(binning.data.n_events)} events`}
-                    caption="Bin height is the event rate; fill is the weight of evidence, blue for safer and magenta for riskier. The grey footer band is each bin's share of the population."
+                    title={isDiscretised(treatment)
+                      ? `Binning — ${binning.data.column}`
+                      : `Treatment — ${binning.data.column}`}
+                    subtitle={isDiscretised(treatment)
+                      ? `${binning.data.bins.length} bins · ${num(binning.data.n_total)} account-months · ${num(binning.data.n_events)} events`
+                      : `${num(binning.data.n_total)} account-months · ${num(binning.data.n_events)} events`}
+                    caption={isDiscretised(treatment)
+                      ? "Bin height is the event rate; fill is the weight of evidence, blue for safer and magenta for riskier. The grey footer band is each bin's share of the population."
+                      : undefined}
                     right={
                       <div className="flex items-center gap-3">
-                        <div className="text-right">
-                          <div className="text-micro text-ink-muted">Information value</div>
-                          <div className="text-lg font-semibold tabular-nums text-accent">
-                            {binning.data.iv.toFixed(4)}
+                        {/* The natural place to commit: look at the shape, then
+                            add it. Previously only the tray's suggestion chips
+                            could add a variable, so anything unsuggested was
+                            unreachable. */}
+                        <button
+                          onClick={() => toggleVariable(portfolio as PortfolioKey,
+                                                        binning.data!.column)}
+                          className={`rounded-ctl px-2.5 py-1 text-micro font-medium ${
+                            picked.includes(binning.data!.column)
+                              ? 'border border-accent text-accent'
+                              : 'bg-accent text-white'}`}>
+                          {picked.includes(binning.data!.column)
+                            ? '− Remove from specification' : '+ Add to specification'}
+                        </button>
+                        {/* Information value and the bin-count stepper describe a
+                            discretisation. Shown beside a spline they invite a
+                            comparison that does not exist. */}
+                        {isDiscretised(treatment) && (
+                          <div className="text-right">
+                            <div className="text-micro text-ink-muted">Information value</div>
+                            <div className="text-lg font-semibold tabular-nums text-accent">
+                              {binning.data.iv.toFixed(4)}
+                            </div>
                           </div>
-                        </div>
-                        <div className="flex flex-col gap-1">
-                          <button onClick={() => { setEdges(undefined); setMaxBins(8) }}
-                            className="rounded border border-hairline px-2 py-0.5 text-micro text-ink-secondary hover:text-ink">
-                            Auto-bin
-                          </button>
-                          <div className="flex items-center gap-1">
-                            <button onClick={() => { setEdges(undefined); setMaxBins((v) => Math.max(3, v - 1)) }}
-                              className="rounded border border-hairline px-1.5 py-0.5 text-micro text-ink-secondary hover:text-ink">−</button>
-                            <span className="text-micro tabular-nums text-ink-muted">{maxBins}</span>
-                            <button onClick={() => { setEdges(undefined); setMaxBins((v) => Math.min(15, v + 1)) }}
-                              className="rounded border border-hairline px-1.5 py-0.5 text-micro text-ink-secondary hover:text-ink">+</button>
+                        )}
+                        {isDiscretised(treatment) && (
+                          <div className="flex flex-col gap-1">
+                            <button onClick={() => { setEdges(undefined); setMaxBins(8) }}
+                              className="rounded border border-hairline px-2 py-0.5 text-micro text-ink-secondary hover:text-ink">
+                              Auto-bin
+                            </button>
+                            <div className="flex items-center gap-1">
+                              <button onClick={() => { setEdges(undefined); setMaxBins((v) => Math.max(3, v - 1)) }}
+                                className="rounded border border-hairline px-1.5 py-0.5 text-micro text-ink-secondary hover:text-ink">−</button>
+                              <span className="text-micro tabular-nums text-ink-muted">{maxBins}</span>
+                              <button onClick={() => { setEdges(undefined); setMaxBins((v) => Math.min(15, v + 1)) }}
+                                className="rounded border border-hairline px-1.5 py-0.5 text-micro text-ink-secondary hover:text-ink">+</button>
+                            </div>
                           </div>
-                        </div>
+                        )}
                       </div>
                     }
                   />
                   <TreatmentControl
-                    value={treatments[binning.data.column] ?? 'woe'}
+                    value={treatment}
                     result={binning.data}
                     onChange={(t) => setTreatment(portfolio as PortfolioKey,
                                                   binning.data!.column, t)}
                     nKnots={nKnots} onKnots={setNKnots} />
-                  {binning.data.kind === 'numeric' && binning.data.domain ? (
-                    <BinningEditor result={binning.data} pending={binning.isFetching}
-                                   onEdgesChange={(e) => setEdges(e)} />
+                  {/* The editor follows the decision. A binning editor is an
+                      editor for a decision a spline does not make, and leaving
+                      it on screen for a continuous treatment was the single most
+                      confusing thing on this page. */}
+                  {isDiscretised(treatment) ? (
+                    <>
+                      {binning.data.kind === 'numeric' && binning.data.domain ? (
+                        <BinningEditor result={binning.data} pending={binning.isFetching}
+                                       onEdgesChange={(e) => setEdges(e)} />
+                      ) : (
+                        <CategoricalNote b={binning.data} />
+                      )}
+                      <MonotonicityRow b={binning.data} />
+                    </>
                   ) : (
-                    <CategoricalNote b={binning.data} />
+                    <p className="px-4 pb-2.5 text-micro text-ink-muted">
+                      {treatment === 'continuous'
+                        ? 'No binning and no information value — both are properties of a discretisation.'
+                        : 'Knots are placed on the relationship panel below.'}
+                    </p>
                   )}
-                  <MonotonicityRow b={binning.data} />
                 </Card>
 
-                <BinStability portfolio={portfolio} column={binning.data.column}
-                              edges={binning.data.edges ?? undefined} />
+                {/* The view that decides the treatment. It sits ABOVE stability
+                    and the bin table because it answers the first question —
+                    what shape is this — and those two answer later ones. */}
+                <VariableViews
+                  portfolio={portfolio}
+                  column={binning.data.column}
+                  treatment={treatment}
+                  knots={knots[binning.data.column]}
+                  nKnots={nKnots}
+                  onKnots={(k) => setKnots(portfolio as PortfolioKey,
+                                           binning.data!.column, k)}
+                />
 
+                {isDiscretised(treatment) && (
+                  <BinStability portfolio={portfolio} column={binning.data.column}
+                                edges={binning.data.edges ?? undefined} />
+                )}
+
+                {isDiscretised(treatment) && (
                 <Card>
                   <CardHead title="Bin detail"
                     subtitle="Weight of evidence and information value contribution per bin"
-                    caption="A bin holding under 2% of the book gives an unstable weight — merge it into a neighbour." />
+                    caption="Weight of evidence and its contribution to information value, per bin. Bins holding under 2% of the population produce unstable weights." />
                   <BinTable b={binning.data} />
                 </Card>
+                )}
               </>
             )}
           </div>
@@ -297,9 +372,15 @@ function BinTable({ b }: { b: any }) {
   )
 }
 
-function IvRanking({ rows, selected, onSelect, floors, nullNote }: {
+function IvRanking({ rows, selected, onSelect, floors, nullNote, picked, onToggle }: {
   rows: ScreenRow[]; selected: string | null; onSelect: (c: string) => void
   floors: Record<string, number>; nullNote: string
+  /** Columns currently in the specification, and the control to change that.
+   *  Clicking a row opens it for inspection; adding it is a separate action, so
+   *  a variable can be examined without being committed to. Every row carries
+   *  the control — the suggestion chips in the tray used to be the only way in,
+   *  which meant anything not suggested could not be selected at all. */
+  picked: string[]; onToggle: (c: string) => void
 }) {
   const [q, setQ] = useState('')
   const [hideLeak, setHideLeak] = useState(false)
@@ -336,7 +417,23 @@ function IvRanking({ rows, selected, onSelect, floors, nullNote }: {
                 className={`w-full border-b border-hairline/40 px-3 py-2 text-left transition-colors ${
                   active ? 'bg-accent-soft' : 'hover:bg-sunken/60'}`}>
                 <div className="flex items-center justify-between gap-2">
-                  <span className={`truncate font-mono text-tiny ${active ? 'text-ink' : 'text-ink-secondary'}`}>
+                  <span
+                    role="checkbox"
+                    aria-checked={picked.includes(r.column)}
+                    tabIndex={0}
+                    onClick={(e) => { e.stopPropagation(); onToggle(r.column) }}
+                    onKeyDown={(e) => {
+                      if (e.key === ' ' || e.key === 'Enter') {
+                        e.preventDefault(); e.stopPropagation(); onToggle(r.column)
+                      }
+                    }}
+                    title={picked.includes(r.column)
+                      ? 'Remove from the specification'
+                      : 'Add to the specification'}
+                    className={`h-3.5 w-3.5 shrink-0 cursor-pointer rounded-sm border ${
+                      picked.includes(r.column)
+                        ? 'border-accent bg-accent' : 'border-hairline hover:border-accent'}`} />
+                  <span className={`min-w-0 flex-1 truncate font-mono text-tiny ${active ? 'text-ink' : 'text-ink-secondary'}`}>
                     {r.column}
                   </span>
                   <span className="shrink-0 tnum text-tiny text-ink">
@@ -355,7 +452,7 @@ function IvRanking({ rows, selected, onSelect, floors, nullNote }: {
                   {r.leakage_risk === 'likely' && <StatusPill severity="critical">leakage</StatusPill>}
                   {r.leakage_risk === 'review' && <StatusPill severity="warning">review</StatusPill>}
                   {belowNull && r.leakage_risk === 'none' && (
-                    <span title="Information value is at or below what a variable with no signal would score on this sample.">
+                    <span title="Information value is at or below the value a variable with no relationship to the target scores on a sample of this size.">
                       below null
                     </span>
                   )}

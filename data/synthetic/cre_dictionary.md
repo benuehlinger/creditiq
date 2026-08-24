@@ -4,9 +4,9 @@
 hazard process driven by real FRED macroeconomic history. It is not any
 institution's portfolio and must never be presented as one.
 
-- Accounts: 7,000
-- Account-month rows: 236,195
-- Window: 2015-01 to 2025-12
+- Accounts: 45,000
+- Account-month rows: 1,793,840
+- Window: 2008-01 to 2025-12
 - Target: `default_flag` — Nonaccrual or downgrade to a default grade
 - EAD method: ccf — Revolving and committed facilities. EAD = drawn + CCF x undrawn. The CCF is estimated from this portfolio with the fixed-horizon 12-month cohort method: take a cohort of non-defaulted facilities and observe the drawdown over the twelve months before default. A regulatory-style fixed CCF is available as a toggle. Term loans in the book carry no undrawn commitment and fall back to the amortizing treatment.
 
@@ -59,9 +59,9 @@ institution's portfolio and must never be presented as one.
 | `scheduled_payment` | float64 | 0.0% | Contractual monthly payment, USD. |
 | `dscr_orig` | float64 | 0.0% | Account attribute. |
 | `original_ltv` | float64 | 0.0% | Account attribute. |
-| `noi` | float64 | 15.2% | Account attribute. |
+| `noi` | float64 | 14.7% | Account attribute. |
 | `risk_rating` | float64 | 0.0% | Credit driver. higher raises risk |
-| `lease_rollover_pct` | float64 | 30.0% | Credit driver. higher raises risk |
+| `lease_rollover_pct` | float64 | 29.6% | Credit driver. higher raises risk |
 | `property_type` | object | 0.0% | Categorical credit driver. |
 | `facility_type` | object | 0.0% | Categorical credit driver. |
 | `guarantor_flag` | object | 0.0% | Categorical credit driver. |

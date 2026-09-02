@@ -11,31 +11,28 @@ import { accent, ink, mode, status } from '../design/tokens'
 
 /** The caption and the annotated month are per-portfolio.
  *
- *  A caption is a claim about what the reader is looking at, so it cannot be
- *  generic. The consumer book's story is the 2020 labour shock; the CRE book's is
- *  the commercial property cycle turning after 2022. Pointing at the wrong month
- *  is the kind of detail the room notices. */
+ *  A caption states what the series is and the definition behind it. It does
+ *  not narrate the chart, and it does not explain how the demonstration panel
+ *  was produced: neither is information the reader can act on. The marked month
+ *  differs per book because the cycle that drives each one differs. */
 const STORY: Record<string, { caption: string; mark: [string, string] }> = {
   consumer: {
     caption:
-      'Where the book actually lost money, and when. The 2020 spike is not drawn in — ' +
-      'it follows from the real unemployment path the hazard was generated against, ' +
-      'which reached 14.8%.',
+      'Monthly default rate by performance date. Default is 90+ days past due '
+      + 'or charge-off, with a 3 month outcome window.',
     mark: ['2020-03-01', 'Mar 2020'],
   },
   mortgage: {
     caption:
-      'A secured book runs at roughly a quarter of the consumer loss rate, but it ' +
-      'still carries the 2020 shock — the rate roughly doubles on an annual basis, ' +
-      'and the monthly peak arrives late because the default definition is 180 days ' +
-      'past due, not 90.',
+      'Monthly default rate by performance date. Default is 180+ days past due '
+      + 'or foreclosure referral, so the peak arrives later than on an unsecured book.',
     mark: ['2020-03-01', 'Mar 2020'],
   },
   cre: {
     caption:
-      'The commercial property cycle, not the labour market. Losses are flat through ' +
-      '2022 and then climb as the CRE price index turns down — the office segment ' +
-      'drives most of it. Split by property type on the Explore surface.',
+      'Monthly default rate by performance date. Default is nonaccrual or a '
+      + 'downgrade to a default grade. The rate rises from 2022 with the '
+      + 'commercial property cycle. Property type is available on the Explore stage.',
     mark: ['2022-06-01', 'CRE index peak'],
   },
 }
@@ -99,23 +96,7 @@ export default function DataSurface() {
 
   return (
     <div className="space-y-3 p-4">
-      {/* ── KPI row. Stat tiles, not a grouped bar chart. ── */}
-      <Card>
-        <div className="grid grid-cols-2 divide-x divide-hairline md:grid-cols-5">
-          <StatTile label="Accounts" value={num(info.n_accounts)}
-            explain="Distinct accounts in the book." />
-          <StatTile label="Account-months" value={num(info.n_rows)}
-            explain="Observations. One row per account per performance date — the unit a discrete-time hazard model is fitted on." />
-          <StatTile label="Defaults" value={num(info.n_defaults)}
-            explain={`Months in which the target fired. Definition: ${info.target.description}.`} />
-          <StatTile label="Default rate" value={pct(info.annual_default_rate_pct)} unit="/yr" accent
-            explain="Defaults divided by account-months at risk, multiplied by 12. A hazard, not a stock ratio." />
-          <StatTile label="Data health" value={String(health.data?.score ?? '—')} unit="/ 100"
-            explain="Weighted so a critical structural failure cannot be offset by passing cosmetic checks." />
-        </div>
-      </Card>
-
-      {/* ── the headline chart ── */}
+      {/* ── the headline: one chart, then the figures that describe it ── */}
       <Card>
         <CardHead
           title="Realized default rate by performance date"
@@ -138,6 +119,21 @@ export default function DataSurface() {
             }}
           />
         )}
+      </Card>
+
+      <Card>
+        <div className="grid grid-cols-2 divide-x divide-hairline md:grid-cols-5">
+          <StatTile label="Accounts" value={num(info.n_accounts)}
+            explain="Distinct accounts in the book." />
+          <StatTile label="Account-months" value={num(info.n_rows)}
+            explain="Observations. One row per account per performance date, the unit a discrete-time hazard model is fitted on." />
+          <StatTile label="Defaults" value={num(info.n_defaults)}
+            explain={`Months in which the target fired. Definition: ${info.target.description}.`} />
+          <StatTile label="Default rate" value={pct(info.annual_default_rate_pct)} unit="/yr"
+            explain="Defaults divided by account-months at risk, multiplied by 12. A hazard, not a stock ratio." />
+          <StatTile label="Data health" value={String(health.data?.score ?? '—')} unit="/ 100"
+            explain="Weighted so a critical structural failure cannot be offset by passing cosmetic checks." />
+        </div>
       </Card>
 
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]">
@@ -177,7 +173,7 @@ export default function DataSurface() {
           <CardHead
             title="Column profile"
             subtitle={`${health.data?.columns.length} columns · sorted by role`}
-            caption="Missingness, cardinality and shape for every column. Planted defects carry a note explaining what they are for."
+            caption="Missingness, cardinality and shape for every column."
           />
           <ColumnTable columns={health.data?.columns ?? []} />
         </Card>
@@ -207,7 +203,7 @@ function ColumnTable({ columns }: { columns: ColumnProfile[] }) {
         </thead>
         <tbody>
           {sorted.map((c) => (
-            <tr key={c.name} className="border-b border-hairline/40 hover:bg-sunken/60">
+            <tr key={c.name} className="border-b border-hairline hover:bg-sunken/60">
               <td className="px-3 py-1.5">
                 <div className="flex items-center gap-1.5">
                   <span className="font-mono text-tiny text-ink">{c.name}</span>

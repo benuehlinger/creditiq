@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { Busy } from './FitProgress'
 import type { SeverityFreq, SeverityOverTime as Series, SeverityTimePoint } from '../lib/api'
 import EChart from '../charts/EChart'
 import Legend from '../charts/Legend'
@@ -133,7 +134,7 @@ function FreqToggle({ freq, onFreq, busy }: {
       {([['MS', 'month'], ['QS', 'quarter'], ['YS', 'year']] as const).map(([f, label]) => (
         <button key={f} onClick={() => onFreq(f)} disabled={busy}
           title={f === 'MS'
-            ? 'Group by month — the frequency of the panel. Whether it is readable depends on how many workouts the book resolves; the note below says how many months were too thin to average.'
+            ? 'Group by month, the frequency of the panel. Whether it is readable depends on how many workouts the book resolves; the note below says how many months were too thin to average.'
             : f === 'QS'
               ? 'Group by quarter. Roughly three times the resolutions behind each point, so the interval narrows and a thin book still has a line.'
               : 'Group by year. The coarsest view, and the only readable one on a book that resolves a couple of workouts a month.'}
@@ -143,7 +144,7 @@ function FreqToggle({ freq, onFreq, busy }: {
           {label}
         </button>
       ))}
-      {busy && <span>regrouping…</span>}
+      {busy && <Busy>regrouping</Busy>}
     </span>
   )
 }
@@ -158,7 +159,7 @@ function Coverage({ d }: { d: Series }) {
   if (!d.periods_dropped) return null
   const share = d.periods_dropped / Math.max(d.periods_total, 1)
   return (
-    <p className="px-4 pb-1 text-micro leading-relaxed"
+    <p className="max-w-[88ch] px-4 pb-1 text-micro leading-relaxed"
        style={{ color: share > 0.5 ? 'var(--status-warning)' : 'var(--ink-muted)' }}>
       {num(d.periods_dropped)} of {num(d.periods_total)} {d.period_freq}s are not
       plotted: fewer than {d.min_resolutions} workouts resolved, which is too few to

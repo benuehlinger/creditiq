@@ -82,17 +82,24 @@ def realise_lgd(panel: pd.DataFrame, accounts: pd.DataFrame, spec: PortfolioSpec
         z += 0.13 * np.nan_to_num(u - 5.5, nan=0.0)
     elif spec.key == "mortgage":
         g = mev["hpi_yoy"].reindex(when).to_numpy(float)
-        # falling house prices cut the liquidation value directly
-        z += -0.075 * np.nan_to_num(g - 5.0, nan=0.0)
+        # falling house prices cut the liquidation value directly.
+        # Calibrated 2026-08: at -0.075 the severely adverse path (HPI -16% YoY)
+        # pushed portfolio LGD to 49% in the trough year against a 13% baseline,
+        # and CRE to 61% — severities neither asset class produced even in
+        # 2008-2011, when average realised mortgage LGD peaked near 40% and CRE
+        # near 45%. The slope was halved so the trough lands there; the LTV
+        # channel below was trimmed with it, because current LTV already carries
+        # the same price fall and the two stacked.
+        z += -0.038 * np.nan_to_num(g - 5.0, nan=0.0)
     elif spec.key == "cre":
         g = mev["cre_price_index_yoy"].reindex(when).to_numpy(float)
-        z += -0.060 * np.nan_to_num(g - 3.0, nan=0.0)
+        z += -0.028 * np.nan_to_num(g - 3.0, nan=0.0)
 
     if spec.key == "mortgage":
         cltv = sub["cltv"].to_numpy(float) if "cltv" in sub else sub["current_ltv"].to_numpy(float)
-        z += 0.030 * (cltv - 80.0)
+        z += 0.018 * (cltv - 80.0)
     elif spec.key == "cre":
-        z += 0.028 * (sub["current_ltv"].to_numpy(float) - 65.0)
+        z += 0.016 * (sub["current_ltv"].to_numpy(float) - 65.0)
         g = accounts.set_index("account_id")["guarantor_flag"].reindex(
             sub["account_id"]).to_numpy()
         z += np.where(g == "Y", -0.30, 0.0)

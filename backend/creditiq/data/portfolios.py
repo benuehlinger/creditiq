@@ -128,7 +128,12 @@ def cre_dynamics(state: dict, mev: dict, mev0: dict) -> dict:
 CONSUMER = PortfolioSpec(
     key="consumer",
     label="Consumer installment",
-    n_accounts=50_000,
+    # Three times the accounts at roughly two and a half times the loan size.
+    # An installment book is structurally small at a point in time because the
+    # loans are short and most have amortised away by the as-of date; at 50,000
+    # accounts of $16k this book was a tenth of one percent of firm exposure and
+    # could not be seen on the roll-up at all.
+    n_accounts=150_000,
     accent_slot=1,
     target=TargetDef("default_flag", "90+ days past due or charge-off", 3, "90+ DPD"),
     ead_method="amortizing",
@@ -140,13 +145,13 @@ CONSUMER = PortfolioSpec(
     marginals=[
         Marginal("fico_orig", cp.beta_scaled(5.0, 2.0, 520, 830), 0),
         Marginal("dti", cp.beta_scaled(2.2, 4.0, 3, 55), 1),
-        Marginal("annual_income", cp.lognormal(np.log(72_000), 0.55), 0, 12_000, 900_000),
+        Marginal("annual_income", cp.lognormal(np.log(85_000), 0.55), 0, 15_000, 900_000),
         Marginal("employment_tenure_months", cp.gamma(1.8, 40.0), 0, 0, 480),
         Marginal("revolving_utilization", cp.beta_scaled(1.6, 2.4, 0.0, 1.0), 3),
         Marginal("num_trades", cp.gamma(4.0, 2.5), 0, 0, 60),
         Marginal("inquiries_6m", cp.gamma(1.2, 1.3), 0, 0, 20),
         Marginal("prior_delinq_count", cp.gamma(0.7, 1.1), 0, 0, 15),
-        Marginal("original_balance", cp.lognormal(np.log(16_000), 0.6), 0, 1_500, 100_000),
+        Marginal("original_balance", cp.lognormal(np.log(55_000), 0.6), 0, 5_000, 400_000),
         Marginal("loan_purpose", cp.categorical(
             ["debt_consolidation", "home_improvement", "major_purchase", "medical", "other"],
             [0.42, 0.18, 0.20, 0.08, 0.12])),
@@ -347,9 +352,16 @@ CRE = PortfolioSpec(
     key="cre",
     label="Commercial real estate",
     # Commercial books resolve few workouts, and at 7,000 loans this one filled
-    # SEVEN of 158 months. A large bank's commercial real estate book runs to
-    # tens of thousands of loans, so this is the top of the plausible range
-    # rather than outside it — again at the same default rate.
+    # SEVEN of 158 months. Tens of thousands of loans is the top of the plausible
+    # range rather than outside it, at the same default rate.
+    #
+    # Sized as SMALL-BALANCE commercial: a median commitment near $675k rather
+    # than the $14M of a large-institutional book. At $14M this one book was 96%
+    # of the firm's exposure, so the roll-up was a CRE chart with two invisible
+    # slivers on it. Commitment and net operating income were scaled together,
+    # which leaves loan-to-value, debt service coverage and utilisation exactly
+    # as they were: property value is balance over LTV, and debt service is NOI
+    # over DSCR.
     n_accounts=45_000,
     accent_slot=3,
     target=TargetDef("default_flag", "Nonaccrual or downgrade to a default grade", 3,
@@ -365,11 +377,11 @@ CRE = PortfolioSpec(
     marginals=[
         Marginal("dscr_orig", cp.beta_scaled(3.0, 3.0, 0.85, 2.60), 2),
         Marginal("original_ltv", cp.beta_scaled(3.5, 2.5, 30, 80), 1),
-        Marginal("noi", cp.lognormal(np.log(1_900_000), 0.70), 0, 120_000, 90_000_000),
+        Marginal("noi", cp.lognormal(np.log(68_000), 0.70), 0, 4_500, 3_200_000),
         Marginal("risk_rating", cp.beta_scaled(2.6, 3.2, 1, 10), 0),
         Marginal("lease_rollover_pct", cp.beta_scaled(2.0, 4.0, 0, 60), 1),
-        Marginal("committed_amount", cp.lognormal(np.log(14_000_000), 0.75), 0,
-                 750_000, 400_000_000),
+        Marginal("committed_amount", cp.lognormal(np.log(500_000), 0.75), 0,
+                 27_000, 14_000_000),
         Marginal("property_type", cp.categorical(
             ["office", "retail", "industrial", "multifamily", "hospitality"],
             [0.24, 0.19, 0.18, 0.30, 0.09])),

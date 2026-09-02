@@ -15,7 +15,7 @@ export const tokens = raw as typeof raw
  *  through here first. */
 export function cssVar(name: string): string {
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
-  if (!v) throw new Error(`cssVar(${name}): not defined — charts cannot use an unresolved variable`)
+  if (!v) throw new Error(`cssVar(${name}): not defined. Charts cannot use an unresolved variable`)
   return v
 }
 

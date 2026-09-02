@@ -155,7 +155,7 @@ def _monotonicity(rates: list[float]) -> tuple[bool, str]:
 
 
 def optimal_edges(x: pd.Series, y: pd.Series, max_bins: int = 8,
-                  monotone: bool = True) -> list[float]:
+                  monotone: bool = True, exact: bool = False) -> list[float]:
     """Optimal binning edges.
 
     Uses `optbinning` where available — it solves the binning as a constrained
@@ -163,6 +163,18 @@ def optimal_edges(x: pd.Series, y: pd.Series, max_bins: int = 8,
     monotone-merge routine over quantile seeds, NOT equal-width bins: equal width
     on a skewed credit variable puts 90% of the book in one bin and tells you
     nothing.
+
+    `max_bins` is a CEILING. That is the correct default — the solver should be
+    free to use fewer bins when fewer describe the variable — but it is the
+    wrong behaviour for a control the analyst is pressing, because a solver that
+    chose four bins under a ceiling of eight does not move when the ceiling
+    drops to seven, six or five. The button then appears to do nothing.
+
+    `exact` puts the same number on the floor, so the requested count is the
+    delivered count. It can be infeasible: a monotonic trend may not survive the
+    extra split. In that case this returns what the ceiling solve gives and the
+    caller reports the number actually achieved rather than the number asked
+    for — never silently.
     """
     v = pd.to_numeric(x, errors="coerce")
     ok = v.notna()
@@ -170,11 +182,23 @@ def optimal_edges(x: pd.Series, y: pd.Series, max_bins: int = 8,
         return []
     try:
         from optbinning import OptimalBinning
-        ob = OptimalBinning(name=str(x.name), dtype="numerical", max_n_bins=max_bins,
-                            min_prebin_size=0.02,
-                            monotonic_trend="auto" if monotone else None)
-        ob.fit(v[ok].to_numpy(float), y[ok].to_numpy(int))
-        return [float(s) for s in ob.splits]
+
+        def solve(lo: int | None) -> list[float]:
+            ob = OptimalBinning(name=str(x.name), dtype="numerical",
+                                max_n_bins=max_bins, min_n_bins=lo,
+                                min_prebin_size=0.02,
+                                monotonic_trend="auto" if monotone else None)
+            ob.fit(v[ok].to_numpy(float), y[ok].to_numpy(int))
+            return [float(s) for s in ob.splits]
+
+        if exact:
+            try:
+                forced = solve(max_bins)
+                if forced:
+                    return forced
+            except Exception:
+                pass          # infeasible at this count — fall through to the ceiling
+        return solve(None)
     except Exception:
         return _monotone_merge_edges(v[ok], y[ok], max_bins, monotone)
 
@@ -216,11 +240,12 @@ def _monotone_merge_edges(v: pd.Series, y: pd.Series, max_bins: int,
 
 
 def bin_numeric(x: pd.Series, y: pd.Series, edges: list[float] | None = None,
-                max_bins: int = 8, monotone: bool = True) -> Binning:
+                max_bins: int = 8, monotone: bool = True,
+                exact_bins: bool = False) -> Binning:
     v = pd.to_numeric(x, errors="coerce")
     yy = y.astype(int)
     if edges is None:
-        edges = optimal_edges(v, yy, max_bins, monotone)
+        edges = optimal_edges(v, yy, max_bins, monotone, exact=exact_bins)
     edges = sorted(float(e) for e in (edges or []))
 
     miss = v.isna()

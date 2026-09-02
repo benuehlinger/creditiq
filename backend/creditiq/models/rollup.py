@@ -85,6 +85,17 @@ def pf_spec_signs(portfolio: str) -> dict[str, int]:
 _CACHE: dict[tuple, "RollUp"] = {}
 
 
+def clear_cache() -> None:
+    """Drop the memoised roll-ups.
+
+    The roll-up carries the LIST OF AVAILABLE VERSIONS for its selector, so it
+    goes stale the moment a version is saved, deleted or promoted — the picker
+    then offers a set of models that no longer matches the versions page. Every
+    endpoint that mutates a version calls this.
+    """
+    _CACHE.clear()
+
+
 @dataclass
 class RollUp:
     scenarios: list[str]
@@ -207,6 +218,10 @@ def run(scenarios: list[str] | None = None, with_tornado: bool = True,
                 "pd_12m": v.weighted_pd_12m, "lgd": v.weighted_lgd,
             } for k, v in sr.results.items()},
             "sign_flips": flips,
+            # The macro terms this model carries, in the canonical
+            # key@transform@lag form the paths endpoint parses, so the roll-up
+            # can show what each book's projection actually responds to.
+            "mev_terms": [f"{m.key}@{m.transform}@{m.lag_months}" for m in spec.mevs],
             "capped": sr.capped,
             "extrapolation_flags": [e.key for e in sr.extrapolation if e.outside],
         })

@@ -35,6 +35,21 @@ class Coefficient:
     p_value: float
     vif: float
     contribution: float          # share of the fitted linear predictor's variance
+    # The term this column belongs to, and that TERM's variance inflation on the
+    # one-column scale.
+    #
+    # `vif` above is the ordinary per-column figure, and for one column of a
+    # multi-column term it is close to meaningless. Bin indicators from one
+    # variable are mutually exclusive by construction, so they are mechanically
+    # negatively correlated with each other and with the omitted reference bin.
+    # That correlation inflates every column's ordinary VIF on its own, before
+    # any other variable is considered: a four-bin fico term showed 4.45, 9.16,
+    # 11.52 and 10.56 while the term's generalised VIF was 1.77. The per-column
+    # ranking also inverts, and would send an analyst to drop the healthier of
+    # two terms.
+    term: str | None = None
+    term_vif: float | None = None
+    term_df: int = 1
 
 
 @dataclass
@@ -191,11 +206,20 @@ def fit(design: Design, spec: ModelSpec) -> FitResult:
                 "Check the variable screen for leakage before reading these "
                 "coefficients.")
 
+    # Term-level inflation, computed once and attached to every column of the
+    # term, so the table can report the figure that means something.
+    groups = design.term_groups()
+    by_term = {r["term"]: r for r in generalised_vif(X, groups)}
+    term_of = {i: t for t, cols_ in groups.items() for i in cols_}
+
     coefs = [
         Coefficient(name=design.columns[i], estimate=float(beta[i]),
                     std_error=float(se[i]), z_stat=float(z[i]),
                     p_value=float(pval[i]), vif=float(vifs[i]),
-                    contribution=float(contrib[i]))
+                    contribution=float(contrib[i]),
+                    term=term_of.get(i),
+                    term_vif=(by_term.get(term_of.get(i), {}) or {}).get("vif"),
+                    term_df=len(groups.get(term_of.get(i), [])) or 1)
         for i in range(len(beta))
     ]
     return FitResult(

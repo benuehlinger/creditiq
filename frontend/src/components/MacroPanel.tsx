@@ -126,7 +126,7 @@ export default function MacroPanel({ portfolio }: { portfolio: string }) {
 
       <div className="grid gap-3 lg:grid-cols-2">
         <Card>
-          <CardHead title={`${d?.label ?? baseKey} — history and scenario paths`}
+          <CardHead title={`${d?.label ?? baseKey}: history and scenario paths`}
             subtitle={sp ? `Seam at ${month(sp.splice_date)} · rebase rule: ${sp.rule}` : ''}
             caption="FRED history joined to the Federal Reserve's published forward paths. History is drawn solid, the projected path dashed, and the join is marked."
             methodology="scenario-splice" />
@@ -143,7 +143,7 @@ export default function MacroPanel({ portfolio }: { portfolio: string }) {
               <p className="px-4 pb-2 text-micro leading-snug text-ink-muted">
                 {sp?.rule === 'ratio'
                   ? 'Rebased onto our history, because our proxy sits on a different index base from the Fed’s variable. The scenario’s percentage path is preserved exactly.'
-                  : 'Not shifted. This is an absolute scale, so the jump at the seam is the shock arriving — removing it would cap the stress.'}
+                  : 'Not shifted. This is an absolute scale, so the jump at the seam is the shock arriving.'}
               </p>
             </>
           ) : <Skeleton className="h-[230px]" />}
@@ -171,13 +171,13 @@ export default function MacroPanel({ portfolio }: { portfolio: string }) {
                 Worst benchmarking residual{' '}
                 <span className="tnum text-ink-secondary">{d.residual_relative?.toExponential(2)}</span>{' '}
                 relative. The derived monthly series aggregates back to the published
-                quarterly value to machine precision — not approximately.
+                quarterly value to machine precision, not approximately.
                 {d.raw_is_derived && ' The published series is a growth rate here, so the benchmark target is the reconstructed quarterly level.'}
               </p>
             </>
           ) : (
-            <div className="px-4 py-10 text-center text-xs leading-relaxed text-ink-muted">
-              {d ? `${d.label} is published ${d.native === 'M' ? 'monthly' : d.native === 'D' ? 'daily' : 'weekly'}, so no benchmarking is needed — it is ${d.native === 'M' ? 'passed through' : d.method}.`
+            <div className="mx-auto max-w-[70ch] px-4 py-10 text-center text-xs leading-relaxed text-ink-muted">
+              {d ? `${d.label} is published ${d.native === 'M' ? 'monthly' : d.native === 'D' ? 'daily' : 'weekly'}, so no benchmarking is needed. It is ${d.native === 'M' ? 'passed through' : d.method}.`
                  : 'Select a variable.'}
             </div>
           )}
@@ -199,7 +199,7 @@ export default function MacroPanel({ portfolio }: { portfolio: string }) {
             <Meta k="Derivation" v={d.derive ?? 'none'} />
           </div>
           {d.note && (
-            <p className="border-t border-hairline px-4 py-2 text-tiny leading-relaxed text-ink-secondary">
+            <p className="max-w-[88ch] border-t border-hairline px-4 py-2 text-tiny leading-relaxed text-ink-secondary">
               {d.note}
             </p>
           )}

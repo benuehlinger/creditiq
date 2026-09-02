@@ -22,7 +22,7 @@ export const METHODOLOGY: Record<string, Entry> = {
       { kind: 'text', text: 'The health score weights a critical structural failure five times a cosmetic warning, so passing a handful of easy checks cannot offset a broken key.' },
       { kind: 'text', text: 'Outliers use Tukey’s far fence at three interquartile ranges rather than the usual 1.5. Credit data is right-skewed by nature, and the 1.5 fence flags a quarter of an income column, which buries the signal.' },
     ],
-    references: ['SR 11-7, Guidance on Model Risk Management — data quality and model inputs'],
+    references: ['SR 11-7, Guidance on Model Risk Management: data quality and model inputs'],
   },
   'default-rate': {
     title: 'Annualized default rate',
@@ -30,7 +30,7 @@ export const METHODOLOGY: Record<string, Entry> = {
       { kind: 'text', text: 'Computed at the observation level and then aggregated by performance date, which is the frame a discrete-time hazard model uses.' },
       { kind: 'formula', text: 'monthly hazard h(t) = defaults(t) / account-months(t)\nannual rate      = ( 1 - (1 - h(t))^12 ) x 100' },
       { kind: 'text', text: 'The denominator is account-months at risk in that month, not accounts outstanding at a point in time. An account that defaults, pays off or matures leaves the denominator from the following month, so the rate is a genuine hazard rather than a stock ratio.' },
-      { kind: 'note', text: 'The annual figure COMPOUNDS the monthly hazard rather than multiplying it by twelve. The two agree to a rounding error at the rates a performing book runs at — 4.27% against 4.36% on the consumer portfolio — but simple annualization breaks down in the tail. A single quarter in a small, low-FICO bin can carry a 33% monthly hazard, which multiplies out to a 400% annual default rate. A book cannot lose 400% of itself in a year, and on a chart that artefact flattens every other line into the axis.' },
+      { kind: 'note', text: 'The annual figure COMPOUNDS the monthly hazard rather than multiplying it by twelve. The two agree to a rounding error at the rates a performing book runs at, 4.27% against 4.36% on the consumer portfolio, but simple annualisation breaks down in the tail. A single quarter in a small, low-FICO bin can carry a 33% monthly hazard, which multiplies out to a 400% annual default rate. A book cannot lose 400% of itself in a year, and on a chart that artefact flattens every other line into the axis.' },
     ],
   },
   'mev-catalog': {

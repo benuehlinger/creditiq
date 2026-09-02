@@ -43,6 +43,7 @@ frontend:
 
 reset:  ## clean demo state — safe to run between back-to-back demos
 	rm -f versions/*.json
+	rm -rf data/cache
 	$(MAKE) data
 	@echo "Demo state reset. Restart the backend to clear its caches."
 

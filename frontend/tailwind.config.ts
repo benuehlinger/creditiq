@@ -33,8 +33,8 @@ export default {
         deemph: 'var(--deemphasis)',
       },
       fontFamily: {
-        sans: tokens.type.sans.split(', '),
-        mono: tokens.type.mono.split(', '),
+        sans: ['Inter', 'ui-sans-serif', 'system-ui', '-apple-system', 'Segoe UI', 'Roboto', 'sans-serif'],
+        mono: ['JetBrains Mono', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
         // The display face is for the wordmark and headings ONLY. Charts, axis
         // labels and every number stay in the system sans: the dataviz rules are
         // explicit that a display face on a hero figure reads as off-brand
@@ -56,6 +56,13 @@ export default {
         '3xl': ['32px', { lineHeight: '38px' }],
         hero: ['52px', { lineHeight: '56px', letterSpacing: '-0.02em' }],
       },
+      // The default border colour, which is also what preflight paints on
+      // every element. Tailwind's own default is a light grey that glows on
+      // the dark surface, and any border class that fails to resolve falls
+      // back to it — which is how 22 row separators rendered near-white in
+      // dark mode. With the hairline token as the default, a fallback is
+      // invisible instead of glaring.
+      borderColor: { DEFAULT: 'var(--chrome-border)' },
       borderRadius: { card: '10px', ctl: '7px' },
       boxShadow: {
         card: '0 1px 2px rgba(0,0,0,0.06), 0 0 0 1px var(--chrome-border)',

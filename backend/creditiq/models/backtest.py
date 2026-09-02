@@ -61,6 +61,61 @@ def by_cohort(dates: np.ndarray, y: np.ndarray, p: np.ndarray,
     return out
 
 
+def error_summary(cohorts: list[dict], oot_from: str | None) -> dict:
+    """Error rates for the cohort backtest, in the units the answer is quoted in.
+
+    The cohort chart shows predicted against actual by period, and a reader can
+    see roughly how far apart they are. These are the numbers behind that
+    picture, split at the out-of-time boundary because the two halves answer
+    different questions: in time, whether the model describes the data it was
+    built on; out of time, whether it holds on data it has never seen. Each
+    figure is on the ANNUALISED default rate in percentage points, so a bias of
+    +0.4 means the model predicts 0.4pp more default a year than occurred.
+
+      mae        mean |predicted − actual| across cohorts
+      rmse       root mean square of the same, which weights the large misses
+      bias       mean (predicted − actual): positive is over-prediction
+      ratio      mean predicted over mean actual: 1.10 is 10% over
+      coverage   share of cohorts whose prediction fell inside the Jeffreys 95%
+                 interval of the realised rate; about 0.95 is what a calibrated
+                 model should show, and a run of misses in one direction is the
+                 signal, not a single one
+      worst      the cohort with the largest absolute miss, and its size
+
+    Each cohort is weighted equally. Weighting by exposure would hide a bad
+    year behind a good one, and the question is whether ANY period is badly
+    described.
+    """
+    def _block(rows: list[dict]) -> dict:
+        if not rows:
+            return {"n_cohorts": 0}
+        a = np.array([r["actual_annual"] for r in rows], float)
+        p = np.array([r["predicted_annual"] for r in rows], float)
+        e = p - a
+        worst = int(np.argmax(np.abs(e)))
+        return {
+            "n_cohorts": len(rows),
+            "mae_pp": float(np.mean(np.abs(e))),
+            "rmse_pp": float(np.sqrt(np.mean(e ** 2))),
+            "bias_pp": float(np.mean(e)),
+            "ratio": float(p.mean() / a.mean()) if a.mean() > 0 else float("nan"),
+            "coverage": float(np.mean([r["calibrated"] for r in rows])),
+            "mean_actual_pp": float(a.mean()),
+            "mean_predicted_pp": float(p.mean()),
+            "worst_period": rows[worst]["period"],
+            "worst_miss_pp": float(e[worst]),
+        }
+
+    if oot_from:
+        cut = pd.Timestamp(oot_from)
+        in_time = [r for r in cohorts if pd.Timestamp(r["period"]) < cut]
+        out_time = [r for r in cohorts if pd.Timestamp(r["period"]) >= cut]
+    else:
+        in_time, out_time = cohorts, []
+    return {"all": _block(cohorts), "in_time": _block(in_time),
+            "out_of_time": _block(out_time)}
+
+
 def rank_order_stability(dates: np.ndarray, y: np.ndarray, p: np.ndarray,
                          deciles: int = 5, freq: str = COHORT_FREQ,
                          min_n: int = 800) -> dict:
@@ -198,8 +253,10 @@ def recohort(scored: dict, freq: str) -> dict:
     if freq not in FREQ_CHOICES:
         raise ValueError(f"unknown frequency {freq!r}")
     d, y, p = scored["dates"], scored["y"], scored["p"].astype(float)
+    cohorts = by_cohort(d, y, p, freq=freq)
     return {
-        "cohorts": by_cohort(d, y, p, freq=freq),
+        "cohorts": cohorts,
+        "errors": error_summary(cohorts, scored.get("oot_from")),
         "rank_order": rank_order_stability(d, y, p, freq=freq),
         "score_psi": score_psi(d, p, freq=freq),
         "period_freq": FREQ_CHOICES[freq],

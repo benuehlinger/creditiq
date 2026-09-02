@@ -70,6 +70,12 @@ class VariableSpec:
     # the usual default for a natural spline: enough to bend, few enough to stay
     # stable at the tails.
     n_knots: int = 4
+    # How many bins to cut when no explicit edges are given. Without this the
+    # editor's bin-count control did not reach the fit at all: the analyst set
+    # seven bins, saw seven bins, and the model was estimated on the default
+    # eight. It is also what lets a saved specification restore the count it was
+    # built with, so a replay reproduces the model rather than a near neighbour.
+    max_bins: int = 8
     # Empirical-Bayes shrinkage strength for WoE on thin cells. A level with
     # eleven accounts should not get its own weight; this pulls it toward the
     # book average. 0 disables it.
@@ -91,22 +97,35 @@ class VariableSpec:
         return TREATMENTS[self.treatment][1]
 
     def key(self) -> dict:
+        """Every field that changes the model, and nothing else.
+
+        This is what the version hash is built from, so an omission here means
+        two genuinely different models share one identifier. `max_bins` was
+        missing: the same variable cut into seven bins and into eight produced
+        the same hash, the same auto-generated name, and silently overwrote each
+        other in the version store. See `test_spec.py`, which asserts that every
+        field of this dataclass appears.
+        """
         return {"column": self.column, "treatment": self.treatment,
                 "edges": self.edges, "groups": self.groups, "knots": self.knots,
-                "n_knots": self.n_knots, "shrinkage": self.shrinkage}
+                "n_knots": self.n_knots, "max_bins": self.max_bins,
+                "shrinkage": self.shrinkage}
 
 
 @dataclass
 class MevSpec:
     key: str
     transform: Literal["level", "diff", "yoy", "log_diff", "qoq_annualized",
-                       "z_score", "four_quarter_change"] = "level"
+                       "z_score", "four_quarter_change",
+                       "ma3", "ma6", "ma12", "yoy_ma3", "diff_ma3"] = "level"
     lag_months: int = 0
 
     def label(self) -> str:
         t = {"level": "", "diff": " 1m chg", "yoy": " YoY", "log_diff": " log-diff",
              "qoq_annualized": " QoQ ann.", "z_score": " z",
-             "four_quarter_change": " 12m chg"}
+             "four_quarter_change": " 12m chg",
+             "ma3": " 3m avg", "ma6": " 6m avg", "ma12": " 12m avg",
+             "yoy_ma3": " YoY 3m avg", "diff_ma3": " 1m chg 3m avg"}
         return f"{self.key}{t.get(self.transform, '')}" + (
             f" (lag {self.lag_months}m)" if self.lag_months else "")
 
@@ -227,21 +246,45 @@ class LgdSpec:
         return list(k) if k else None
 
     def to_dict(self) -> dict:
+        """The wire format. Per-column settings are OBJECTS, not pairs.
+
+        This class stores them as tuples of pairs because it is frozen and has
+        to hash, but that is an implementation detail and it must not leak. It
+        did: the interface received `[["cltv", "spline"]]`, treated it as the
+        mapping it is named like, and wrote `{...treatments, [col]: t}` — which
+        spreads an ARRAY into an object and yields
+        `{"0": ["cltv", "spline"], "cltv": "bins"}`. The request then failed
+        validation, so no treatment other than the default could ever be
+        applied. A mapping on the wire is a mapping.
+        """
         return {"portfolio": self.portfolio, "drivers": list(self.drivers),
                 "categoricals": list(self.categoricals),
-                "treatments": [list(t) for t in self.treatments],
-                "edges": [[c, list(v)] for c, v in self.edges],
-                "knots": [[c, list(v)] for c, v in self.knots],
+                "treatments": dict(self.treatments),
+                "edges": {c: list(v) for c, v in self.edges},
+                "knots": {c: list(v) for c, v in self.knots},
                 "n_knots": self.n_knots, "max_bins": self.max_bins}
+
+    @staticmethod
+    def _pairs(v) -> tuple:
+        """Accept either the mapping or the older list-of-pairs.
+
+        Saved version files written before `to_dict` emitted objects carry the
+        list form, and a saved specification must stay readable — that is the
+        whole point of saving it.
+        """
+        if v is None:
+            return ()
+        items = v.items() if isinstance(v, dict) else v
+        return tuple((c, t) for c, t in items)
 
     @staticmethod
     def from_dict(d: dict) -> "LgdSpec":
         return LgdSpec(
             portfolio=d["portfolio"], drivers=tuple(d.get("drivers", ())),
             categoricals=tuple(d.get("categoricals", ())),
-            treatments=tuple((c, t) for c, t in d.get("treatments", [])),
-            edges=tuple((c, tuple(v)) for c, v in d.get("edges", [])),
-            knots=tuple((c, tuple(v)) for c, v in d.get("knots", [])),
+            treatments=LgdSpec._pairs(d.get("treatments")),
+            edges=tuple((c, tuple(v)) for c, v in LgdSpec._pairs(d.get("edges"))),
+            knots=tuple((c, tuple(v)) for c, v in LgdSpec._pairs(d.get("knots"))),
             n_knots=int(d.get("n_knots", 3)), max_bins=int(d.get("max_bins", 5)))
 
     def hash(self) -> str:

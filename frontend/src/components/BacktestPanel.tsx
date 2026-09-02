@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { Busy } from './FitProgress'
 import { useQuery } from '@tanstack/react-query'
 import { api, type FitRequest, type FitResponse } from '../lib/api'
 import { Card, CardHead, StatTile, StatusPill } from './ui'
@@ -20,6 +21,76 @@ const median = (v: number[]) => {
   if (!v.length) return 0
   const a = [...v].sort((x, y) => x - y)
   return a[Math.floor(a.length / 2)]
+}
+
+/** In-time against out-of-time error, side by side.
+ *
+ *  A validator reads the out-of-time column and glances left to see whether
+ *  the model was ever any better. The in-time figure is the floor: a model
+ *  cannot be expected to do better on data it never saw than on data it was
+ *  fitted to, so a large gap between the columns is the overfitting signal in
+ *  the units of the answer. */
+function ErrorTable({ errors }: { errors?: FitResponse['backtest']['errors'] }) {
+  if (!errors) return null
+  type Block = NonNullable<FitResponse['backtest']['errors']>['all']
+  const cols = [
+    { key: 'in_time' as const, label: 'In time' },
+    { key: 'out_of_time' as const, label: 'Out of time' },
+  ]
+  const fmt = (v: number | undefined, d = 2, sign = false) =>
+    v == null || Number.isNaN(v) ? '—' : `${sign && v > 0 ? '+' : ''}${v.toFixed(d)}`
+  const rows: { label: string; get: (b: Block) => string; why: string
+                sev?: (b: Block) => 'good' | 'warning' | 'critical' | null }[] = [
+    { label: 'Cohorts', get: (b) => String(b.n_cohorts),
+      why: 'Performance-date cohorts with enough rows to score.' },
+    { label: 'Mean actual', get: (b) => `${fmt(b.mean_actual_pp)}%`,
+      why: 'Mean annualised default rate realised across the cohorts.' },
+    { label: 'Mean predicted', get: (b) => `${fmt(b.mean_predicted_pp)}%`,
+      why: 'Mean annualised default rate the model predicted across the same cohorts.' },
+    { label: 'Bias', get: (b) => `${fmt(b.bias_pp, 2, true)}pp`,
+      why: 'Mean of predicted minus actual. Positive is over-prediction.',
+      sev: (b) => b.ratio == null ? null : Math.abs(b.ratio - 1) <= 0.10 ? 'good'
+        : Math.abs(b.ratio - 1) <= 0.25 ? 'warning' : 'critical' },
+    { label: 'Ratio', get: (b) => fmt(b.ratio, 2) + '×',
+      why: 'Mean predicted over mean actual. 1.10 is 10% over-prediction.' },
+    { label: 'MAE', get: (b) => `${fmt(b.mae_pp)}pp`,
+      why: 'Mean absolute miss per cohort.' },
+    { label: 'RMSE', get: (b) => `${fmt(b.rmse_pp)}pp`,
+      why: 'Root mean square miss. Weights the large misses, so it exceeds MAE where one period is badly described.' },
+    { label: 'Coverage', get: (b) => b.coverage == null ? '—' : `${(b.coverage * 100).toFixed(0)}%`,
+      why: 'Share of cohorts whose prediction sat inside the 95% credible band of the realised rate. About 95% for a calibrated model.',
+      sev: (b) => b.coverage == null ? null : b.coverage >= 0.8 ? 'good' : b.coverage >= 0.6 ? 'warning' : 'critical' },
+    { label: 'Worst cohort', get: (b) => b.worst_period
+        ? `${b.worst_period.slice(0, 7)} (${fmt(b.worst_miss_pp, 2, true)}pp)` : '—',
+      why: 'The cohort with the largest absolute miss, and the size and direction of that miss.' },
+  ]
+  return (
+    <table className="w-full text-left text-xs">
+      <thead>
+        <tr className="border-b border-hairline text-tiny text-ink-muted">
+          <th className="px-4 py-2 font-medium"></th>
+          {cols.map((c) => <th key={c.key} className="px-3 py-2 text-right font-medium">{c.label}</th>)}
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr key={row.label} className="border-b border-hairline" title={row.why}>
+            <td className="px-4 py-1.5 text-ink-secondary">{row.label}</td>
+            {cols.map((c) => {
+              const b = errors[c.key]
+              const sev = row.sev?.(b)
+              return (
+                <td key={c.key} className="px-3 py-1.5 text-right tnum text-ink"
+                    style={sev && sev !== 'good' ? { color: `var(--status-${sev})` } : undefined}>
+                  {b.n_cohorts ? row.get(b) : '—'}
+                </td>
+              )
+            })}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
 }
 
 /** Monthly or quarterly cohorts.
@@ -46,14 +117,14 @@ function FreqToggle({ freq, setFreq, busy, available }: {
         <button key={f} onClick={() => setFreq(f)} disabled={busy}
           title={f === 'QS'
             ? 'Group by quarter. Roughly three times the defaults behind each point, so the bands are narrower and a rank-ordering statistic is worth reading.'
-            : 'Group by month — the frequency of the underlying data. Around nine defaults sit behind each point on this book, so the credible band is about two thirds as wide as the rate itself and the per-point AUC is mostly noise. No refit: only the grouping changes.'}
+            : 'Group by month, the frequency of the underlying data. Around nine defaults sit behind each point on this book, so the credible band is about two thirds as wide as the rate itself and the per-point AUC is mostly noise. No refit: only the grouping changes.'}
           className={`rounded-ctl border px-1.5 py-0.5 transition-colors ${
             freq === f ? 'border-accent bg-accent-soft text-ink'
                        : 'border-hairline text-ink-muted hover:text-ink'} disabled:opacity-50`}>
           {label}
         </button>
       ))}
-      {busy && <span className="text-ink-muted">regrouping…</span>}
+      {busy && <Busy>regrouping</Busy>}
     </div>
   )
 }
@@ -194,21 +265,24 @@ export default function BacktestPanel({ r, portfolio, request }: {
     }],
   }), [bt, theme])
 
-  const missed = bt.cohorts.filter((c) => !c.calibrated).length
   const aucs = bt.cohorts.map((c) => c.auc).filter((a) => a === a)
   const worstSeg = segments[0]
 
   return (
     <div className="space-y-3">
+      {/* The numbers behind the cohort chart, before the chart. Split at the
+          out-of-time boundary because the halves answer different questions:
+          in time, does the model describe the data it was built on; out of
+          time, does it hold on data it never saw. Units are percentage points
+          of annualised default rate, which is the unit the answer is quoted in. */}
       <Card>
-        <div className="grid grid-cols-2 divide-x divide-hairline md:grid-cols-4">
-          <StatTile label="Cohorts backtested" value={String(bt.cohorts.length)}
-            explain="Quarterly performance-date cohorts, each scored and compared with its realised rate." />
-          <StatTile label="Calibration misses" value={`${missed} / ${bt.cohorts.length}`}
-            explain="Cohorts where the predicted rate fell outside the Jeffreys 95% credible interval of the realised rate. Some misses are expected; a run of them in one direction is not."
-            goodDirection="down" />
+        <CardHead title="Backtest error"
+          subtitle={`${bt.cohorts.length} ${periodAxis.replace('Performance ', '').toLowerCase()}ly cohorts · annualised default rate, percentage points`}
+          caption="Bias is mean predicted minus actual, so positive is over-prediction. Coverage is the share of cohorts whose prediction fell inside the 95% credible band of the realised rate; a calibrated model shows about 95%, and a run of misses in one direction matters more than the count." />
+        <ErrorTable errors={bt.errors} />
+        <div className="grid grid-cols-2 divide-x divide-hairline border-t border-hairline">
           <StatTile label="AUC range across cohorts"
-            value={`${Math.min(...aucs).toFixed(3)} – ${Math.max(...aucs).toFixed(3)}`}
+            value={aucs.length ? `${Math.min(...aucs).toFixed(3)} – ${Math.max(...aucs).toFixed(3)}` : '—'}
             explain="Discriminatory power is not one number. This is its spread across the cycle." />
           <StatTile label="Rank order held"
             value={`${(bt.rank_order.share_monotone * 100).toFixed(0)}%`}
@@ -309,7 +383,7 @@ export default function BacktestPanel({ r, portfolio, request }: {
           </thead>
           <tbody>
             {segments.map((s) => (
-              <tr key={s.segment} className="border-b border-hairline/40">
+              <tr key={s.segment} className="border-b border-hairline">
                 <td className="px-4 py-1.5 font-mono text-tiny text-ink">{s.segment}</td>
                 <td className="px-3 py-1.5 text-right tnum text-ink-secondary">{num(s.n)}</td>
                 <td className="px-3 py-1.5 text-right tnum text-ink-secondary">{num(s.events)}</td>

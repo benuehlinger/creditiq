@@ -127,32 +127,48 @@ def test_a_saved_version_can_be_loaded_back_whole():
         vstore.delete(v.hash)
 
 
-def test_the_fit_endpoint_accepts_its_own_serialised_specification():
-    """A saved LgdSpec must post straight back without translation.
+def test_per_column_settings_are_mappings_on_the_wire():
+    """`treatments`, `edges` and `knots` serialise as OBJECTS, not pairs.
 
-    `LgdSpec` is frozen, so it holds treatments, edges and knots as tuples of
-    pairs and `to_dict()` writes them as LISTS — the form in every saved
-    version. The endpoint declared them as mappings only, so opening a saved
-    model and pressing Fit LGD posted the stored specification back and got
-    three validation errors, one per field. An interface that cannot read what
-    it writes is the defect; both shapes are now accepted.
+    `LgdSpec` is frozen, so it stores them as tuples of pairs in order to hash.
+    That is an implementation detail and it must not leak. It did: the interface
+    received `[["cltv", "spline"]]`, treated it as the mapping it is named like,
+    and wrote `{...treatments, [col]: t}`. Spreading an ARRAY into an object
+    literal yields `{"0": ["cltv", "spline"], "cltv": "bins"}`, the request
+    failed validation, and NO treatment other than the default could ever be
+    applied to a severity driver.
     """
     from creditiq.models.spec import LgdSpec
 
     spec = LgdSpec(portfolio="mortgage", drivers=("hpi_yoy", "cltv"),
                    treatments=(("cltv", "spline"),), knots=(("cltv", (0.6, 0.9)),))
     body = spec.to_dict()
-    assert isinstance(body["treatments"], list), "the serialised form is a list"
+    assert body["treatments"] == {"cltv": "spline"}
+    assert body["knots"] == {"cltv": [0.6, 0.9]}
+
+    # The shape the interface produces by spreading must round-trip unharmed.
+    spread = {**body["treatments"], "hpi_yoy": "continuous"}
+    assert spread == {"cltv": "spline", "hpi_yoy": "continuous"}, (
+        "spreading the wire form must not produce index keys")
 
     r = client.post("/api/lgd/fit", json=body)
     assert r.status_code == 200, r.json()
-
-    # The mapping form must give an IDENTICAL fit, not merely also succeed.
-    r2 = client.post("/api/lgd/fit", json={
-        **body, "treatments": dict(spec.treatments), "edges": {},
-        "knots": {c: list(v) for c, v in spec.knots}})
-    assert r2.status_code == 200, r2.json()
-    assert r2.json()["columns"] == r.json()["columns"]
-    assert r2.json()["hash"] == r.json()["hash"]
     # The treatment survived: a spline emits a basis column, not the raw driver.
+    assert any(c.startswith("cltv_basis") for c in r.json()["columns"])
+
+
+def test_a_specification_saved_in_the_older_list_form_still_loads():
+    """Version files written before the wire format changed carry pairs, and a
+    saved specification must stay readable — that is the point of saving it."""
+    from creditiq.models.spec import LgdSpec
+
+    spec = LgdSpec(portfolio="mortgage", drivers=("hpi_yoy", "cltv"),
+                   treatments=(("cltv", "spline"),), knots=(("cltv", (0.6, 0.9)),))
+    legacy = {**spec.to_dict(),
+              "treatments": [["cltv", "spline"]], "edges": [],
+              "knots": [["cltv", [0.6, 0.9]]]}
+    assert LgdSpec.from_dict(legacy) == spec
+
+    r = client.post("/api/lgd/fit", json=legacy)
+    assert r.status_code == 200, r.json()
     assert any(c.startswith("cltv_basis") for c in r.json()["columns"])

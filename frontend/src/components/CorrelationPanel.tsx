@@ -2,7 +2,8 @@ import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { Card, CardHead, Skeleton, StatusPill } from './ui'
-import { useUi, NONE } from '../lib/store'
+import { useUi } from '../lib/store'
+import { columns, toggleTerm } from '../lib/spec'
 import { diverging, mode } from '../design/tokens'
 import type { PortfolioKey } from '../lib/api'
 
@@ -17,8 +18,8 @@ export default function CorrelationPanel({ portfolio }: { portfolio: string }) {
     queryKey: ['corr', portfolio], queryFn: () => api.correlation(portfolio),
   })
   const [hover, setHover] = useState<{ i: number; j: number } | null>(null)
-  const toggleVariable = useUi((s) => s.toggleVariable)
-  const picked = useUi((s) => s.selectedVariables[portfolio as PortfolioKey] ?? NONE) as string[]
+  const editPd = useUi((s) => s.editPd)
+  const picked = columns(useUi((s) => s.pdSpec[portfolio as PortfolioKey]))
   const m = mode()
 
   const cell = useMemo(() => (data ? Math.max(9, Math.min(26, 620 / data.columns.length)) : 16),
@@ -110,7 +111,7 @@ export default function CorrelationPanel({ portfolio }: { portfolio: string }) {
                 <div className="flex items-center justify-between gap-2">
                   <span className="font-mono text-tiny text-ink">{c.recommended}</span>
                   <button
-                    onClick={() => toggleVariable(portfolio as PortfolioKey, c.recommended)}
+                    onClick={() => editPd(portfolio as PortfolioKey, (x) => toggleTerm(x, c.recommended), c.recommended)}
                     className={`rounded border px-1.5 py-0.5 text-micro ${
                       picked.includes(c.recommended)
                         ? 'border-accent text-accent' : 'border-hairline text-ink-muted hover:text-ink'}`}>

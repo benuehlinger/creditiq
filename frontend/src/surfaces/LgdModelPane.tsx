@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useState, useRef } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
-import { useMutation, useQuery } from '@tanstack/react-query'
-import { api, type SeverityFreq, type LgdBacktest, type LgdCandidate, type LgdDiagnostics,
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { api, asMap, type SeverityFreq, type LgdBacktest, type LgdDiagnostics,
          type LgdFitResult, type LgdSpecPayload, type PortfolioKey } from '../lib/api'
-import { Card, CardHead, EmptyState, Skeleton, StatTile, StatusPill } from '../components/ui'
+import { Card, CardHead, EmptyState, Skeleton, StatTile, StatusPill, ViewTabs } from '../components/ui'
+import Eq from '../components/Eq'
+import { Check, Close } from '../components/icons'
 import SeverityOverTime from '../components/SeverityOverTime'
+import FitProgress, { LGD_PHASES } from '../components/FitProgress'
 import { num, pct, ratio } from '../lib/format'
 import { useUi } from '../lib/store'
-import { macroTermLabel } from './LgdExploreSurface'
+import { macroTermLabel } from './LgdVariableDetail'
 
 /** LGD model — Fit.
  *
@@ -19,18 +21,19 @@ import { macroTermLabel } from './LgdExploreSurface'
  *  Terms enter linearly. The population is defaulted account-months only, which
  *  on the commercial book is a few hundred rows, so no binning or spline
  *  apparatus is offered here. */
-export default function LgdSurface() {
-  const { portfolio = 'consumer' } = useParams()
+/** The fitted severity model: controls, verdict figures, coefficients,
+ *  diagnostics and backtest. The right pane of the LGD workbench when no
+ *  driver is open. The candidate list belongs to the workbench. */
+export default function LgdModelPane({ portfolio, onOpenVariable }: {
+  portfolio: string
+  onOpenVariable?: (column: string) => void
+}) {
   const pk = portfolio as PortfolioKey
-  const nav = useNavigate()
   const fittedLgd = useUi((s) => s.fittedLgd[pk])
   const setFittedLgd = useUi((s) => s.setFittedLgd)
-  const loaded = useUi((s) => s.loaded[pk])
-  const forkFromLoaded = useUi((s) => s.forkFromLoaded)
 
   const cand = useQuery({ queryKey: ['lgdcand', portfolio], queryFn: () => api.lgdCandidates(portfolio) })
   const [spec, setSpec] = useState<LgdSpecPayload>({ drivers: [], categoricals: [] })
-  const [pendingEdit, setPendingEdit] = useState<null | (() => void)>(null)
 
   useEffect(() => {
     if (fittedLgd) { setSpec(fittedLgd.spec); return }
@@ -38,29 +41,9 @@ export default function LgdSurface() {
                              categoricals: [...cand.data.default_spec.categoricals] })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cand.data, portfolio, fittedLgd?.hash,
-      JSON.stringify(fittedLgd?.spec.treatments ?? {})])
+      JSON.stringify(asMap(fittedLgd?.spec.treatments))])
 
-  // A saved model has been opened, or its specification was set on the Explore
-  // stage: estimate it so the coefficients, macro response and calibration are
-  // populated on arrival.
-  useEffect(() => {
-    const n = spec.drivers.length + spec.categoricals.length
-    if (n && !fit.data && !fit.isPending && (loaded || fittedLgd?.hash === '')) fit.mutate()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded?.hash, fittedLgd?.hash, spec.drivers.length, spec.categoricals.length])
 
-  /** A saved model is immutable, so an edit while one is open creates a new
-   *  Model ID with the open one recorded as its parent. */
-  const guard = (change: () => void) => {
-    if (loaded) { setPendingEdit(() => change); return }
-    change()
-  }
-
-  const toggle = (kind: 'drivers' | 'categoricals', col: string) =>
-    guard(() => setSpec((s) => ({
-      ...s,
-      [kind]: s[kind].includes(col) ? s[kind].filter((c) => c !== col) : [...s[kind], col],
-    })))
 
   // What the last fit did. A refit of an unchanged specification returns an
   // identical model — correctly — so nothing on screen moves and the button
@@ -71,9 +54,40 @@ export default function LgdSurface() {
   // whatever it was when the mutation was defined — undefined — and every
   // refit reported itself as a first fit.
   const prevFit = useRef<LgdFitResult | null>(null)
+  const qc = useQueryClient()
+
+  // The fitted model, as a QUERY keyed on the severity hash. Switching among
+  // challengers changes the hash, the query fetches or serves from cache, and
+  // switching BACK is instant with no request — comparing two models must not
+  // cost a re-estimation each way. This also deletes the effect that
+  // re-estimated "when behind", along with the sync race it carried.
+  const fitQuery = useQuery({
+    queryKey: ['lgdfit', portfolio, fittedLgd?.hash],
+    queryFn: () => api.lgdFit(portfolio, fittedLgd!.spec),
+    enabled: !!fittedLgd?.hash,
+    staleTime: Infinity,
+    gcTime: 30 * 60_000,
+    retry: 1,
+  })
+  // A switched-to model's stored metrics may predate this fit; refresh them.
+  useEffect(() => {
+    const r = fitQuery.data
+    if (!r || !fittedLgd || fittedLgd.hash !== r.hash || fittedLgd.rmse != null) return
+    setFittedLgd(pk, {
+      ...fittedLgd, name: r.name, meanLgd: r.mean_lgd, nDefaults: r.n_defaults,
+      rmse: r.diagnostics.rmse,
+      bias: r.diagnostics.mean_predicted - r.diagnostics.mean_actual,
+      devianceR2: r.diagnostics.deviance_r2,
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fitQuery.data?.hash])
+
+  // The explicit Refit of an edited draft. The result seeds the query cache
+  // under its new hash, so the query above takes over without a second fetch.
   const fit = useMutation({
     mutationFn: () => api.lgdFit(portfolio, spec),
     onSuccess: (r) => {
+      qc.setQueryData(['lgdfit', portfolio, r.hash], r)
       const prev = prevFit.current
       prevFit.current = r
       setOutcome(!prev ? `Fitted on ${r.n_defaults.toLocaleString()} resolved workouts.`
@@ -83,12 +97,40 @@ export default function LgdSurface() {
             + `Deviance R² ${prev.diagnostics.deviance_r2.toFixed(3)}`
             + ` → ${r.diagnostics.deviance_r2.toFixed(3)}.`)
       setFittedLgd(pk, {
-        spec: r.spec, hash: r.hash, fittedAt: new Date().toISOString(),
+        spec: r.spec, hash: r.hash, name: r.name, fittedAt: new Date().toISOString(),
         meanLgd: r.mean_lgd, nDefaults: r.n_defaults,
+        rmse: r.diagnostics.rmse,
+        bias: r.diagnostics.mean_predicted - r.diagnostics.mean_actual,
+        devianceR2: r.diagnostics.deviance_r2,
       })
     },
   })
-  const res = fit.data
+  // The query serves the stored model; the mutation bridges a draft refit
+  // until its result lands in the store and the query takes over.
+  const res = fitQuery.data ?? fit.data
+  const busy = fit.isPending || fitQuery.isFetching
+  // The model bar's call to action, clicked while the LGD stage is on screen.
+  // A store flag, not a window event: this pane is unmounted while a driver
+  // detail or the target view is open, and an event fired then had no
+  // listener. The flag waits for the pane to mount and is consumed once.
+  const cta = useUi((s) => s.cta)
+  const setCta = useUi((s) => s.setCta)
+  useEffect(() => {
+    if (cta !== 'lgd') return
+    setCta(null)
+    if (!busy) fit.mutate()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cta])
+  // Keep the progress card for a moment after the response, so the bar is
+  // seen to complete rather than vanishing at 92%.
+  const [justFitted, setJustFitted] = useState(false)
+  useEffect(() => {
+    if (busy) { setJustFitted(true); return }
+    if (!justFitted) return
+    const t = setTimeout(() => setJustFitted(false), 700)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy])
 
   // Whether the fit on screen still describes the specification on screen.
   //
@@ -99,12 +141,25 @@ export default function LgdSurface() {
   // button; the one time it matters, nothing said so.
   const canonical = (sp: LgdSpecPayload | undefined) => sp && JSON.stringify({
     d: [...sp.drivers].sort(), c: [...sp.categoricals].sort(),
-    t: Object.entries(sp.treatments ?? {}).sort(),
-    e: Object.entries(sp.edges ?? {}).sort(),
-    k: Object.entries(sp.knots ?? {}).sort(),
+    t: Object.entries(asMap(sp.treatments)).sort(),
+    e: Object.entries(asMap(sp.edges)).sort(),
+    k: Object.entries(asMap(sp.knots)).sort(),
     n: sp.n_knots, m: sp.max_bins,
   })
   const stale = !!res && canonical(spec) !== canonical(res.spec)
+  // The one remaining automatic fit: a virgin book, where the screen proposes
+  // a default specification and nothing has ever been estimated. Everything
+  // else is either served by the query (a model with a hash) or waits for the
+  // Refit button (an edited draft, whose hash is cleared by the edit).
+  const firstFit = useRef(false)
+  useEffect(() => {
+    const n = spec.drivers.length + spec.categoricals.length
+    if (!n || fittedLgd || busy || firstFit.current) return
+    firstFit.current = true
+    fit.mutate()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [spec.drivers.length, spec.categoricals.length])
+
   const sens = useQuery({
     queryKey: ['lgdsens', portfolio, res?.hash],
     queryFn: () => api.lgdSensitivity(portfolio, spec),
@@ -128,62 +183,58 @@ export default function LgdSurface() {
     () => spec.drivers.some((d) => cand.data?.numeric.find((c) => c.column === d)?.macro),
     [spec.drivers, cand.data])
 
-  if (cand.isLoading || !cand.data) return <div className="p-4"><Skeleton className="h-[560px]" /></div>
+  if (cand.isLoading || !cand.data) return <Skeleton className="h-[560px]" />
 
   return (
-    <div className="space-y-3 p-4">
-      {pendingEdit && (
-        <ForkDialog
-          name={loaded?.name ?? ''}
-          onCancel={() => setPendingEdit(null)}
-          onConfirm={() => { forkFromLoaded(pk); pendingEdit(); setPendingEdit(null) }}
-        />
-      )}
-
+    <div className="space-y-3">
       <Card>
         <CardHead
-          title="LGD model — Fit"
+          title="LGD model: Fit"
           subtitle={`Fractional logit on realised severity · ${num(cand.data.n_defaults)} defaulted account-months`}
-          caption="E[LGD] = sigmoid(X·β), estimated by fractional response quasi-likelihood (Papke and Wooldridge). Terms enter linearly. Macro drivers are joined at the default month, which is what allows predicted severity to respond to a scenario."
+          caption={
+            <>
+              <Eq tex="\mathbb{E}[\,\mathrm{LGD}\mid X\,] = \sigma(X\beta)" />
+              , estimated by fractional-response quasi-likelihood (Papke and
+              Wooldridge). Terms enter linearly. Macro drivers are joined at the
+              default month, which is what lets predicted severity respond to a
+              scenario.
+            </>
+          }
         />
         <div className="flex flex-wrap items-center gap-4 border-t border-hairline px-4 py-2.5">
           <span className="text-tiny text-ink-secondary">
             {nSelected} driver{nSelected === 1 ? '' : 's'} in the specification
           </span>
-          <button onClick={() => nav(`/${portfolio}/lgd/explore`)}
-            className="text-tiny text-ink-muted underline hover:text-ink">
-            Review them in Explore
-          </button>
           {!hasMacro && (
             <StatusPill severity="warning">
-              No macro driver selected — predicted LGD will not change across scenarios
+              No macro driver selected. Predicted LGD will not change across scenarios
             </StatusPill>
           )}
           {stale && (
             <span className="ml-auto flex items-center gap-1.5 text-tiny"
                   style={{ color: 'var(--status-warning)' }}
-                  title="The drivers selected here no longer match the ones this model was estimated on. Everything below — coefficients, diagnostics, backtest — describes the previous specification.">
+                  title="The drivers selected here no longer match the ones this model was estimated on. The coefficients, diagnostics and backtest below describe the previous specification.">
               <span>!</span>
-              <span>the specification changed — this fit is out of date</span>
+              <span>the specification changed. This fit is out of date</span>
             </span>
           )}
-          <button onClick={() => fit.mutate()} disabled={fit.isPending || nSelected === 0}
+          <button onClick={() => fit.mutate()} disabled={busy || nSelected === 0}
             className={`rounded-ctl px-4 py-1.5 text-xs font-semibold text-white disabled:opacity-60 ${
               stale ? '' : 'ml-auto'}`}
             style={{ background: stale ? 'var(--status-warning)' : 'var(--accent)' }}
             title={res && !stale
-              ? 'Re-estimate on the same specification. The result will be identical — the drivers have not changed since it was fitted.'
+              ? 'Re-estimate on the same specification. The result will be identical, because the drivers have not changed since it was fitted.'
               : 'Estimate the severity model on the drivers selected here.'}>
-            {fit.isPending ? 'Fitting…' : res ? 'Refit' : 'Fit LGD'}
+            {busy ? 'Fitting…' : res ? 'Refit' : 'Fit LGD'}
           </button>
         </div>
 
-        {outcome && !fit.isPending && !stale && (
+        {outcome && !busy && !stale && (
           <div className="flex items-center gap-2 border-t border-hairline px-4 py-1.5 text-micro text-ink-secondary">
-            <span style={{ color: 'var(--status-good)' }}>✓</span>
+            <span style={{ color: 'var(--status-good)' }}><Check /></span>
             <span>{outcome}</span>
             <button onClick={() => setOutcome(null)}
-              className="ml-auto text-ink-muted hover:text-ink" title="Dismiss">×</button>
+              className="ml-auto text-ink-muted hover:text-ink" title="Dismiss"><Close /></button>
           </div>
         )}
         {fit.isError && (
@@ -192,14 +243,18 @@ export default function LgdSurface() {
         )}
       </Card>
 
-      <div className="grid gap-3 lg:grid-cols-[300px_minmax(0,1fr)]">
-        <DriverPicker data={cand.data} spec={spec} onToggle={toggle} />
+        {(busy || justFitted) && (
+          <FitProgress done={!busy}
+            phases={LGD_PHASES(res?.n_defaults ?? cand.data?.n_defaults)} />
+        )}
 
         {!res ? (
-          <EmptyState title="Not fitted">
-            Select the drivers and fit. Candidates are ranked by their relationship
-            with realised severity on the Explore stage.
-          </EmptyState>
+          <Card>
+            <EmptyState title="Not fitted">
+              Tick drivers in the list to add them, then fit. Click a driver to see
+              its relationship with realised severity first.
+            </EmptyState>
+          </Card>
         ) : (
           <div className="space-y-3">
             <div className="grid gap-3 sm:grid-cols-4">
@@ -216,21 +271,17 @@ export default function LgdSurface() {
               </div>
             )}
 
-            <div className="flex items-center gap-1">
-              {([['spec', 'Specification'], ['diagnostics', 'Fit diagnostics'],
-                 ['backtest', 'Backtesting']] as const).map(([k, label]) => (
-                <button key={k} onClick={() => setTab(k)}
-                  className={`rounded-ctl px-3 py-1 text-xs font-medium transition-colors ${
-                    tab === k ? 'bg-accent-soft text-ink'
-                              : 'text-ink-muted hover:text-ink-secondary'}`}>
-                  {label}
-                </button>
-              ))}
-            </div>
+            <ViewTabs value={tab} onChange={setTab} tabs={[
+              { key: 'spec', label: 'Specification' },
+              { key: 'diagnostics', label: 'Fit diagnostics' },
+              { key: 'backtest', label: 'Backtesting' },
+            ]} />
 
             {tab === 'spec' && (
               <>
-                <Coefficients rows={res.coefficients} spec={spec} />
+                <Coefficients rows={res.coefficients} spec={spec}
+                              references={res.references}
+                              onOpenVariable={onOpenVariable} />
                 {sens.data && sens.data.sensitivity.length > 0 && <MacroResponse data={sens.data} />}
               </>
             )}
@@ -242,95 +293,14 @@ export default function LgdSurface() {
             )}
           </div>
         )}
-      </div>
     </div>
   )
 }
 
-function ForkDialog({ name, onCancel, onConfirm }:
-  { name: string; onCancel: () => void; onConfirm: () => void }) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-         onClick={onCancel}>
-      <div className="max-w-md rounded-card border border-hairline bg-raised p-5"
-           onClick={(e) => e.stopPropagation()}>
-        <h3 className="text-sm font-semibold text-ink">This creates a new Model ID</h3>
-        <p className="mt-2 text-xs leading-relaxed text-ink-secondary">
-          <span className="font-medium text-ink">{name}</span> is saved. Saved models
-          are not edited in place. This change produces a new specification with a new
-          hash and a new name, recording {name} as its parent. {name} is unchanged.
-        </p>
-        <div className="mt-4 flex justify-end gap-2">
-          <button onClick={onCancel}
-            className="rounded-ctl border border-hairline px-3 py-1.5 text-xs text-ink-secondary">
-            Cancel
-          </button>
-          <button onClick={onConfirm}
-            className="rounded-ctl bg-accent px-3 py-1.5 text-xs font-semibold text-white">
-            Create a new model
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function DriverPicker({ data, spec, onToggle }: {
-  data: { numeric: LgdCandidate[]; categorical: LgdCandidate[] }
-  spec: LgdSpecPayload
-  onToggle: (kind: 'drivers' | 'categoricals', col: string) => void
-}) {
-  const macro = data.numeric.filter((c) => c.macro)
-  const rest = data.numeric.filter((c) => !c.macro)
-  const Row = ({ c, kind }: { c: LgdCandidate; kind: 'drivers' | 'categoricals' }) => {
-    const on = spec[kind].includes(c.column)
-    return (
-      <button onClick={() => onToggle(kind, c.column)}
-        className={`flex w-full items-center gap-2 px-3 py-1 text-left text-tiny ${
-          on ? 'bg-accent/10 text-ink' : 'text-ink-secondary hover:bg-sunken'}`}>
-        <span className={`h-3 w-3 shrink-0 rounded-sm border ${
-          on ? 'border-accent bg-accent' : 'border-hairline'}`} />
-        <span className="truncate font-mono">{c.column}</span>
-        {c.levels != null && <span className="text-ink-muted">{c.levels}L</span>}
-        {c.caution && (
-          <span className="ml-auto shrink-0 text-micro text-ink-muted"
-                title="The name suggests an operational identifier rather than a risk driver.">
-            id?
-          </span>
-        )}
-        {c.filled < 0.95 && (
-          <span className="ml-auto shrink-0 text-micro text-ink-muted"
-                title="Share of defaulted rows where this column is populated.">
-            {pct(c.filled * 100, 0)}
-          </span>
-        )}
-      </button>
-    )
-  }
-  return (
-    <Card className="self-start">
-      <CardHead title="Specification"
-        caption="Columns available on defaulted rows. Macro drivers are listed first because they determine how predicted severity responds to a scenario." />
-      <div className="thin-scroll max-h-[620px] overflow-auto py-1">
-        <p className="px-3 pb-1 pt-2 text-micro uppercase tracking-wide text-ink-muted">
-          Macro at default
-        </p>
-        {macro.map((c) => <Row key={c.column} c={c} kind="drivers" />)}
-        <p className="px-3 pb-1 pt-3 text-micro uppercase tracking-wide text-ink-muted">
-          Loan and collateral
-        </p>
-        {rest.map((c) => <Row key={c.column} c={c} kind="drivers" />)}
-        <p className="px-3 pb-1 pt-3 text-micro uppercase tracking-wide text-ink-muted">
-          Categorical
-        </p>
-        {data.categorical.map((c) => <Row key={c.column} c={c} kind="categoricals" />)}
-      </div>
-    </Card>
-  )
-}
-
-function Coefficients({ rows, spec }: {
+function Coefficients({ rows, spec, references, onOpenVariable }: {
   rows: LgdFitResult['coefficients']; spec: LgdSpecPayload
+  references?: Record<string, string>
+  onOpenVariable?: (column: string) => void
 }) {
   const stars = (p: number | null) =>
     p == null ? '' : p < 0.001 ? '***' : p < 0.01 ? '**' : p < 0.05 ? '*' : ''
@@ -339,7 +309,7 @@ function Coefficients({ rows, spec }: {
       <CardHead
         title="Fitted specification"
         subtitle={`${rows.length} terms · robust standard errors`}
-        caption="Each coefficient is the change in the logit of predicted severity for a one standard deviation change in that term. Standard errors are the sandwich estimator: the quasi-likelihood assumes Var(y|x) = μ(1−μ), which is false for a proportion, so the naive errors would be too small and every term would look more significant than it is."
+        caption="Each coefficient is the change in the logit of predicted severity for a one standard deviation change in that term. Standard errors use the sandwich estimator, because the quasi-likelihood variance assumption does not hold for a proportion."
         right={<span className="text-micro text-ink-muted">*** p&lt;0.001 · ** p&lt;0.01 · * p&lt;0.05</span>}
       />
       <div className="overflow-x-auto">
@@ -352,6 +322,7 @@ function Coefficients({ rows, spec }: {
               <th className="px-3 py-2 text-right font-medium">Std. error</th>
               <th className="px-3 py-2 text-right font-medium">z</th>
               <th className="px-3 py-2 text-right font-medium">p-value</th>
+              <th className="px-3 py-2 font-medium" />
             </tr>
           </thead>
           <tbody>
@@ -365,12 +336,34 @@ function Coefficients({ rows, spec }: {
               const t = r.column === 'intercept' ? ''
                 : spec.categoricals.includes(base) ? 'indicator'
                 : spec.treatments?.[base] ?? 'continuous'
+              // An indicator coefficient is the shift RELATIVE to the bin that
+              // has no column. The table states which bin that is, or the
+              // coefficients read as absolute effects.
+              const ref = references?.[base]
+              // The same click-through the PD specification card has. A term
+              // that is a driver on this book opens its severity curve; a
+              // macro term or a derived column has no detail page.
+              const linkable = onOpenVariable
+                && (spec.drivers.includes(base) || spec.categoricals.includes(base))
+                && !base.includes('@')
               return (
-                <tr key={r.column} className="border-b border-hairline/60">
+                <tr key={r.column} className="border-b border-hairline">
                   <td className="px-3 py-1.5 font-mono text-tiny" title={r.column}>
-                    {macroTermLabel(r.column)}
+                    {linkable ? (
+                      <button onClick={() => onOpenVariable!(base)}
+                        title={`Open ${base}: severity curve, binning and stability`}
+                        className="text-left hover:text-accent hover:underline">
+                        {macroTermLabel(r.column)}
+                      </button>
+                    ) : macroTermLabel(r.column)}
                   </td>
-                  <td className="px-3 py-1.5 text-tiny text-ink-muted">{t}</td>
+                  <td className="px-3 py-1.5 text-tiny text-ink-muted">
+                    {t}
+                    {ref && (t === 'indicator' || t === 'bins') && (
+                      <span className="text-ink-muted" title={`Reference level: ${ref}. Each indicator's coefficient is the shift in severity relative to this level.`}
+                      > · vs {ref}</span>
+                    )}
+                  </td>
                   <td className="px-3 py-1.5 text-right tnum">{ratio(r.coefficient, 3)}</td>
                   <td className="px-3 py-1.5 text-right tnum text-ink-muted">
                     {r.std_error == null ? '—' : ratio(r.std_error, 3)}
@@ -382,6 +375,15 @@ function Coefficients({ rows, spec }: {
                     {r.p_value == null ? '—'
                       : r.p_value < 1e-4 ? '<0.0001' : r.p_value.toFixed(4)}
                     <span className="ml-0.5 text-ink">{stars(r.p_value)}</span>
+                  </td>
+                  <td className="px-3 py-1.5">
+                    {/* The same flag the PD specification card carries. For an
+                        indicator, "not significant" means that level is not
+                        distinguishable from the reference — grounds to merge
+                        bins, not necessarily to drop the variable. */}
+                    {r.column !== 'intercept' && r.p_value != null && r.p_value > 0.05 && (
+                      <StatusPill severity="warning">not significant</StatusPill>
+                    )}
                   </td>
                 </tr>
               )
@@ -416,7 +418,7 @@ function MacroResponse({ data }: {
           </thead>
           <tbody>
             {data.sensitivity.map((r) => (
-              <tr key={r.driver} className="border-b border-hairline/60">
+              <tr key={r.driver} className="border-b border-hairline">
                 <td className="px-3 py-1.5 font-mono text-tiny" title={r.driver}>
                   {macroTermLabel(r.driver)}
                 </td>
@@ -444,7 +446,7 @@ export function Calibration({ rows }: {
       <CardHead
         title="Calibration"
         subtitle="Defaults grouped into cohorts of predicted severity"
-        caption="Predicted against actual mean severity within each cohort. This tests the level of the prediction, which is the quantity that enters the loss calculation, rather than its ordering."
+        caption="Predicted against actual mean severity within each cohort."
       />
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
@@ -460,7 +462,7 @@ export function Calibration({ rows }: {
           </thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={r.cohort} className="border-b border-hairline/60">
+              <tr key={r.cohort} className="border-b border-hairline">
                 <td className="px-3 py-1.5">{r.cohort}</td>
                 <td className="px-3 py-1.5 text-right tnum text-ink-muted">{num(r.n)}</td>
                 <td className="px-3 py-1.5 text-right tnum">{pct(r.predicted * 100, 1)}</td>
@@ -498,7 +500,7 @@ function FitDiagnostics({ d }: { d: LgdDiagnostics }) {
         <StatTile label="Rank correlation" value={ratio(d.spearman, 3)}
           explain="Spearman between predicted and realised severity. This is the discrimination measure for a fractional target; an AUC would require two classes, and there are none." />
         <StatTile label="Mean absolute error" value={pct(d.mae * 100, 1)}
-          explain="Average absolute gap between predicted and realised severity, in percentage points — the unit the answer is quoted in." />
+          explain="Average absolute gap between predicted and realised severity, in percentage points." />
         <StatTile label="Root mean squared error" value={pct(d.rmse * 100, 1)} />
       </div>
 
@@ -506,7 +508,7 @@ function FitDiagnostics({ d }: { d: LgdDiagnostics }) {
         <CardHead
           title="Link test"
           subtitle="RESET-style specification check"
-          caption="The fitted linear predictor and its square are re-fitted as the only two terms. A significant coefficient on the square says the logit link with these terms does not describe the conditional mean — usually because a driver needs a non-linear form. Papke and Wooldridge specify this test with the estimator."
+          caption="The fitted linear predictor and its square are re-fitted as the only two terms. A significant coefficient on the square indicates the link does not describe the conditional mean, usually because a driver needs a non-linear form. Specified with the estimator by Papke and Wooldridge."
         />
         <div className="flex flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3 text-xs">
           <StatusPill severity={link.ok === false ? 'warning' : 'good'}>
@@ -528,7 +530,7 @@ function FitDiagnostics({ d }: { d: LgdDiagnostics }) {
         <CardHead
           title="Calibration"
           subtitle={`Predicted ${pct(d.mean_predicted * 100, 1)} against actual ${pct(d.mean_actual * 100, 1)} overall`}
-          caption="Defaults grouped into deciles of predicted severity, with a 95% interval on each actual mean. A severity model can order defaults correctly and still be wrong on the level, and the level is what enters the loss calculation."
+          caption="Defaults grouped into deciles of predicted severity, with a 95% interval on each actual mean. A model can order defaults correctly and still be wrong on the level, and the level is what enters the loss calculation."
         />
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
@@ -547,7 +549,7 @@ function FitDiagnostics({ d }: { d: LgdDiagnostics }) {
               {d.calibration.map((c) => {
                 const inside = c.predicted >= c.actual_lo95 && c.predicted <= c.actual_hi95
                 return (
-                  <tr key={c.cohort} className="border-b border-hairline/60">
+                  <tr key={c.cohort} className="border-b border-hairline">
                     <td className="px-3 py-1.5">{c.cohort}</td>
                     <td className="px-3 py-1.5 text-right tnum text-ink-muted">{num(c.n)}</td>
                     <td className="px-3 py-1.5 text-right tnum">{pct(c.predicted * 100, 1)}</td>
@@ -576,7 +578,7 @@ function FitDiagnostics({ d }: { d: LgdDiagnostics }) {
         <CardHead
           title="Pearson residuals against fitted"
           subtitle="Grouped, with a 95% interval on each group mean"
-          caption="Residual divided by the square root of μ(1−μ). The estimator assumes nothing about the variance, so a pattern here indicates the MEAN function is misspecified rather than the variance. A flat band around zero is what a correct specification looks like."
+          caption="Residual divided by the square root of μ(1−μ). The estimator assumes nothing about the variance, so a pattern here indicates the mean function is misspecified. Expect a flat band around zero."
         />
         <div className="overflow-x-auto px-4 py-3">
           <div className="flex items-end gap-1" style={{ height: 110 }}>
@@ -625,7 +627,7 @@ function Backtest({ data, loading, ootFrom, onOot, freq, onFreq }: {
         <CardHead
           title="Out of time"
           subtitle="Refit on defaults before the boundary, scored on the ones after it"
-          caption="Severity is estimated on defaulted rows only, so an out-of-time split leaves a test set of tens rather than thousands and every statistic from it carries a wide interval. The counts are reported beside the numbers."
+          caption="Severity is estimated on defaulted rows only, so an out-of-time split leaves a small test set and every statistic from it carries a wide interval. Counts are reported beside the numbers."
           right={
             <label className="flex items-center gap-1.5 text-tiny text-ink-muted">
               from
@@ -641,7 +643,7 @@ function Backtest({ data, loading, ootFrom, onOot, freq, onFreq }: {
         {data && !data.usable && (
           <div className="px-4 py-3">
             <StatusPill severity="warning">Split too thin to test</StatusPill>
-            <p className="mt-1.5 text-xs leading-relaxed text-ink-secondary">{data.note}</p>
+            <p className="max-w-[88ch] mt-1.5 text-xs leading-relaxed text-ink-secondary">{data.note}</p>
           </div>
         )}
         {data?.usable && data.train && data.test && (
@@ -661,7 +663,7 @@ function Backtest({ data, loading, ootFrom, onOot, freq, onFreq }: {
               <tbody>
                 {([['In time', data.train], ['Out of time', data.test]] as const).map(
                   ([label, r]) => (
-                    <tr key={label} className="border-b border-hairline/60">
+                    <tr key={label} className="border-b border-hairline">
                       <td className="px-3 py-1.5 text-ink">{label}</td>
                       <td className="px-3 py-1.5 text-right tnum text-ink-muted">{num(r!.n)}</td>
                       <td className="px-3 py-1.5 text-right tnum">{pct(r!.mean_actual * 100, 1)}</td>
@@ -673,7 +675,7 @@ function Backtest({ data, loading, ootFrom, onOot, freq, onFreq }: {
                   ))}
               </tbody>
             </table>
-            <p className="px-4 py-2 text-micro leading-relaxed text-ink-muted">
+            <p className="max-w-[88ch] px-4 py-2 text-micro leading-relaxed text-ink-muted">
               The gap between the two rows is what the model loses on a period it
               was not fitted on. On {num(data.test.n)} defaults the interval around
               every figure in the second row is wide.
@@ -687,7 +689,7 @@ function Backtest({ data, loading, ootFrom, onOot, freq, onFreq }: {
           <CardHead
             title="Actual against predicted severity, through time"
             subtitle={`${data.periods_kept ?? 0} ${data.period_freq ?? 'period'}s plotted`}
-            caption="A severity model is judged on the LEVEL it produces, and a level can drift while every rank stays correct. The band is the 95% interval of the realised cohort mean; a predicted mean outside it is a calibration miss for that cohort rather than sampling noise."
+            caption="The band is the 95% interval of the realised cohort mean. A predicted mean outside it is a calibration miss for that cohort, not sampling noise."
           />
           <SeverityOverTime
             d={{
@@ -724,7 +726,7 @@ function Backtest({ data, loading, ootFrom, onOot, freq, onFreq }: {
               </thead>
               <tbody>
                 {data.by_year.map((r) => (
-                  <tr key={r.year} className="border-b border-hairline/60">
+                  <tr key={r.year} className="border-b border-hairline">
                     <td className="px-3 py-1.5 tnum">{r.year}</td>
                     <td className="px-3 py-1.5 text-right tnum text-ink-muted">{num(r.n)}</td>
                     <td className="px-3 py-1.5 text-right tnum">{pct(r.actual * 100, 1)}</td>

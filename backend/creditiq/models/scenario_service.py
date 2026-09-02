@@ -15,8 +15,15 @@ from . import bridge as BR
 from . import ead as EAD
 from . import ecl as ECL
 from . import lgd as LGD
+from . import runcache
 from . import service as modelsvc
 from .spec import ModelSpec
+
+import hashlib
+
+
+def _disk_key(key: tuple) -> str:
+    return hashlib.sha256(repr(key).encode()).hexdigest()[:16]
 
 _LGD_CACHE: dict[str, LGD.LgdModel] = {}
 _ECL_CACHE: dict[tuple, dict] = {}
@@ -41,8 +48,12 @@ def lgd_model(portfolio: str, spec: LGD.LgdSpec | None = None) -> LGD.LgdModel:
     spec = spec or LGD.LgdSpec.default_for(portfolio)
     key = spec.hash()
     if key not in _LGD_CACHE:
-        df = store.analysis_frame(spec.portfolio)
-        _LGD_CACHE[key] = LGD.fit_lgd(df, spec, mevpanel.monthly_panel())
+        prev = runcache.load(spec.portfolio, "lgd", key)
+        if prev is None:
+            df = store.analysis_frame(spec.portfolio)
+            prev = LGD.fit_lgd(df, spec, mevpanel.monthly_panel())
+            runcache.save(spec.portfolio, "lgd", key, prev)
+        _LGD_CACHE[key] = prev
     return _LGD_CACHE[key]
 
 
@@ -204,6 +215,14 @@ def run(spec: ModelSpec, scenarios: list[str] | None = None,
            tuple(sorted((k, tuple(sorted(v.items()))) for k, v in (custom or {}).items())))
     if not force and key in _ECL_CACHE:
         return _ECL_CACHE[key]
+    if not force:
+        # A projection computed in a previous process. The disk key carries
+        # the data fingerprint, so a run projected on a superseded panel is
+        # recomputed rather than served.
+        prev = runcache.load(spec.portfolio, "ecl", _disk_key(key))
+        if prev is not None:
+            _ECL_CACHE[key] = prev
+            return prev
 
     t = {}
     t0 = time.perf_counter()
@@ -291,6 +310,7 @@ def run(spec: ModelSpec, scenarios: list[str] | None = None,
     if len(_ECL_CACHE) > 12:
         _ECL_CACHE.pop(next(iter(_ECL_CACHE)))
     _ECL_CACHE[key] = out
+    runcache.save(spec.portfolio, "ecl", _disk_key(key), out)
     return out
 
 

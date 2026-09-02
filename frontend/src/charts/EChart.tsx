@@ -50,7 +50,7 @@ function auditChart(option: EChartsOption, ariaLabel: string, externalLegend: bo
 
 export default function EChart({
   option, height = 260, table, ariaLabel, refetching = false, onReady,
-  externalLegend = false,
+  externalLegend = false, compact = false,
 }: {
   option: EChartsOption
   height?: number
@@ -60,6 +60,10 @@ export default function EChart({
    *  which keeps legend text on the card surface rather than inside the plot.
    *  Tells the development-time audit that identity is already covered. */
   externalLegend?: boolean
+  /** Small-multiple mode: no export chip row. A grid of six charts does not
+   *  need six pairs of PNG/SVG buttons — the ragged chip rows were the main
+   *  thing making the grids look uneven. */
+  compact?: boolean
   /** While data reloads the chart HOLDS its previous render at reduced opacity —
    *  no skeleton flash, no layout jump. */
   refetching?: boolean
@@ -91,7 +95,7 @@ export default function EChart({
     if (!inst.current) return
     const url = inst.current.getDataURL({
       type: type === 'svg' ? 'svg' : 'png',
-      pixelRatio: 3, // presentation resolution — this ends up in a deck
+      pixelRatio: 3, // presentation resolution: this ends up in a deck
       backgroundColor: getComputedStyle(document.documentElement)
         .getPropertyValue('--surface-chart').trim(),
     })
@@ -137,7 +141,7 @@ export default function EChart({
             </thead>
             <tbody>
               {table.rows.map((r, i) => (
-                <tr key={i} className="border-b border-hairline/50">
+                <tr key={i} className="border-b border-hairline">
                   {r.map((v, j) => (
                     <td key={j} className="px-3 py-1 text-ink-secondary">
                       {typeof v === 'number' ? v.toLocaleString() : escapeHtml(v)}
@@ -150,6 +154,7 @@ export default function EChart({
         </div>
       )}
 
+      {!compact && (
       <figcaption className="flex items-center justify-end gap-1 px-3 pb-2 pt-1">
         {table && (
           <button
@@ -176,6 +181,7 @@ export default function EChart({
           SVG
         </button>
       </figcaption>
+      )}
     </figure>
   )
 }

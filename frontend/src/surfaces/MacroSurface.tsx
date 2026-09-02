@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api, type MacroCandidate, type PortfolioKey } from '../lib/api'
 import { Card, CardHead, Skeleton, StatTile } from '../components/ui'
+import { Check, Cross, Info } from '../components/icons'
 import EChart from '../charts/EChart'
 import { baseOption, crosshairTooltip, lineSeries } from '../charts/base'
 import { deemphasis, ink, mode, series } from '../design/tokens'
@@ -33,12 +34,12 @@ function SignLegend({ n, total }: { n: number; total: number }) {
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-hairline px-3 py-1.5 text-micro text-ink-muted">
       <span className="text-ink-secondary">Sign</span>
       <span className="flex items-center gap-1">
-        <span style={{ color: 'var(--status-good)' }}>✓</span>
+        <span style={{ color: 'var(--status-good)' }}><Check /></span>
         agrees with the economic prior for the variable
       </span>
       <span className="flex items-center gap-1">
-        <span style={{ color: 'var(--status-critical)' }}>✕</span>
-        contradicts it — usually collinearity, not a finding
+        <span style={{ color: 'var(--status-critical)' }}><Cross /></span>
+        contradicts it, usually collinearity rather than a finding
       </span>
       <span className="flex items-center gap-1">
         <span>—</span>
@@ -58,6 +59,12 @@ export default function MacroSurface() {
   const lib = useQuery({ queryKey: ['macrolib', portfolio], queryFn: () => api.macroLibrary(portfolio) })
   const [target, setTarget] = useState<'pd' | 'lgd'>('pd')
   const [onlyStationary, setOnlyStationary] = useState(true)
+  // One row per variable and transform, at its best lag. Ranking every lag of
+  // every variable put prime_rate at six different lags in the top six: the
+  // classic route to a spurious pick, since the best of five lags of the same
+  // series will always look better than any one of them. Off, the lags are
+  // listed so the lag structure can be read.
+  const [bestLagOnly, setBestLagOnly] = useState(true)
   const [onlySignOk, setOnlySignOk] = useState(false)
   const [transform, setTransform] = useState<string>('all')
   const [selected, setSelected] = useState<string | null>(null)
@@ -73,7 +80,9 @@ export default function MacroSurface() {
       .filter((c) => !onlySignOk || signOk(c, target) !== false)
       .filter((c) => transform === 'all' || c.transform === transform)
       .sort((a, b) => Math.abs(r(b)!) - Math.abs(r(a)!))
-  }, [lib.data, target, onlyStationary, onlySignOk, transform])
+      .filter((c, _, arr) => !bestLagOnly
+        || arr.find((x) => x.key === c.key && x.transform === c.transform) === c)
+  }, [lib.data, target, onlyStationary, onlySignOk, transform, bestLagOnly])
 
   const shown = selected ?? rows[0]?.column ?? null
   const detail = useQuery({
@@ -90,9 +99,9 @@ export default function MacroSurface() {
     <div className="space-y-3 p-4">
       <Card>
         <CardHead
-          title="Macro — transformation search"
+          title="Macro: transformation search"
           subtitle={`${d.n_bases} supervisory variables × ${d.transforms.length} transforms × ${d.lags.length} lags · estimation window ${d.window[0].slice(0, 7)} to ${d.window[1].slice(0, 7)}`}
-          caption="Only variables the Federal Reserve publishes a forward path for are offered, because a term with no projected path cannot be carried into a scenario. Terms selected here become candidates in the PD and LGD Explore stages; they are not added to a model automatically."
+          caption="Only variables with a published Federal Reserve forward path are offered, because a term with no projected path cannot be carried into a scenario."
         />
         <div className="grid gap-3 border-t border-hairline p-3 sm:grid-cols-4">
           <StatTile label="Candidate terms" value={num(d.n_candidates)} />
@@ -101,7 +110,7 @@ export default function MacroSurface() {
           <StatTile label="PD target" value={`${num(d.pd_months)} months`}
             explain="The monthly default rate on the log-odds scale, over the estimation window." />
           <StatTile label="LGD target" value={`${num(d.lgd_defaults)} defaults`}
-            explain={`Severity is correlated per resolved default, with the macro term joined at the default month — the same population the LGD model is estimated on. Those defaults fall in ${d.lgd_months} distinct months, which caps the effective sample size.`} />
+            explain={`Severity is correlated per resolved default, with the macro term joined at the default month. This is the population the LGD model is estimated on. Those defaults fall in ${d.lgd_months} distinct months, which caps the effective sample size.`} />
         </div>
       </Card>
 
@@ -120,13 +129,19 @@ export default function MacroSurface() {
             title="A regression of one trending series on another finds a relationship whether or not one exists. Non-stationary forms are excluded by default; the test is reported either way.">
             <input type="checkbox" checked={onlyStationary}
               onChange={(e) => setOnlyStationary(e.target.checked)} />
-            Stationary only ⓘ
+            Stationary only <Info className="text-ink-muted" />
+          </label>
+          <label className="flex items-center gap-1.5 text-ink-muted"
+            title="One row per variable and transform, at the lag with the strongest correlation. Ranking every lag separately lets one series fill the top of the list, and the best of several lags of the same series always looks better than any single one of them.">
+            <input type="checkbox" checked={bestLagOnly}
+              onChange={(e) => setBestLagOnly(e.target.checked)} />
+            Best lag only <Info className="text-ink-muted" />
           </label>
           <label className="flex items-center gap-1.5 text-ink-muted"
             title="Drops terms whose observed direction contradicts the portfolio's economic prior. Terms with no declared prior (—) are kept, because an unchecked direction is not a failed one.">
             <input type="checkbox" checked={onlySignOk}
               onChange={(e) => setOnlySignOk(e.target.checked)} />
-            Sign matches the prior ⓘ
+            Sign matches the prior <Info className="text-ink-muted" />
           </label>
           <label className="flex items-center gap-1.5 text-ink-muted">
             Transform
@@ -148,7 +163,7 @@ export default function MacroSurface() {
       <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_460px]">
         <Card>
           <CardHead title="Candidates" subtitle={`Ranked by |correlation| with the ${target === 'pd' ? 'monthly default rate, on the log-odds scale' : 'monthly mean severity, on the logit scale'}`}
-            caption="The significance column uses an effective sample size, not the raw month count. Two smooth monthly series over eighteen years carry far less independent information than 216 observations suggest, and an unadjusted p-value calls almost anything significant." />
+            caption="Significance uses an effective sample size, not the raw month count. Two smooth monthly series carry far less independent information than the observation count implies." />
           <SignLegend n={rows.filter((c) => signOk(c, target) == null).length}
                       total={rows.length} />
           <div className="thin-scroll max-h-[560px] overflow-auto">
@@ -162,7 +177,7 @@ export default function MacroSurface() {
                   <th className="px-2 py-2 text-right font-medium">r</th>
                   <th className="px-2 py-2 text-right font-medium" title="Adjusted for serial correlation in both series.">p</th>
                   <th className="px-2 py-2 text-center font-medium"
-                      title="Does the observed direction agree with the economic prior for this variable? A prior says which way the variable moves credit risk — it is declared per variable and applies to every transform and lag of it. ✓ agrees, ✕ contradicts, — no prior is declared for this variable, so there is nothing to check.">Sign ⓘ</th>
+                      title="Whether the observed direction agrees with the declared economic prior. A prior is declared per variable and applies to every transform and lag of it. Tick agrees, cross contradicts, dash means no prior is declared.">Sign ⓘ</th>
                   <th className="px-2 py-2 text-center font-medium">PD</th>
                   <th className="px-2 py-2 text-center font-medium">LGD</th>
                 </tr>
@@ -174,7 +189,7 @@ export default function MacroSurface() {
                   const active = c.column === shown
                   return (
                     <tr key={c.column}
-                        className={`cursor-pointer border-b border-hairline/50 ${
+                        className={`cursor-pointer border-b border-hairline ${
                           active ? 'bg-accent-soft' : 'hover:bg-sunken/60'}`}
                         onClick={() => setSelected(c.column)}>
                       <td className="px-2 py-1.5">
@@ -208,7 +223,7 @@ export default function MacroSurface() {
                           return (
                             <span style={{ color: ok ? 'var(--status-good)' : 'var(--status-critical)' }}
                                   title={`Prior: a higher ${c.label} ${c.expected_sign === 1 ? 'raises' : 'lowers'} the ${t2}. Observed: it ${obs === 1 ? 'raises' : 'lowers'} it. ${ok ? 'The two agree.' : 'The two disagree, which usually points to collinearity with another term rather than to a new finding.'}`}>
-                              {ok ? '✓' : '✕'}
+                              {ok ? <Check /> : <Cross />}
                             </span>
                           )
                         })()}
@@ -310,7 +325,7 @@ function SeriesChart({ d, label, unit, target }: {
     <Card>
       <CardHead title="Candidate against the target"
         subtitle={`${d.key} · ${d.transform}${d.lag_months ? ` · lag ${d.lag_months}m` : ''}`}
-        caption="This is one axis, not two. Both series are z-scored — each is centred on its own mean and divided by its own standard deviation — so the shared scale reads in standard deviations and the shapes can be compared directly. Read timing and turning points from it, not levels. The tooltip carries the published value in its own units." />
+        caption="Both series are z-scored, so the single axis reads in standard deviations. Read timing and turning points, not levels. The tooltip carries the published value in its own units." />
       <div className="p-3">
         <EChart height={230} ariaLabel="Candidate macro term against the target series"
           option={option as any}

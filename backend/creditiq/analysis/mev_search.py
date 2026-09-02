@@ -58,6 +58,15 @@ TRANSFORMS: list[tuple[str, str, str]] = [
      "Year-over-year growth. Removes a trend and a seasonal pattern together."),
     ("qoq_annualized", "3m change annualised",
      "Quarter-over-quarter growth at an annual rate. Responds faster than YoY."),
+    ("ma3", "3m average", "Rolling three-month mean of the level. Smooths noise."),
+    ("ma6", "6m average", "Rolling six-month mean of the level."),
+    ("ma12", "12m average",
+     "Rolling twelve-month mean of the level. Removes the seasonal pattern."),
+    ("yoy_ma3", "12m % change, 3m avg",
+     "Year-over-year growth, then a three-month average. Growth without the "
+     "month-to-month noise."),
+    ("diff_ma3", "1m change, 3m avg",
+     "First difference, then a three-month average. The recent drift."),
 ]
 
 LAGS: tuple[int, ...] = (0, 3, 6, 9, 12)

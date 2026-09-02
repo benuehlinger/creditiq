@@ -1,0 +1,176 @@
+{
+  "hash": "7ad480ce66f56f93",
+  "name": "prudent-pergola-37",
+  "portfolio": "consumer",
+  "created_at": "2026-08-31T19:22:32+00:00",
+  "spec": {
+    "portfolio": "consumer",
+    "variables": [
+      {
+        "column": "fico_refreshed",
+        "treatment": "continuous",
+        "edges": null,
+        "groups": null,
+        "knots": null,
+        "n_knots": 4,
+        "max_bins": 8,
+        "shrinkage": 0.0
+      },
+      {
+        "column": "interest_rate",
+        "treatment": "bins",
+        "edges": [
+          0.12205061316490173,
+          0.1359616294503212,
+          0.16312959790229797
+        ],
+        "groups": null,
+        "knots": null,
+        "n_knots": 4,
+        "max_bins": 4,
+        "shrinkage": 0.0
+      },
+      {
+        "column": "revolving_utilization",
+        "treatment": "continuous",
+        "edges": null,
+        "groups": null,
+        "knots": null,
+        "n_knots": 4,
+        "max_bins": 8,
+        "shrinkage": 0.0
+      },
+      {
+        "column": "prior_delinq_count",
+        "treatment": "continuous",
+        "edges": null,
+        "groups": null,
+        "knots": null,
+        "n_knots": 4,
+        "max_bins": 8,
+        "shrinkage": 0.0
+      },
+      {
+        "column": "dti",
+        "treatment": "woe",
+        "edges": null,
+        "groups": null,
+        "knots": null,
+        "n_knots": 4,
+        "max_bins": 8,
+        "shrinkage": 0.0
+      }
+    ],
+    "mevs": [
+      {
+        "key": "unemployment_rate",
+        "transform": "level",
+        "lag_months": 0
+      },
+      {
+        "key": "real_disp_income_growth",
+        "transform": "level",
+        "lag_months": 0
+      },
+      {
+        "key": "prime_rate",
+        "transform": "four_quarter_change",
+        "lag_months": 12
+      }
+    ],
+    "estimator": "logistic",
+    "regularization": 1.0,
+    "seasoning_spline": true,
+    "vintage_effect": false,
+    "sample": {
+      "test_fraction": 0.3,
+      "oot_from": "2023-01-01",
+      "seed": 42,
+      "downsample_rows": null
+    },
+    "lgd": {
+      "portfolio": "consumer",
+      "drivers": [
+        "fico_orig",
+        "months_on_book",
+        "unemployment_rate"
+      ],
+      "categoricals": [],
+      "treatments": {},
+      "edges": {},
+      "knots": {},
+      "n_knots": 3,
+      "max_bins": 5
+    },
+    "target_column": "default_flag",
+    "label": null,
+    "parent_hash": null,
+    "notes": "",
+    "hash": "7ad480ce66f56f93"
+  },
+  "metrics": {
+    "auc_test": 0.7894863154231754,
+    "auc_oot": 0.7454349874585338,
+    "ks_test": 0.43330621843685807,
+    "gini_test": 0.5789726308463508,
+    "log_loss_test": 0.021733573704457974,
+    "brier_test": 0.003608269333942884,
+    "calibration_error": 0.0001586067959689425,
+    "mcfadden_r2": 0.10212126636838925,
+    "pd_oot_rmse_pp": 0.3654637356369944,
+    "pd_oot_bias_pp": -0.04392795263660395,
+    "pd_oot_coverage": 0.5,
+    "n_variables": 5,
+    "n_mevs": 3,
+    "estimator": "logistic",
+    "coefficients": {
+      "intercept": -6.271515172223862,
+      "fico_refreshed": -0.5293792327232584,
+      "interest_rate=[0.122, 0.136)": 0.04901795324350135,
+      "interest_rate=[0.136, 0.163)": 0.07394884584311964,
+      "interest_rate=>= 0.163": 0.03411359170385746,
+      "revolving_utilization": 0.24139434443915656,
+      "prior_delinq_count": 0.22866245467465907,
+      "dti_woe": 0.1893260704685694,
+      "seasoning_basis1": 0.12723187958553786,
+      "seasoning_basis2": -0.7049672026409755,
+      "seasoning_basis3": -0.07953904326536325,
+      "seasoning_basis4": -0.10282507772845281,
+      "seasoning_basis5": -0.004825584536158659,
+      "seasoning_basis6": 0.02553958151054129,
+      "seasoning_basis7": 0.005541700242278693,
+      "mev:unemployment_rate": 0.36513348505379123,
+      "mev:real_disp_income_growth": -0.11719549871477596,
+      "mev:prime_rate 12m chg (lag 12m)": -0.08241205201779389
+    },
+    "lgd_bias": -0.0018024190256601402,
+    "lgd_rmse": 0.2685598107017454,
+    "lgd_mae": 0.19859471463965306,
+    "lgd_deviance_r2": 0.023410247736428524,
+    "lgd_spearman": 0.3490773958745401,
+    "lgd_mean_predicted": 0.7024653891484248,
+    "lgd_mean_actual": 0.704267808174085,
+    "lgd_n": 3065,
+    "lgd_basis": "out of time",
+    "lgd_basis_note": "defaults from 2022-01-01",
+    "n_lgd_drivers": 3,
+    "lgd_hash": "a291dc632d7a",
+    "pd_hash": "ff88fcb7a441"
+  },
+  "ecl": {
+    "ecl_baseline": 38698580.13189798,
+    "ecl_severely_adverse": 80393682.74231488,
+    "ecl_bps_baseline": 379.4730366405503,
+    "ecl_bps_severely_adverse": 788.3295669495923,
+    "weighted_ecl": 49122355.7845022
+  },
+  "status": "champion",
+  "starred": false,
+  "tags": [],
+  "notes": "",
+  "parent_hash": null,
+  "replaced_hash": null,
+  "author": "CreditIQ",
+  "data_fingerprint": "88ea0138a701",
+  "schema_version": 2
+}

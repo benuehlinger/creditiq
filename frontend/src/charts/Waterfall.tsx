@@ -103,7 +103,7 @@ export default function Waterfall({ steps, reconciles, ariaLabel,
          style={{ color: reconciles.ok ? 'var(--ink-muted)' : 'var(--status-critical)' }}>
         {reconciles.ok
           ? `The steps reconcile to the total exactly (residual ${reconciles.residual.toExponential(1)}). No plug.`
-          : `Bridge does not reconcile — residual ${usd(reconciles.residual)}.`}
+          : `Bridge does not reconcile. Residual ${usd(reconciles.residual)}.`}
       </p>
     </>
   )

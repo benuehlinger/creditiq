@@ -1373,3 +1373,971 @@ than discover it in a screenshot.
 Bundled from `@fontsource/tinos`, latin subset only, 19 KB. The Merriweather
 package was uninstalled rather than left in `package.json` as a dependency
 nothing imports.
+
+## 42. Two bugs behind "the treatment does nothing"
+
+**A mapping was serialised as a list of pairs, and the interface spread it.**
+`LgdSpec` is frozen so it can hash, which means it stores per-column settings as
+tuples of pairs. `to_dict()` emitted that shape, so the interface received
+`[["cltv", "spline"]]` for a field named `treatments` and wrote
+`{...treatments, [col]: t}`. Spreading an ARRAY into an object literal yields
+`{"0": ["cltv", "spline"], "cltv": "bins"}`; the request failed validation, and
+NO treatment other than the default could ever be applied to a severity driver.
+An implementation detail leaked onto the wire and cost the feature.
+
+`to_dict()` now emits objects. `from_dict` still reads pairs, because saved
+version files carry the old shape and a saved specification must stay readable.
+On the interface side `asMap()` normalises on every read and `wireLgdSpec()`
+cleans on every send — a specification persisted by an older build is repaired
+rather than merely rejected.
+
+**The PD stage discarded manual binning entirely.** The store held `treatments`
+and `knots` but no `edges`, so dragging a bin edge or changing the bin count
+updated the preview and was then thrown away: the fit ran on the server's
+optimal binning, and the analyst's work never reached the model. The backend had
+accepted per-variable `edges` all along — nothing sent them.
+
+The bin COUNT is not itself part of a specification; the resulting EDGES are. So
+changing the count pins the binning the server returns, which gives one
+mechanism rather than two and makes a saved model reproduce the binning it was
+actually fitted on.
+
+## 43. A change is a change to the SPECIFICATION, not to the column names
+
+The PD stage recorded only `variablesAtFit` — a list of column names. Rebinning
+a variable, changing its treatment, moving a spline knot, switching estimator or
+adding a macro term all leave that list untouched, so the stage reported itself
+up to date while displaying a fit of something else. The severity stage compared
+whole specifications and behaved correctly, which is why the two felt different.
+
+`canonicalSpec()` reduces a request to a stable string: every variable with its
+treatment, edges and knots; every macro term with its transform and lag; the
+estimator, the out-of-time boundary and the sampling. Order-insensitive where
+order carries no meaning — reordering the variable list is not a different
+model, changing a treatment is.
+
+It is compared against the specification stored WITH the fit, and read from the
+store rather than from component state, so the warning survives a page reload —
+a stale fit is exactly the thing someone returns to the next morning and does
+not remember.
+
+Both stages now say the same sentence, in the status bar and on the fit panel,
+and both turn the button amber: *the specification changed — this fit is out of
+date*.
+
+## 44. The roll-up's model picker went stale
+
+The roll-up carries the list of AVAILABLE versions for its per-book model
+picker, and it is memoised on both sides — server-side because projecting three
+books is expensive, client-side with `staleTime: Infinity` for the same reason.
+Neither cache was dropped when a version was saved, deleted or promoted, so the
+picker offered a set of models that no longer matched the versions page.
+
+`rollup.clear_cache()` now runs in every mutating endpoint, and a test reads
+those handlers' source to assert a new one cannot forget. On the interface side
+the query keys a mutation must invalidate are named once, as `VERSION_QUERIES`,
+rather than listed at each call site — the roll-up was the one that kept being
+left out, because it is not on the screen where the mutation happens.
+
+## 45. One candidate list, four places
+
+The variable list was a different component in each of the four places it
+appeared, and the differences were not deliberate.
+
+**Macro variables were not in the PD list.** They were a row of chips on the fit
+screen, so a macro term could not be examined or chosen where every other
+candidate was, and PD macro selection lived in local component state — which is
+precisely why the Explore stage could not offer them. Moving it to the store
+made one list possible. They sit in their own section because they behave
+differently, being the only terms a scenario can project, not because they are
+chosen differently.
+
+**The list did not survive the fit on the PD side.** The severity stage kept its
+drivers beside the fitted model, so a term that came back insignificant could be
+dropped and the model refitted without leaving the screen. The PD stage sent you
+back to Explore. Both now keep it.
+
+**The screening statistic was dropped at the fit.** Moving from the candidate
+view to the specification view lost the number each variable was chosen on —
+information value on the PD side, rank correlation and spread on the severity
+side — which is exactly the number wanted when deciding whether to keep an
+insignificant term. The statistic now travels with the row.
+
+`SpecificationList` takes a normalised row and is used by all four. Membership
+is a checkbox and examination is the row: one control doing both is how a
+variable ends up in a specification when the intent was to look at it.
+
+## One PD specification object
+
+The PD specification lived in eight places: five fields in the store
+(`selectedVariables`, `treatments`, `knots`, `edges`, `pdMevs`), and `maxBins`,
+`nKnots`, `estimator`, `ootFrom` and `downsample` as local state on two
+different surfaces. The LGD side always had ONE object, which is why it felt
+like a coherent product and the PD side did not.
+
+Three bugs came out of that scattering, and all three were the same bug:
+
+- `maxBins` was local AND global — one value shared by every variable, reset on
+  navigation. Changing the bin count and walking to the fit lost the change.
+- Some fields were in the store and some were not, so a change to one was
+  detected and a change to another was not.
+- The fork guard could only wrap the mutations it knew about. It held on the two
+  fit surfaces and not on the two explore surfaces, so a saved model could be
+  silently rewritten by rebinning a variable.
+
+`lib/spec.ts` holds one `PdSpec`: one place to read, one place to write, one
+thing to diff, one thing to guard. `maxBins` and `nKnots` are per variable,
+because a global bin count meant rebinning one variable silently rebinned every
+other one.
+
+## The fork guard lives in the store, not at the call sites
+
+`editPd` and `editLgd` are the only doors. A saved model is immutable, so an
+edit while one is open holds the change and raises `pendingEdit` for the shell
+to confirm. Enforcing this in the store makes it true by construction: a
+mutation that forgets to ask cannot be written, because there is nowhere else to
+write. The per-surface dialogs and per-surface `guard()` helpers are gone.
+
+## A bin count is a count, not a ceiling
+
+`max_bins` was passed to `optbinning` as `max_n_bins` alone. A solver that chose
+four bins under a ceiling of eight does not move when the ceiling drops to
+seven, six or five — so the +/- control appeared inert, which is exactly how it
+was reported. The editor now asks for a count (`exact_bins` puts the same number
+on the floor). The count is not always available — a monotonic trend may not
+survive the extra split — so the response carries `requested_bins` and
+`achieved_bins` and the editor says which it got.
+
+## The bin count is part of the specification
+
+`VariableSpec` had no `max_bins` at all, so the count never reached the fit: the
+analyst set seven bins, saw seven bins, and the model was estimated on the
+library default of eight. It is now on the wire, in the design matrix, in the
+WoE cache key, and in `VariableSpec.key()` — which is what the version hash is
+built from. Without that last one, the same variable cut into seven bins and
+into eight produced the same hash, the same auto-generated name, and overwrote
+each other in the version store.
+
+`tests/test_spec_identity.py` asserts the property against the dataclass rather
+than a fixed list, so a field added later fails there instead of failing
+silently in the version store.
+
+## One canonical form, used twice
+
+Staleness compared `canonicalSpec` (over the saved request) against `canonical`
+(over the working specification). They were two hand-written functions listing
+the same fields in different orders, so they could never produce the same
+string: every model reported "the PD specification changed" the instant it
+finished fitting, and a real change was indistinguishable from that noise.
+`canonicalSpec` now routes the request through `fromRequest` and the one
+canonical form. A function cannot drift from itself.
+
+## Every book states its own state
+
+Switching portfolios mid-model keeps the work — the specification is per book
+and persisted — but nothing said so, so a half-built model looked exactly like
+an untouched one. The portfolio switcher carries a per-book marker: filled means
+fitted, hollow means in progress, accent means a saved model is open. Shape as
+well as colour, so it survives a colour-vision deficiency and a black-and-white
+print.
+
+## The roll-up states its model coverage
+
+A book with no promoted model still contributes ECL, from the documented default
+specification. The page showed a green "Adopted models" pill regardless, which
+overclaims: with one book fitted, most of the headline number is not a model
+anyone here built. It now reads "1 of 3 books on a fitted model" and says which
+books stand on the default and that those figures are computed but unreviewed.
+
+## The binning editor had two sources of truth for one number
+
+The stepper wrote a requested bin count. The chart drew the edges the server
+returned. Nothing kept them in step, so removing an edge by hand left the
+stepper on its old number, and pressing minus from that stale number asked for
+a count the chart was already on and appeared to do nothing.
+
+Both now read one number: the count actually drawn. A hand edit moves it, and
+the stepper steps from it.
+
+Underneath that was a worse bug. The editor kept a local copy of the edges so a
+dragged handle would not wait for a round trip, and the effect that pushed the
+copy back into the specification listed the parent's callback in its dependency
+array. The parent passes a fresh arrow on every render, so the effect re-ran on
+every render and wrote the stale local copy back 110ms later. Anything else
+that changed the binning was overwritten a moment after it was applied, which is
+why the stepper went dead as soon as an edge had been touched by hand. The
+callback is now held in a ref, and the local copy is dropped whenever
+authoritative edges arrive.
+
+## One list on all four model stages
+
+Three of the four stages used `SpecificationList`. The LGD Explore stage kept
+its own ranking component, so severity drivers were chosen through a different
+control, with no internal and macro split, and without the checkbox that
+separates putting a variable in the model from looking at it.
+
+## One name for the model on screen
+
+The scenario stage labelled the loss figure with `fitted.name`, which is the PD
+half only, one row below the bar showing the combined Model ID. The same model
+appeared under two names at once. `useModelIdentity` is now the single answer to
+what the model on screen is called, and both read it.
+
+## Opening a saved version reported its own LGD as missing
+
+The record stores no LGD hash and the frontend cannot derive one, so the restore
+left it empty and the bar read "LGD model not fitted". The model has an LGD
+specification and it is on screen: it has not been replayed in this session,
+which is a different state and asks for a different action. The bar now says so.
+
+## Prose
+
+Text in the product is written for someone using it, not for the people who
+built it. Removed: captions defending a rendering decision, captions describing
+how the demonstration panel was generated, and captions explaining why a chart
+is stacked or which colours it uses. Em dashes are gone from prose; in a heading
+the separator is a colon. Repeated caveats are stated once, on the panel they
+belong to. The word "surface" is developer vocabulary for a screen and no longer
+appears in text the user reads.
+
+The brand specimen page was a build tool on a live route. It is deleted, with
+the dead lockup catalogue behind it.
+
+## The roll-up across model types
+
+The roll-up does not read stored numbers. It replays each selected version's
+specification against the current panel, through the same projection the
+Scenarios stage calls. So a treatment or estimator the replay cannot rebuild
+fails on the executive page and nowhere else, and the path that gets exercised
+by hand uses one estimator and weight of evidence.
+
+Checked against all five PD treatments, all three estimators and all three LGD
+treatments, with a different model type promoted on each book at once. The
+roll-up total matched the Scenarios figure to the cent for every combination,
+which it should: both call `scenario_service.run`. `tests/test_rollup_model_types.py`
+pins each type, and pins that a specification stored and rebuilt from its
+dictionary form still hashes and projects identically.
+
+## A specification could name a column that does not exist
+
+Found while building the matrix above. An unknown column passed straight
+through: the design matrix skipped it, the fit succeeded, no warning was raised,
+and the term was simply absent from the model. Because the hash comes from the
+specification rather than from the design, the phantom column still changed the
+hash and the generated name, so one model could hold two Model IDs with nothing
+in the coefficients to show why. On the severity side one unknown driver
+returned a model with no coefficients at all. Unknown columns are now rejected
+at the API boundary, with the macro drivers exempt because they are joined from
+the published series rather than read off the account panel.
+
+## Tests must not depend on which model is promoted
+
+Two tests read `rollup.spec_for(...)`, which returns whichever version is the
+champion, and then asserted on its contents. Promoting a model, which is an
+ordinary thing to do in the product, broke them for reasons unrelated to what
+they check. They now build their own specification.
+
+## Binned variables were not collinear; the table was reporting the wrong number
+
+Bin indicators from one variable are mutually exclusive: a row in [710, 750) is
+by construction not in >= 750. They are therefore mechanically negatively
+correlated with each other and with the omitted reference bin, and each is well
+predicted by its own siblings before any other variable is considered.
+
+Measured on a four-bin fico term: per-column VIFs of 3.19, 9.00, 10.82 and
+12.34 against a term-level generalised VIF of 1.80. The table painted a healthy
+term red. Worse, the ranking inverted — interest_rate was the genuinely more
+inflated term at 3.18 and showed smaller per-column numbers, so the table
+pointed at the wrong variable to drop.
+
+`generalised_vif` already existed with the correct Fox-Monette treatment and was
+used on the Explore tray, not in this table. The coefficient rows now carry
+`term`, `term_vif` and `term_df`, and the table reports the term figure with the
+column count beside it; the per-column value is on hover. Same class of problem
+as the rest of this pass: two places, two answers, one idea.
+
+## The three books are now comparable in size
+
+CRE was 96% of firm exposure at a mean commitment of $11.3M, so the roll-up was
+a CRE chart with two invisible slivers on it and the tornado had one bar.
+
+Exact parity is not reachable with credible loan sizes: CRE at $4B across ten
+thousand loans is $400k a loan, and a $4B installment book needs about two
+million accounts, which is sixty million rows. So the target is a realistic
+regional bank rather than equality.
+
+  book        exposure   share   mean loan
+  consumer      $1.02B   10.8%      $39.1k
+  mortgage      $4.31B   45.8%     $284.8k
+  cre           $4.07B   43.3%     $402.5k
+
+CRE is sized as small-balance commercial, which is a real product line. Its
+commitment and net operating income were scaled by the SAME factor, so
+loan-to-value, debt service coverage and utilisation are unchanged: property
+value is balance over LTV and debt service is NOI over DSCR. The consumer book
+carries three times the accounts at roughly two and a half times the loan size,
+because an installment book is structurally small at a point in time — the loans
+are short and most have amortised away by the as-of date. Annualised default
+rates are unchanged at 4.10%, 1.94% and 1.59%.
+
+## The data fingerprint could not see a change in the data
+
+It hashed the row count, the account count, the default count, the window and
+the seed. None of those move when the VALUES in a column change. The rebalance
+above moved the mean commercial loan from $11.3M to $0.4M without moving any of
+them, and every saved version still reported itself as current while its stored
+loss figures described a portfolio 28 times larger.
+
+The build now records a digest of the panel's numeric content and the
+fingerprint consumes it. All four saved versions correctly report as stale, and
+the roll-up marks the commercial champion "stale data".
+
+## Three navigation levels, three forms
+
+The Explore stage carried its own segmented control on the right of its card
+header while the stage control sat at the far left of the bar above: two
+controls, two levels of one hierarchy, at opposite ends of the window, neither
+reading as the parent of the other.
+
+Moving both into the model bar did not fix it. They still looked like siblings,
+because they had the same FORM, and it left that bar doing four jobs at once:
+stage navigation, view navigation, model identity and the primary action.
+
+Two rules settle it. A tab belongs against the content it switches, not in a
+toolbar with other things between it and that content. And a level of hierarchy
+is distinguished by form, not only by position:
+
+    section   Data · Macro · PD model …      text with an accent underline
+    stage     [ Explore | Fit ]              filled segmented control
+    view      Binning  Multicollinearity     underline tabs on the card edge
+
+Binning and Multicollinearity are not places and they are not steps: they are
+two lenses on one stage, which is what a tab is for, so the control sits against
+the content it changes rather than in the navigation.
+
+Which is where the actual problem was. FIVE places in the app were switching
+views of a stage, and each drew its own control: both fit stages hand-rolled the
+same row of pills, the scenario stage hand-rolled it twice within one file, and
+the explore stage got underline tabs when I added it. One job, four
+implementations, three of them copies. `ViewTabs` is now the only one, so the
+question of how a view switcher looks has a single answer and cannot drift
+again.
+
+The view is held in the URL as `?view=`, so it is linkable and survives a
+reload.
+
+## The Explore header wrapped at any real zoom
+
+It held a title, a sentence describing the stage, two tab labels of four words
+each and the full sampling note on one flex line. At 1280px it wrapped to three
+lines and the note ran under the tabs. The sentence is gone, because the
+candidate list beside it already says what it ranks on; the tabs moved to the
+bar; the sampling note is a caption, which wraps in its own block. The stage now
+uses the same Card and CardHead the severity stage uses rather than an ad-hoc
+flex row.
+
+Also removed: the cardinality warnings printed twice on one screen, once in the
+high-cardinality panel and again three rows below it.
+
+## Clean and dirty: the specification is the source, everything else derives
+
+The stages each decided for themselves what "out of date" meant, and they did
+not agree. The result was a marker that could sit green on top of a dirty
+specification: project a model, then rebin a variable. The projection still
+matched the hash of the fit it was built on, because that fit had not been
+re-run. What had moved was the specification underneath it, and nothing was
+comparing against that.
+
+There is one chain, and it is a chain:
+
+    specification  →  fit  →  projection  →  saved version
+
+The specification is the source and is current by definition. Everything below
+it is derived, in that order. A link is `current` only when its own record
+matches what it was built from AND every link above it is current. That second
+clause is the whole point: without it, a derived artefact can report itself
+healthy while its own input is stale.
+
+So a change to the specification does not invalidate one thing. It invalidates
+everything downstream, and getting clean again is a sequence: refit, reproject,
+save. Each stage marker now reads its state off that chain rather than deciding
+alone, and the note says which link broke and what to do about it.
+
+Two things fell out of it. A projection that the model has moved on from is a
+stale OUTPUT, not an unsaved change to the specification, so it no longer counts
+toward the unsaved-changes tally; counting it there claimed unsaved edits
+against a version nobody had opened, and the note then dereferenced a null.
+And the navigation captioned every dot from a table of three generic strings, so
+an amber Scenarios dot read "Changed since the saved model was opened" when no
+model had been opened. Each stage already computes an accurate note; the
+navigation now shows it.
+
+## A fit survives leaving the stage
+
+The fit RESULT lived in component state, so walking to Explore and back threw
+away the coefficients, the diagnostics and the backtest, and a fitted model went
+back to showing an empty "not fitted" state. The specification and the hash were
+in the store; the expensive part was not.
+
+The server already caches a run under its hash, so the PD stage now reads the
+result from `GET /models/{hash}` keyed on the fitted hash. It survives
+navigation and a reload, and it invalidates for free: the hash only moves on a
+refit. A cache miss is a 404 and the stage asks for a refit, which is honest.
+
+The severity stage had the same hole with a different shape. It re-estimated on
+mount only when a version had been opened or the specification had just changed,
+so a plain revisit after fitting fell through both conditions and showed the
+empty state. It now re-estimates whenever it has drivers and no result. Severity
+is fitted on defaulted rows only, so that costs little.
+
+An out-of-date fit stays on screen rather than vanishing, under a banner naming
+what changed. Blanking it would remove the thing a refit is compared against.
+
+## PD Explore has the same shape as LGD Explore
+
+The selected-variables tray was a third column on the PD stage with no
+counterpart on the severity stage, so the two halves of the same job were laid
+out differently. Both are now the candidate list and the detail panel, in the
+same two columns and the same proportions. Variables are added and removed
+through the checkbox in the list, which is how the severity stage already did
+it, and variance inflation is on the Multicollinearity view and in the fitted
+coefficient table.
+
+## Prose gets a measure; the workspace stops stretching
+
+Removing the third column left the detail column about 1,200px wide, and the
+text in it simply filled that: captions ran to roughly 180 characters a line,
+which is about three times a comfortable measure. That is most of why the page
+read as stretched rather than spacious. A wide window was making the app harder
+to read, not easier.
+
+Two changes, both structural rather than per-screen. `CardHead` caps its caption,
+which covers most explanatory text in the app in one place. Every remaining
+long-form block carries the same cap, with centred blocks keeping their centring
+through auto margins. The longest line of prose anywhere is now 665px against
+1,527px before, on every screen.
+
+The workspace itself is capped and centred. Past roughly 1,560px the columns
+gain nothing and the eye has to cross the whole window to pair a label with its
+value, so the content stops widening and takes margins instead.
+
+## The stress multiple is not a measure of sensitivity
+
+A multiple runs 6x to 9x on the secured books whatever specification is fitted,
+which reads as a model that is wildly sensitive to the macro path. It is not.
+Measured on a clean specification for each book:
+
+  book        baseline    severe    multiple    12m PD mult   12m LGD mult
+  consumer     377 bps    693 bps      1.84x         1.69x          1.00x
+  mortgage      75 bps    447 bps      5.97x         1.57x          1.21x
+  cre          189 bps   1217 bps      6.44x         1.29x          1.14x
+
+The probability of default moves 1.3x to 1.7x, which is what the generator's own
+macro coefficients imply: unemployment runs 4.6% to 10.0% peak on the published
+severely adverse path, the panel's historical standard deviation is 2.24pp, and
+a beta of 0.32 per standard deviation gives a hazard multiple of about 2.2x at
+the peak. Nothing is over-reacting.
+
+The multiple is large because the DENOMINATOR is small. A secured book loses
+almost nothing in benign conditions, because collateral covers the loss: 75 bps
+on the mortgage book. Its stressed loss of 447 bps sits inside the 200 to 800
+bps a first-lien book carries over a three-year severely adverse path, so the
+level is ordinary and only the ratio is dramatic. The unsecured book, whose
+baseline loss is five times larger, shows the smallest multiple while carrying
+the highest loss rate.
+
+That is genuine credit economics rather than an artefact of synthetic data, and
+it is why loss is reported in basis points rather than as a multiple. The
+scenario stage now leads with the stressed loss and its rate, and the multiple
+carries the explanation of what makes it big.
+
+Two figures on that stage are 12-month and the ECL is 39-month, which is stated
+where they appear: the supervisory path troughs in quarters six to eight, so the
+12-month figures understate what the ECL reflects. That is most of the gap
+between 1.9x on the twelve-month product and 6x on the horizon.
+
+## Editing a specification does not re-estimate it
+
+The severity stage re-estimated whenever the fitted hash was empty, and an edit
+is exactly what empties it: every driver added or removed started a fit. Adding
+three drivers meant three round trips, and the specification could not be
+assembled before being estimated.
+
+It now re-estimates only when it has a specification and no result at all: on
+arrival, after a version is opened, and after the stage has been left and
+returned to. An edit leaves the previous result on screen, marked out of date,
+until Refit is pressed. That matches the probability-of-default stage, which
+never fitted on its own.
+
+Checked on all three paths: adding variables one after another on either fit
+stage runs no fit, and with a saved model open the fork is asked once, on the
+first edit, after which the draft is a draft and edits are free.
+
+## One workbench per model
+
+Model development is one loop, not two stages: look at a variable, add it, fit,
+read the coefficients, click the weak one, rebin it, refit. Splitting that
+across an Explore stage and a Fit stage produced the same complaint in a
+different form every hour: the fit vanished on the way to Explore, variables
+had to be added on the other screen, the view tabs had nowhere natural to sit,
+a change on one stage had to be noticed by the other.
+
+Each model is now one screen. The candidate list is the spine and never moves.
+The right pane is whichever of three things is being looked at: the model (its
+verdict, controls, coefficients, diagnostics, backtest), one variable (opened
+by clicking it in the list or in the coefficient table), or the correlation
+structure. The open variable and the view are in the URL. The Fit button is
+beside the list. The old routes redirect.
+
+This removed a navigation level, the third row of chrome, and the whole class
+of "did my fit disappear" bugs, because there is nowhere for it to disappear
+to.
+
+## The verdict leads, and it is calibration first
+
+A fit used to open on six equal tiles: version, AUC test, AUC out of time, KS,
+Gini, McFadden. Four are discrimination, one is redundant (Gini is 2·AUC − 1),
+and none is the number an ECL model is judged on. ECL is PD × LGD × EAD: a
+mis-ranked model costs some accuracy, a mis-levelled one produces the wrong
+dollar figure.
+
+The model pane now opens on a verdict: one headline, then five rows in the
+order a validator reads them. Calibration (level out of time, with bias and
+coverage). Discrimination (AUC test and out of time, with the drop flagged: a
+0.13 drop was previously two neutral numbers side by side). Stability (score
+PSI). Economic sense (macro signs against the prior). Parsimony (insignificant
+terms). Above them, a leakage banner naming any variable recorded after the
+outcome that made it into the specification, because that model is not a
+model whatever its numbers say. Every threshold is stated on the row's hover.
+
+## Backtest error rates
+
+The cohort chart showed predicted against actual and left the reader to
+estimate the gap by eye. The numbers behind it are now a table, split at the
+out-of-time boundary because the halves answer different questions: in time,
+does the model describe the data it was built on; out of time, does it hold on
+data it never saw. Bias, ratio, MAE, RMSE, coverage of the 95% band, and the
+worst cohort, all in percentage points of annualised default rate, which is
+the unit the answer is quoted in. Out-of-time RMSE, bias and coverage go on the
+version record so versions can be compared on them.
+
+## Ranking every lag of a macro variable is a trap
+
+The macro search ranked 325 candidate terms by correlation, and the top six
+were prime_rate at six different lags. The best of five lags of the same series
+always looks better than any one of them, which is the classic route to a
+spurious selection. The list now shows one row per variable and transform, at
+its best lag, by default; the lags can be expanded.
+
+## Smaller
+
+Two rows of chrome rather than three: the model identity is one line at the
+right of the section navigation, with the long form of every state on hover.
+The candidate list is one line per row, and amber is reserved for leakage; a
+list where most rows said "review" flagged nothing. The Data page leads with
+its chart and puts the counts beneath it. The 4/8 progress counter is gone; the
+dots on the navigation carry it, with accurate notes.
+
+## The model is the hero
+
+The verdict panel as first built was five full sentences in five columns, each
+under a coloured pill, and it read as a wall. The model's own name, which is the
+thing being worked on, had been demoted to a monospace tag in the corner.
+
+The name is now the hero of the pane: large, with the hash, estimator, size
+and fit time on one line beneath it, and the verdict as a single status at its
+right. The five checks are one line of figures, one per check, with colour on
+the icon only so the row reads as data rather than as five alarms. The sentence
+and the threshold behind each figure are on the hover.
+
+## The model band
+
+A Model ID covers a PD specification and an LGD specification together,
+because both produced the loss number. Nothing on screen showed that pairing:
+the PD pane knew its half, the LGD pane knew its half, and the combined name
+lived in a corner of the navigation.
+
+The band sits frozen at the top of both workbenches: the model, its PD half,
+its LGD half. Each half carries its identity, the one or two figures it is
+judged on, and a status on the same thresholds the verdict uses. It stays in
+view while the analyst scrolls through coefficients and backtests, which is
+when the question "which model is this" comes up. The five-check verdict moved
+to the Backtesting tab, where its evidence is; the leakage notice stays on the
+model pane whatever tab is open, because a leaking model is not a model and
+that cannot wait for a tab.
+
+## Type and marks
+
+The interface was set in whatever sans the machine had and drew every status
+mark from whatever symbol font the machine had: a tick sat heavy beside light
+text on one machine and thin on another, the circled i came out full-width on
+Windows, and the hashes rendered in Menlo, which reads as a terminal.
+
+Inter, self-hosted, in three weights: regular for text, medium for labels and
+controls, semibold for headings and figures. JetBrains Mono for hashes, column
+names and code. Both bundled from node_modules, so the offline guarantee holds.
+Inter's slashed zero is on everywhere, because a zero in a hash must not read
+as an O.
+
+Every mark is an inline SVG on `currentColor`, drawn once in one file: check,
+cross, alert, info, arrows, close. They take the text's colour and sit on its
+baseline. The seven unchosen wordmark candidates, imported for a brand page
+that no longer exists, are gone from the bundle.
+
+The band is on the Scenarios stage too. It projects exactly that pair, and the
+page used to restate the identity in its own words one row below the
+navigation; the two had already drifted apart once, showing the PD name where
+the Model ID belonged.
+
+## Status is a dot and a word
+
+The status mark was a tinted pill with an icon and a lowercase word. It read as
+a sticker, and three of them on one line competed with the content they
+described. Every status in the app is now a small dot and a word in the text's
+own colour, sentence case, with colour on the dot alone; the word carries the
+meaning, so colour never carries it by itself. The verdict checks use the same
+mark. Alert banners keep their own bordered treatment, because those are the
+few places prominence is the point.
+
+## The fit, while it runs
+
+A fit on three million account-months takes five to ten seconds, and a static
+shimmer for ten seconds reads as a hang. The progress card now names the phase
+that is running, over the count it is running over, and paces itself on the
+previous fit's timings: the server reports six phases and how long each took,
+so the estimate is grounded rather than invented. The bar eases toward the end
+and holds there until the response arrives, then completes and stays for a
+beat, so it is seen to finish. Where it states a time it says the time is an
+estimate. The severity fit has the same card with its own four phases.
+
+The same card runs the scenario projection (replay PD, replay LGD, project
+every open account, build the bridge, paced by the projection's own timings)
+and the roll-up (one phase per book, paced by each book's last projection).
+The sub-second controls, such as regrouping a backtest, show a pulsing dot and
+a word rather than a bar: a bar for half a second is a flicker.
+
+## Switching models in place
+
+The model's name in the band opens the saved models on the book. Choosing one
+loads it on the current screen, and that screen updates to the chosen model's
+results: on Scenarios the projection re-runs, on a workbench the fit is read
+from the cache or replayed, and the band's figures follow. Two models are read
+against each other by staying where you are and switching, which is how a
+challenger is judged. Opening from the Versions page still goes to the model,
+because that is the page's job. An edit after switching forks as before; the
+guard is in the store and does not care how the model was opened.
+
+## Switching models left the severity pane on the old one
+
+After a switch in place, the store held the chosen model's severity half but
+the pane kept the previous model's fit on screen, marked out of date, and did
+not re-estimate: its rule was "fit when there is no fit". The analyst pressed
+Refit to see the model they had just chosen, and until then the band and the
+pane disagreed about which LGD was on screen. The pane now re-estimates when
+the fit on screen is not the one the store holds. An edit clears the stored
+hash rather than changing it, so an edit still waits for Refit.
+
+## The draft survives a switch
+
+Opening a version replaced whatever was being worked on, and there was no way
+back: switching models to compare them cost the analyst the draft they were
+comparing against. The draft is now put aside when a saved model is opened over
+it, and the model picker offers it as "Working draft" until it is restored or a
+new draft begins.
+
+## A switch on the severity workbench wrote the old model over the new one
+
+The severity pane keeps a local copy of the specification, synced from the
+store in one effect, and re-estimates in another. After a switch in place both
+run in the same pass, so the re-estimate saw the PREVIOUS model's drivers,
+fitted them, and stored the result as the model that had just been chosen: the
+band said one model, the store held another's severity half, and the bar read
+"edited since opened" though nothing had been edited. The re-estimate now waits
+until the local copy and the store agree.
+
+## A projection could wedge, and locked its own escape
+
+No request carried a timeout, so a fetch that stalled — a dev-server module
+swap mid-flight, a dropped connection — left its promise pending forever and
+the mutation waiting on it stayed "in progress". The Re-project button was
+disabled while pending, so a wedged projection could only be cleared by
+reloading the page.
+
+Every projection and fit now goes through a POST helper with a hard 45-second
+timeout: the worst case is an error with a retry, never an endless spinner. And
+the Re-project button is always clickable — it resets a pending run and starts
+a clean one — so a stall is one click from recovery.
+
+## Equations are typeset
+
+The methodology captions carried equations as plain text — `E[LGD] =
+sigmoid(X·β)` — which read as code. They are now rendered with KaTeX:
+𝔼[LGD | X] = σ(Xβ) in real mathematical script, inline in the caption at the
+caption's size and colour. KaTeX is self-hosted from node_modules, fonts and
+all, so it renders offline. `Eq` takes a TeX string and an optional display
+flag.
+
+## The brand lockup
+
+The header set "Credit" in ink and "IQ" in accent blue. A two-tone name is the
+reliable tell of a small-shop product; the references this sits beside —
+Capital IQ, Aladdin, the KPMG mark itself — set the name in one colour and let
+the type carry it. The name is now a single ink, in the adopted serif, with
+KPMG keeping its own blue so the two marks stay two marks.
+
+What makes it read as a product rather than a word is the line beneath it:
+CREDIT RISK MODEL DEVELOPMENT in tracked capitals, quiet, aligned under the
+name. The client attribution speaks in the same voice — PREPARED FOR over the
+client's name — so the header is one set piece in two text styles rather than
+three unrelated ones. The rule between the marks spans the full two-line block.
+The hero treatment for a title slide is the same system at display size.
+
+## The brand page returns, as a chooser
+
+Deleted earlier as a specimen sheet on a live route; rebuilt as a working
+direction-chooser, reachable from the command palette only. Five lockup
+structures render inside mocks of the real header, at the real size, with the
+real KPMG artwork — a specimen at display sizes fools everyone. Clicking one
+adopts it and the actual header changes at the same moment, so a candidate is
+judged live in the chrome it has to work in. The choice persists.
+
+Alongside the structures: three product-mark ideas, each shown at slide,
+header and favicon size, because the only real test of a mark is 16 pixels;
+and the title-slide treatment on the navy field and on paper. Every direction
+keeps the two marks separate — what varies is hierarchy, which is the only
+axis worth having options on.
+
+## The bright row separators in dark mode
+
+Twenty-two row borders were written as `border-hairline/40` and variants. The
+hairline colour is a CSS variable, Tailwind cannot compose slash-opacity onto a
+variable, so those classes were never generated at all — and the borders fell
+back to the framework's default light grey, which is near-invisible on paper
+and glaring on the dark surface. The tables and lists looked under-lined in
+light mode and over-lined in dark, from the same missing class.
+
+All of them now use the plain hairline token, and the DEFAULT border colour is
+set to that token too, so a border class that fails to resolve in future falls
+back to an invisible line rather than a bright one.
+
+## Switching challengers reads from cache; nothing re-estimates
+
+Switching among saved models re-fitted the severity model and re-projected the
+scenarios on every switch, both ways. The PD side did not, and the difference
+was structural: the PD fit was a query keyed on the model's hash, served from
+cache; the severity fit and the projection were mutations driven by effects —
+an auto-run effect with a dedup ref, a manual result state cleared by hand, a
+hold timer, and a reset escape for when the pending flag wedged. Every piece of
+that machinery re-implemented, by hand and with bugs, what a cache-keyed query
+does by construction.
+
+Both are queries now, keyed on the model's identity. Switching to a model
+fetches once; switching back serves its numbers instantly from cache with no
+request. Comparing challengers, which is exactly that switch, costs nothing
+after the first look at each. The explicit buttons remain the escape hatch:
+Refit fits an edited draft and seeds the cache under its new hash, and
+Re-project forces a fresh computation past every cache. One behaviour change:
+the scenarios stage now projects any complete model on arrival rather than
+waiting for the button, because the projection is the page's content, not an
+action on it.
+
+## Saving got an exit, and drift got one too
+
+Saving a model left the workspace insisting it was still unsaved: the save
+never told the state machine that the model on screen had become the version
+just written, so the call to action stayed "Save this model" after every save.
+Fixing that exposed a second gap in the same place — the fit record's hash was
+computed with the severity half as it stood at PD fit time, while the saved
+hash carries the severity half as saved, and the mismatch read a freshly saved
+model as drifted. The save now settles both: the loaded record points at the
+new version, and the fit record is brought onto the saved identity.
+
+Drift itself — a saved model whose refit no longer reproduces its recorded
+hash, which happens when the data or the engine changed under it — had a call
+to action that could not exit: "Refit and compare". Drift only ever appears
+AFTER the divergent refit has run, so refitting again reproduces the same
+divergence forever. The drifted state now says what happened ("refit no longer
+matches the record") and routes to the way out: save what the data now
+produces as a new version, or close the record. The store de-duplicates the
+save if that identity is already on file.
+
+## The call to action acts when it is already there
+
+The model bar's call to action navigates to the stage that needs work. Clicked
+while already on that stage, it navigated to the page it was on — nothing
+visible happened, and a button named "Fit the PD model" that does nothing
+reads as broken. On the target stage the button now runs the stage's primary
+action: the fit on the model panes, the default save on Versions. Off the
+stage it navigates, as before, and the arrival does not auto-run anything.
+
+## A forked draft is not its parent
+
+After forking a saved model, the band's headline kept the parent's name and
+hash — the fitted identity still described the previous specification — while
+the bar above said "Working draft". The two disagreed about what was on
+screen. Until a refit gives the draft an identity of its own, the band now
+says "Working draft · the specification changed · a refit gives it a Model
+ID", and the stale name is withheld.
+
+## Severe-scenario sensitivity: the LGD generator was the outlier
+
+Severely adverse ECL ran 6-8x baseline on mortgage and 8-10x on commercial
+real estate, which read as irrational. The diagnosis, by decomposing the
+projection year by year: the PD response was inside the data's own evidence
+(the severe path's peak marginal default rates sat at or below the panel's
+2009 peak), but portfolio LGD reached 49% on mortgage and 61% on CRE in the
+trough year, against realised GFC averages near 40% and 45%. The generator's
+severity-side macro slope was roughly twice what the asset classes produced,
+and it stacked with the LTV-at-default channel, which carries the same price
+fall.
+
+Both severity slopes were halved and the LTV channel trimmed with them.
+Baseline severities are unchanged, because the slopes are centred on benign
+values. The result: severe/base ECL is now 2.1x consumer, 4.3x mortgage,
+6.3x CRE, with trough-year LGD at 32% and 47% — the ordering and rough
+magnitudes CCAR results show for these asset classes. The remaining ratio is
+PD-driven, which is the panel's own crisis and is evidence, not artifact.
+Saved versions from the previous panel carry the stale-data flag.
+
+## The navigation is a sequence, not six tabs
+
+Knowing where you are in the process was the hardest part of the workspace.
+The six surfaces already sit in the order the work happens, so the navigation
+now says so: each stage carries its number (which is also its keyboard
+shortcut), the hairline between two stages fills with the accent once the
+earlier one is complete, and the stage the call to action points at carries
+an accent ring on its dot. No new chrome row; the sequence rides on the
+navigation that existed.
+
+## Parity and context in the specification tables
+
+The LGD coefficients table now matches the PD card: every term that is a
+driver on the book is a click-through to its severity curve and binning. Both
+tables state the reference bin of every dummy-encoded term ("vs office"),
+because an indicator coefficient is a shift relative to the bin that has no
+column, and without the reference it reads as an absolute effect. The fit
+responses carry a `references` map for this.
+
+## Macro candidates: quick pick and a wider transform grid
+
+The macro section of both candidate lists has an "Add top 3" action: the
+strongest remaining terms by correlation, one per underlying series (several
+transforms of one variable are one piece of information, not three), skipping
+terms that contradict the economic prior, applied as ONE guarded edit so a
+saved model prompts to fork once. The transform grid gains moving averages
+(3, 6, 12 month), smoothed growth (12m change averaged over 3m) and smoothed
+momentum (1m change averaged over 3m); every one goes through the same
+apply_mev_transform the projection uses, so a scenario carries them forward
+correctly by construction.
+
+## Fitted results persist to disk
+
+"Have I run this model before?" answered differently depending on whether the
+server process had restarted: the fit, severity and projection caches were
+memory-only, so a previously fitted specification came back as a fresh
+twenty-second refit, which reads on screen as "never run". Computed results
+are now also written to `data/cache/` (pickles of the derived objects), and
+the memory caches fall back there before recomputing. After a restart, a
+previously fitted specification returns in under a second and a previously
+run projection immediately; the roll-up inherits this through the same
+service. Two rules keep the cache honest: keys carry the portfolio's data
+fingerprint, so a rebuilt panel invalidates every cached run fitted on the
+old one, and entries are bounded per portfolio, oldest out first (a PD run
+carries its scored panel for re-cohorting, roughly 36MB). The cache is fully
+derived — deleting it costs recomputation, nothing else — and is gitignored.
+
+## The LGD table flags insignificance the way the PD card does
+
+The PD specification card carried a "not significant" pill per term; the LGD
+coefficients table showed only p-values and stars. Same information, one side
+shouted and the other whispered. The LGD table now carries the same pill,
+with one note in place: for an indicator, "not significant" means that level
+is not distinguishable from the reference — grounds to merge bins, not
+necessarily to drop the variable.
+
+## First open is a welcome, not a computation
+
+With no saved versions, the roll-up landing used to fit three books'
+documented default specifications on arrival: a new user's first experience
+was minutes of computation ending in a loss number they had no hand in. The
+landing now checks whether anything has ever been saved. With nothing saved
+it shows a single welcome screen: what the platform is, the three books as
+starting points, and the six-stage workflow in the order the navigation
+presents it. It is one screen rather than a step-by-step tour, because the
+navigation stays fully usable behind it, so it is skippable by construction;
+a skip link runs the roll-up on the documented defaults for whoever wants a
+number immediately, with the compute cost stated. The welcome disappears for
+good the moment the first version is saved. The test-session versions were
+archived to versions/archive-2026-08-31 rather than deleted.
+
+## The scenario editor became a statement of what was stressed
+
+The scenario stage carried an editor for dragging custom macro paths. What a
+reader of a projection needs is the opposite of an input: a statement of what
+was USED. The editor is gone, and in its place the stage shows each macro
+term of the fitted specification exactly as the projection consumes it —
+transformed and lagged, history to the projection date, then the Federal
+Reserve baseline and severely adverse branches, drawn as small multiples
+with one shared grammar (history in muted ink, the same light-to-dark ramp
+the ECL charts use). Under each chart the break-off is stated as figures:
+now, baseline end, severe extreme. A new endpoint
+(/api/scenarios/model-paths) serves the branches through the same
+apply_mev_transform the projection itself uses, so the display cannot drift
+from the computation. The custom-path plumbing was removed with the editor.
+
+The roll-up gained the same panel per book — "What each model responds to" —
+grouped under each portfolio with its model's name, so the executive view
+states which macro exposures each book's number rides on.
+
+## Expected loss in two shapes
+
+The cumulative loss charts (scenario stage and roll-up) gained a
+Cumulative / Monthly toggle. The cumulative curve answers "how much"; the
+monthly flow answers "when" — under stress it separates from the baseline as
+losses emerge, then contracts back as the stressed cohorts resolve, which
+the cumulative view cannot show. The roll-up derives the flow as the first
+difference of the reported running total.
+
+## The macro-paths panel earned its polish, and the duplicate tab went
+
+The first cut of the paths panel titled each chart with its mono slug
+("unemployment_rate · level"), hung PNG/SVG chips under every mini chart, and
+had no legend — a grid of six charts with six ragged chip rows read as
+uneven, and an identifier is not a title. Now: the variable's published name
+over each chart with its transform in words beneath ("Prime rate" over
+"12-month change · lagged 12 months" — the slug stays on hover), ONE legend
+on the card head where it also balances the caption, no per-chart chips (a
+`compact` mode on the chart component, for any future small multiple), and a
+uniform Now / Baseline / Severe figures row under every chart so the grid
+reads as one table. A derived series such as cre_price_index_yoy resolves
+its title through its base registry entry.
+
+The scenario stage's "Macro variables" tab was removed: it duplicated the
+Macro stage, and the paths panel answers the question this page actually
+asks — not "what could a model use" but "what did this one use". On the
+roll-up, the panel moved below the loss charts so the page reads number →
+composition → timing → drivers → concentration, with each book's model name
+set right of its heading.
+
+## The roll-up became a dashboard, not a stack of cards
+
+Three structural fixes, one new control:
+
+The coverage/selector card is gone. Its sentence ("2 of 3 books on a fitted
+model") folded into the hero as a strip under the figures, and each book's
+model picker moved INTO its position card — the knob now lives on the object
+it changes. The position cards pin their pickers to the bottom edge so the
+three align whatever each card carries above them, and the sign-flip and
+stale-data flags moved onto the cards as pills beside the extrapolation one.
+
+The macro-exposure card flattened. One row of small multiples per book left
+two-thirds of most rows empty; the terms are now a single deduplicated grid
+(auto-fit columns, so it fills whatever width it has), and a term carried by
+more than one book renders ONCE with each book's dot — the honest reading,
+since a shared series is one exposure however many models load on it, and a
+common factor across books is exactly what a committee wants stated.
+
+The hero gained the page's one legitimate knob: a probability-weight slider
+on the weighted ECL. The weight is a management assumption, not a
+supervisory number, and the weighted figure is linear in the two scenario
+ECLs, so it recomputes instantly client-side as the slider moves.

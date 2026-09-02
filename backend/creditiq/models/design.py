@@ -131,7 +131,8 @@ def _woe_vector(x: pd.Series, y: pd.Series, v: VariableSpec) -> tuple[np.ndarray
     """Replace each value by the weight of evidence of the bin it falls in."""
     numeric = pd.api.types.is_numeric_dtype(x) and x.nunique(dropna=True) > 12
     if numeric:
-        b = bin_numeric(x, y, edges=v.edges)
+        b = bin_numeric(x, y, edges=v.edges, max_bins=v.max_bins,
+                        exact_bins=not v.edges)
         edges = b.edges or []
         idx = np.digitize(pd.to_numeric(x, errors="coerce").fillna(-np.inf), edges)
         real = [bn for bn in b.bins if not bn.is_special]
@@ -240,6 +241,16 @@ def apply_mev_transform(s: pd.Series, transform: str) -> pd.Series:
         return s - s.shift(12)
     if transform == "diff":
         return s.diff()
+    if transform == "ma3":
+        return s.rolling(3).mean()
+    if transform == "ma6":
+        return s.rolling(6).mean()
+    if transform == "ma12":
+        return s.rolling(12).mean()
+    if transform == "yoy_ma3":
+        return ((s / s.shift(12) - 1.0) * 100.0).rolling(3).mean()
+    if transform == "diff_ma3":
+        return s.diff().rolling(3).mean()
     if transform == "z_score":
         return (s - s.mean()) / (s.std(ddof=0) or 1.0)
     return s
@@ -301,6 +312,7 @@ def build(df: pd.DataFrame, spec: ModelSpec,
             else:
                 ck = (spec.portfolio, v.column, spec.target_column,
                       tuple(v.edges or ()), tuple(map(tuple, v.groups or ())),
+                      v.max_bins,
                       round(v.shrinkage, 6), _frame_key(df, ys))
                 m = _WOE_CACHE.get(ck)
                 if m is None:

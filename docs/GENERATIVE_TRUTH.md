@@ -24,7 +24,7 @@ first terminal event.
 
 ## Consumer installment (`consumer`)
 
-- Accounts: 50,000
+- Accounts: 150,000
 - Target: 90+ days past due or charge-off (delinquency state 3)
 - Intercept: `-5.597` (calibrated to the realised default-rate band)
 - Frailty standard deviation: `0.55`

@@ -129,6 +129,15 @@ export function crosshairTooltip(
       const head = formatAxis ? formatAxis(arr[0].axisValue) : arr[0].axisValue
       const rows = arr
         .filter((p: any) => p.value != null && p.value[1] != null)
+        // Rows in the order the EYE meets the lines: highest value first, so
+        // the severely adverse row sits above the baseline row the way the
+        // curves do on the chart. Legend order put baseline first, and the
+        // tooltip contradicted the picture beside it.
+        .sort((a: any, b: any) => {
+          const va = Array.isArray(a.value) ? a.value[1] : a.value
+          const vb = Array.isArray(b.value) ? b.value[1] : b.value
+          return (vb ?? 0) - (va ?? 0)
+        })
         .map((p: any) => {
           const v = Array.isArray(p.value) ? p.value[1] : p.value
           // Value leads, series name follows — the reader already has the series

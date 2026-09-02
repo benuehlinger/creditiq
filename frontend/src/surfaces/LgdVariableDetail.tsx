@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import {
-  api, type LgdScreenRow, type LgdTreatment, type PortfolioKey,
+  api, asMap, type LgdSpecPayload, type LgdTreatment, type PortfolioKey,
   type SeverityCurve, type SeverityFreq, type SeverityLevel, type SeverityPoint,
 } from '../lib/api'
 import { Card, CardHead, Skeleton, StatTile } from '../components/ui'
@@ -12,154 +11,104 @@ import { chrome, deemphasis, ink, mode, sequential, series } from '../design/tok
 import { num, pct, ratio } from '../lib/format'
 import { useUi, NONE } from '../lib/store'
 
-/** Explore, for the LGD model.
+/**
+ * One severity driver, in full: how it enters the model and its relationship
+ * with realised severity on the defaulted population.
  *
- *  The same stage as PD Explore, on a different population and a different
- *  target. PD is estimated on every account-month with a binary outcome; LGD is
- *  estimated on defaulted account-months only, and the outcome is a proportion.
- *  Everything here follows from that: the population is smaller, the bucket
- *  statistic is a mean rather than a rate, and the reference scale is the logit
- *  of the mean because the fitted model is a fractional logit. */
-export default function LgdExploreSurface() {
-  const { portfolio = 'consumer' } = useParams()
+ * Formerly the right column of a separate LGD Explore stage; now the right
+ * pane of the LGD workbench, opened by clicking a candidate. Every edit goes
+ * through the store, which holds the fork guard.
+ */
+export default function LgdVariableDetail({ portfolio, column }: {
+  portfolio: string; column: string
+}) {
   const pk = portfolio as PortfolioKey
-  const nav = useNavigate()
   const fittedLgd = useUi((s) => s.fittedLgd[pk])
-  const setFittedLgd = useUi((s) => s.setFittedLgd)
-  const [column, setColumn] = useState<string | null>(null)
+  const editLgd = useUi((s) => s.editLgd)
   const [maxBins, setMaxBins] = useState(5)
-
-  // Terms promoted from the macro search are ranked here beside the tape columns,
-  // on the same population and the same statistic.
   const macroShortlist = useUi((s) => s.macroShortlist[pk]?.lgd ?? NONE) as string[]
   const screen = useQuery({
     queryKey: ['lgdscreen', portfolio, macroShortlist.join(',')],
     queryFn: () => api.lgdScreen(portfolio, macroShortlist),
   })
+  const spec = fittedLgd?.spec ?? screen.data?.default_spec ?? { drivers: [], categoricals: [] }
+  const treatment: LgdTreatment = spec.treatments?.[column]
+    ?? (spec.categoricals.includes(column) ? 'bins' : 'continuous')
+  const edit = (change: (x: LgdSpecPayload) => LgdSpecPayload, label: string) =>
+    editLgd(pk, change, label, spec)
+  const setTreatment = (t: LgdTreatment) =>
+    edit((x) => ({ ...x, treatments: {
+      ...asMap<LgdTreatment>(x.treatments), [column]: t } }), `${column} to ${t}`)
+
+  if (!screen.data) return <Skeleton className="h-[560px]" />
+
+  return (
+    <div className="space-y-3">
+      <SeverityTreatment portfolio={portfolio} column={column}
+                         treatment={treatment} onTreatment={setTreatment}
+                         inSpec={spec.drivers.includes(column)
+                                 || spec.categoricals.includes(column)}
+                         maxBins={maxBins} onMaxBins={setMaxBins}
+                         nKnots={spec.n_knots ?? 3}
+                         onNKnots={(n) => edit((x) => ({ ...x, n_knots: n }), `${n} knots`)} />
+      <SeverityView portfolio={portfolio} column={column}
+                    treatment={treatment}
+                    knots={spec.knots?.[column]}
+                    nKnots={spec.n_knots ?? 3}
+                    onKnots={(k) => edit((x) => ({
+                      ...x,
+                      knots: k?.length
+                        ? { ...asMap<number[]>(x.knots), [column]: k }
+                        : Object.fromEntries(
+                            Object.entries(asMap<number[]>(x.knots))
+                              .filter(([c]) => c !== column)),
+                    }), `the knots on ${column}`)} />
+    </div>
+  )
+}
+
+/**
+ * The target itself: what realised severity looks like and how it has moved.
+ *
+ * Book-level rather than per-driver, so it is a view of its own on the
+ * workbench rather than something that appears under every variable.
+ */
+export function LgdTarget({ portfolio }: { portfolio: string }) {
   const dist = useQuery({ queryKey: ['lgddist', portfolio], queryFn: () => api.lgdDistribution(portfolio) })
-  // The dependent variable through time. Monthly by default because the panel
-  // is monthly; the chart reports how many periods were too thin to average,
-  // which on a book that resolves two workouts a month is the whole story.
   const [sotFreq, setSotFreq] = useState<SeverityFreq>('MS')
   const sot = useQuery({
     queryKey: ['lgd-sot', portfolio, sotFreq],
     queryFn: () => api.lgdSeverityOverTime(portfolio, sotFreq),
   })
-
-  useEffect(() => { setColumn(null) }, [portfolio])
-  const selected = column ?? screen.data?.rows[0]?.column ?? null
-
-  const spec = fittedLgd?.spec ?? screen.data?.default_spec ?? { drivers: [], categoricals: [] }
-  const inSpec = (r: LgdScreenRow) =>
-    (r.kind === 'numeric' ? spec.drivers : spec.categoricals).includes(r.column)
-
-  const treatment: LgdTreatment = !selected ? 'continuous'
-    : spec.treatments?.[selected]
-      ?? (spec.categoricals.includes(selected) ? 'bins' : 'continuous')
-
-  const setTreatment = (t: LgdTreatment) => {
-    if (!selected) return
-    setFittedLgd(pk, {
-      spec: { ...spec, treatments: { ...(spec.treatments ?? {}), [selected]: t } },
-      hash: '', fittedAt: '', meanLgd: NaN, nDefaults: 0,
-    })
-  }
-
-  /** Selecting here writes the LGD specification, so Fit opens with it ready. */
-  const toggle = (r: LgdScreenRow) => {
-    const key = r.kind === 'numeric' ? 'drivers' : 'categoricals'
-    const cur = spec[key]
-    const next = {
-      ...spec,
-      [key]: cur.includes(r.column) ? cur.filter((c) => c !== r.column) : [...cur, r.column],
-    }
-    setFittedLgd(pk, { spec: next, hash: '', fittedAt: '', meanLgd: NaN, nDefaults: 0 })
-  }
-
-  if (screen.isLoading || !screen.data) return <div className="p-4"><Skeleton className="h-[560px]" /></div>
-
-  const n = spec.drivers.length + spec.categoricals.length
-
+  if (!dist.data) return <Skeleton className="h-[560px]" />
   return (
-    <div className="space-y-3 p-4">
-      <Card>
-        <CardHead
-          title="LGD model — Explore"
-          subtitle={`${num(screen.data.n_defaults)} defaulted account-months`}
-          caption="Loss given default is estimated on defaulted rows only, because those are the rows where a realised severity exists. The candidate list below is ranked on that population, not on the full tape."
-        />
-        <div className="grid gap-3 border-t border-hairline p-3 sm:grid-cols-4">
-          <StatTile label="Defaults" value={num(screen.data.n_defaults)} />
-          <StatTile label="Mean realised LGD" value={pct(screen.data.mean_lgd * 100, 1)} />
-          <StatTile label="Resolved with no loss" value={pct(screen.data.zero_loss_share * 100, 1)}
-            explain="Defaults where recovery covered the balance in full." />
-          <StatTile label="Selected drivers" value={String(n)} />
-        </div>
-        <div className="flex items-center gap-3 border-t border-hairline px-4 py-2">
-          <p className="text-tiny text-ink-secondary">
-            Selecting a driver here sets the LGD specification. Fit applies it.
-          </p>
-          <button onClick={() => nav(`/${portfolio}/lgd/fit`)} disabled={n === 0}
-            className="ml-auto rounded-ctl bg-accent px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40">
-            Go to Fit →
-          </button>
-        </div>
-      </Card>
-
-      <div className="grid gap-3 lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)]">
-        <DriverRanking rows={screen.data.rows} selected={selected}
-                       onSelect={setColumn} inSpec={inSpec} onToggle={toggle} />
-        <div className="space-y-3">
-          {selected && (
-            <SeverityTreatment portfolio={portfolio} column={selected}
-                               treatment={treatment} onTreatment={setTreatment}
-                               inSpec={spec.drivers.includes(selected)
-                                       || spec.categoricals.includes(selected)}
-                               maxBins={maxBins} onMaxBins={setMaxBins}
-                               nKnots={spec.n_knots ?? 3}
-                               onNKnots={(n) => setFittedLgd(pk, {
-                                 spec: { ...spec, n_knots: n },
-                                 hash: '', fittedAt: '', meanLgd: NaN, nDefaults: 0,
-                               })} />
-          )}
-          {selected && (
-            <SeverityView portfolio={portfolio} column={selected}
-                          treatment={treatment}
-                          knots={spec.knots?.[selected]}
-                          nKnots={spec.n_knots ?? 3}
-                          onKnots={(k) => setFittedLgd(pk, {
-                            spec: {
-                              ...spec,
-                              knots: k?.length
-                                ? { ...(spec.knots ?? {}), [selected]: k }
-                                : Object.fromEntries(Object.entries(spec.knots ?? {})
-                                    .filter(([c]) => c !== selected)),
-                            },
-                            hash: '', fittedAt: '', meanLgd: NaN, nDefaults: 0,
-                          })} />
-          )}
-          {dist.data && <SeverityDistribution d={dist.data} />}
-          {sot.data && (
-            <Card>
-              <CardHead
-                title="Realised severity through time"
-                subtitle={severitySummary(sot.data)}
-                caption="The distribution above shows the SHAPE of the target; this shows when. Severity on a secured book follows collateral values, so it moves with the cycle — a driver earns its place by tracking that movement. The band is the 95% interval of the cohort mean."
-              />
-              <SeverityOverTime d={sot.data} freq={sotFreq} onFreq={setSotFreq}
-                                busy={sot.isFetching} height={220} />
-            </Card>
-          )}
-        </div>
+    <div className="space-y-3">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <StatTile label="Defaults" value={num(dist.data.n_defaults)} />
+        <StatTile label="Mean realised LGD" value={pct(dist.data.mean_lgd * 100, 1)} />
+        <StatTile label="Resolved with no loss" value={pct(dist.data.zero_loss_share * 100, 1)}
+          explain="Defaults where recovery covered the balance in full." />
       </div>
+      <SeverityDistribution d={dist.data} />
+      {sot.data && (
+        <Card>
+          <CardHead
+            title="Realised severity through time"
+            subtitle={severitySummary(sot.data)}
+            caption="Mean realised severity by resolution month. Severity on a secured book follows collateral values and moves with the cycle. The band is the 95% interval of the cohort mean." />
+          <SeverityOverTime d={sot.data} freq={sotFreq} onFreq={setSotFreq}
+                            busy={sot.isFetching} height={220} />
+        </Card>
+      )}
     </div>
   )
 }
 
-/** `key@transform@lag` reads as a column name, not as a quantity. */
 const TRANSFORM_LABEL: Record<string, string> = {
   level: 'level', diff: '1m change', four_quarter_change: '12m change',
   yoy: '12m % change', qoq_annualized: '3m change ann.',
+  ma3: '3m avg', ma6: '6m avg', ma12: '12m avg',
+  yoy_ma3: '12m % change, 3m avg', diff_ma3: '1m change, 3m avg',
 }
 export function macroTermLabel(column: string): string {
   if (!column.includes('@')) return column
@@ -167,98 +116,6 @@ export function macroTermLabel(column: string): string {
   const t = TRANSFORM_LABEL[transform] ?? transform
   return `${key} · ${t}${Number(lag) ? ` · lag ${lag}m` : ''}`
 }
-
-function DriverRanking({ rows, selected, onSelect, inSpec, onToggle }: {
-  rows: LgdScreenRow[]
-  selected: string | null
-  onSelect: (c: string) => void
-  inSpec: (r: LgdScreenRow) => boolean
-  onToggle: (r: LgdScreenRow) => void
-}) {
-  const strongest = Math.max(...rows.map((r) => r.spread), 0.01)
-  return (
-    <Card className="self-start">
-      <CardHead
-        title="Candidate drivers"
-        subtitle={`${rows.length} candidates, ranked by rank correlation`}
-        caption="Spread is the difference between the highest and lowest bucket mean, in percentage points of severity. It states the same relationship in the units of the answer."
-      />
-      <div className="thin-scroll max-h-[640px] overflow-auto">
-        <table className="w-full table-fixed text-left text-xs">
-          <thead className="sticky top-0 border-y border-hairline bg-surface text-tiny text-ink-muted">
-            <tr>
-              <th className="w-7 px-2 py-2" />
-              <th className="px-2 py-2 font-medium">Driver</th>
-              <th className="w-12 px-2 py-2 text-right font-medium"
-                  title="Spearman rank correlation between the driver and realised severity, on defaulted rows.">ρ</th>
-              <th className="w-24 px-2 py-2 text-right font-medium">Spread</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => {
-              const active = r.column === selected
-              return (
-                <tr key={r.column}
-                    className={`cursor-pointer border-b border-hairline/60 ${
-                      active ? 'bg-accent-soft' : 'hover:bg-sunken/60'}`}
-                    onClick={() => onSelect(r.column)}>
-                  <td className="px-2 py-1.5" onClick={(e) => { e.stopPropagation(); onToggle(r) }}>
-                    <span className={`block h-3 w-3 rounded-sm border ${
-                      inSpec(r) ? 'border-accent bg-accent' : 'border-hairline'}`}
-                      title={inSpec(r) ? 'In the LGD specification' : 'Add to the LGD specification'} />
-                  </td>
-                  <td className="px-2 py-1.5">
-                    <span className={`block truncate font-mono text-tiny ${active ? 'text-ink' : 'text-ink-secondary'}`}
-                          title={r.column}>
-                      {macroTermLabel(r.column)}
-                    </span>
-                    <div className="mt-0.5 flex gap-1">
-                      {r.macro && (
-                        <span className="rounded bg-sunken px-1 text-micro text-ink-muted"
-                              title="Joined at the default month. Macro drivers are what make predicted severity respond to a scenario.">
-                          macro
-                        </span>
-                      )}
-                      {r.caution && (
-                        <span className="rounded bg-sunken px-1 text-micro text-ink-muted"
-                              title="The name suggests an operational identifier rather than a risk driver. Check what it records before using it.">
-                          identifier?
-                        </span>
-                      )}
-                      {r.levels != null && (
-                        <span className="text-micro text-ink-muted">{r.levels} levels</span>
-                      )}
-                    </div>
-                  </td>
-                  <td className="px-2 py-1.5 text-right tnum text-ink-secondary">
-                    {r.spearman == null ? '—' : ratio(r.spearman, 2)}
-                  </td>
-                  <td className="px-2 py-1.5 text-right">
-                    <div className="flex items-center justify-end gap-1.5">
-                      <span className="h-1.5 rounded-sm"
-                            style={{ width: `${Math.max(2, (r.spread / strongest) * 40)}px`,
-                                     background: sequential(0.55) }} />
-                      <span className="w-9 text-right tnum text-ink-secondary">
-                        {pct(r.spread * 100, 0)}
-                      </span>
-                    </div>
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
-    </Card>
-  )
-}
-
-/** Mean severity across a driver, with the volume behind each bucket. */
-/** The univariate view: how the driver itself is distributed on the defaulted
- *  population. A bucket mean cannot be read without it — a driver with almost no
- *  spread among defaults will produce flat buckets whatever its relationship
- *  with severity, and one with a spike at a default value will produce a bucket
- *  that is really one value. */
 function DriverDistribution({ data }: { data: SeverityCurve }) {
   const m = mode()
   const d = data.distribution
@@ -367,7 +224,7 @@ function SeverityView({ portfolio, column, treatment, knots, nKnots, onKnots }: 
         subtitle={data.kind === 'numeric'
           ? `${macroTermLabel(column)} · ${data.resolution} buckets of ${num(data.n_defaults)} defaults`
           : `${macroTermLabel(column)} · ${data.n_levels} levels`}
-        caption="Mean realised severity per bucket, with a 95% interval from the spread within the bucket, and the number of defaults behind each bucket on the same axis. The reference curve is a univariate fractional logit fitted on those rows by the same estimator the LGD model uses."
+        caption="Mean realised severity per bucket with a 95% interval, and the number of defaults behind each bucket. The reference curve is a univariate fractional logit fitted by the estimator the LGD model uses."
         right={data.kind === 'numeric' && (
           <span className="flex items-center gap-1"
                 title="Buckets are quantiles of the driver. Fewer buckets means more defaults in each and a narrower interval.">
@@ -384,7 +241,7 @@ function SeverityView({ portfolio, column, treatment, knots, nKnots, onKnots }: 
         <span>Spread across buckets {pct(data.spread * 100, 1)}</span>
         {data.spearman != null && <span>Rank correlation {ratio(data.spearman, 2)}</span>}
         {data.candidates?.linear && (
-          <span title={`Both curves are fitted on ${data.candidates.linear.n} defaults with the LGD model's own estimator — a fractional logit, not a logistic. BIC is divided by the estimated dispersion (${data.candidates.spline?.dispersion.toFixed(2) ?? data.candidates.linear.dispersion.toFixed(2)}): it is derived from a genuine likelihood and this is a quasi-likelihood, so the unscaled form misprices the extra columns. The Wald test uses the sandwich covariance, because twice the quasi-log-likelihood difference is not chi-squared.`}>
+          <span title={`Both curves are fitted on ${data.candidates.linear.n} defaults with the LGD model's own estimator, a fractional logit rather than a logistic. BIC is divided by the estimated dispersion (${data.candidates.spline?.dispersion.toFixed(2) ?? data.candidates.linear.dispersion.toFixed(2)}): it is derived from a genuine likelihood and this is a quasi-likelihood, so the unscaled form misprices the extra columns. The Wald test uses the sandwich covariance, because twice the quasi-log-likelihood difference is not chi-squared.`}>
             deviance R² {ratio(data.candidates.linear.deviance_r2, 3)}
             {data.candidates.spline && treatment === 'spline' && (
               <> → {ratio(data.candidates.spline.deviance_r2, 3)} · ΔBIC{' '}
@@ -676,7 +533,7 @@ function LevelSeverity({ data }: { data: SeverityCurve }) {
           </div>
         ))}
       </div>
-      <p className="pt-2 text-micro text-ink-muted">
+      <p className="max-w-[88ch] pt-2 text-micro text-ink-muted">
         Dot is the mean severity for the level, the rule behind it is the 95% interval,
         the hairline is the book mean. Grey dots carry fewer than 30 defaults.
       </p>
@@ -694,7 +551,7 @@ function SeverityDistribution({ d }: { d: import('../lib/api').LgdDistribution }
       <CardHead
         title="Distribution of realised severity"
         subtitle={`${num(d.n_defaults)} defaults · mean ${pct(d.mean_lgd * 100, 1)} · median ${pct(d.median_lgd * 100, 1)}`}
-        caption="Realised severity is a proportion, and it is not evenly spread. A share of defaults resolve with no loss and a smaller share lose the full balance. The fitted model estimates the conditional mean and does not model those two points separately."
+        caption="Realised severity is a proportion with mass at both ends: some defaults resolve with no loss, fewer lose the full balance. The model estimates the conditional mean and does not treat those points separately."
       />
       <div className="flex px-4 pb-1 pt-3">
         {/* y-axis: counts, so a bar height can be read rather than compared */}
@@ -781,8 +638,8 @@ function SeverityTreatment({ portfolio, column, treatment, onTreatment, inSpec,
   return (
     <Card>
       <CardHead
-        title={discretised ? `Binning — ${macroTermLabel(column)}`
-                           : `Treatment — ${macroTermLabel(column)}`}
+        title={discretised ? `Binning: ${macroTermLabel(column)}`
+                           : `Treatment: ${macroTermLabel(column)}`}
         subtitle={discretised
           ? `${data.bins.length} bins · ${num(data.n_total)} defaults · book mean ${pct(data.book_mean * 100, 1)}`
           : `${num(data.n_total)} defaults · book mean ${pct(data.book_mean * 100, 1)}`}
@@ -875,7 +732,7 @@ function SeverityTreatment({ portfolio, column, treatment, onTreatment, inSpec,
                 <th className="px-3 py-2 text-right font-medium">Share</th>
                 <th className="px-3 py-2 text-right font-medium">Mean severity</th>
                 <th className="px-3 py-2 text-right font-medium"
-                    title="logit(bin mean) − logit(book mean): how far this bin sits from the book, on the scale the model works in. A descriptive statistic, not an encoding — the bins enter as indicators.">
+                    title="logit(bin mean) − logit(book mean): how far this bin sits from the book, on the scale the model works in. This is a descriptive statistic, not an encoding. The bins enter as indicators.">
                   Logit shift
                 </th>
                 <th className="px-3 py-2" />
@@ -883,7 +740,7 @@ function SeverityTreatment({ portfolio, column, treatment, onTreatment, inSpec,
             </thead>
             <tbody>
               {data.bins.map((b) => (
-                <tr key={b.index} className="border-b border-hairline/60">
+                <tr key={b.index} className="border-b border-hairline">
                   <td className="px-3 py-1.5 font-mono text-tiny">{b.label}</td>
                   <td className="px-3 py-1.5 text-right tnum text-ink-muted">{num(b.n)}</td>
                   <td className="px-3 py-1.5 text-right tnum text-ink-muted">
@@ -908,7 +765,7 @@ function SeverityTreatment({ portfolio, column, treatment, onTreatment, inSpec,
             </tbody>
           </table>
           {data.warnings.length > 0 && (
-            <p className="px-4 py-2 text-micro leading-relaxed text-ink-muted">
+            <p className="max-w-[88ch] px-4 py-2 text-micro leading-relaxed text-ink-muted">
               {data.warnings.join(' ')}
             </p>
           )}
@@ -916,7 +773,7 @@ function SeverityTreatment({ portfolio, column, treatment, onTreatment, inSpec,
       ) : (
         <p className="px-4 pb-2.5 text-micro text-ink-muted">
           {treatment === 'continuous'
-            ? 'No binning and no deviance R² — both are properties of a discretisation.'
+            ? 'No binning and no deviance R². Both are properties of a discretisation.'
             : `A piecewise-linear basis at quantile knots. On ${num(data.n_total)} defaults, each knot is a parameter; three is usually the most this population supports.`}
         </p>
       )}

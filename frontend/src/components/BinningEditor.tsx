@@ -123,14 +123,29 @@ export function Editor({
     [domain, plotW],
   )
 
-  // the refit is debounced behind the handle so the pointer never waits
+  // The refit is debounced behind the handle so the pointer never waits.
+  //
+  // The callback is held in a ref rather than listed as a dependency. The
+  // parent passes a fresh arrow on every render, so depending on its identity
+  // re-ran this effect on EVERY render and pushed the local edge copy back into
+  // the specification 110ms later. Anything else that changed the binning — the
+  // bin-count stepper above all — was overwritten by that stale copy a moment
+  // after it was applied, which is why the stepper went dead as soon as an edge
+  // had been touched by hand.
+  const emit = useRef(onEdgesChange)
+  emit.current = onEdgesChange
   useEffect(() => {
     if (dragEdges === null) return
-    const t = setTimeout(() => onEdgesChange(dragEdges), 110)
+    const t = setTimeout(() => emit.current(dragEdges), 110)
     return () => clearTimeout(t)
-  }, [dragEdges, onEdgesChange])
+  }, [dragEdges])
 
-  useEffect(() => { setDragEdges(null) }, [result.column])
+  // Drop the local copy whenever authoritative edges arrive. The copy exists
+  // only to keep a dragging handle at the pointer; once the server has answered
+  // there are two versions of the truth and the server's is the one the model
+  // will be fitted on.
+  const truth = (result.edges ?? []).join(',')
+  useEffect(() => { setDragEdges(null) }, [result.column, truth])
 
   const realBins = result.bins
   const maxRate = Math.max(...realBins.map((b) => b.value || 0), 1e-9)
@@ -263,7 +278,7 @@ export function Editor({
                         fill="var(--surface-sunken)" stroke="var(--chrome-border)" />
                 <text x={x} y={BAR_TOP + BAR_H + SHARE_H + 17.5} textAnchor="middle"
                       fontSize={10} fill="var(--ink-muted)" style={{ pointerEvents: 'none' }}>×</text>
-                <title>Remove this edge — merges the two bins either side</title>
+                <title>Remove this edge. The two bins either side merge.</title>
               </g>
             </g>
           )
@@ -277,7 +292,7 @@ export function Editor({
         ))}
         <text x={PAD.l + (W - PAD.l - PAD.r) / 2} y={H - 5} textAnchor="middle"
               fontSize={10} fill="var(--ink-secondary)">
-          {result.column} — 1st to 99th percentile
+          {result.column}, 1st to 99th percentile
         </text>
       </svg>
 
@@ -285,7 +300,7 @@ export function Editor({
         Drag an edge to move it · double-click a bin to split it · double-click an edge (or ×) to remove it
         {hover !== null && geoms[hover] && (
           <span className="ml-2 text-ink-secondary">
-            — {geoms[hover].bin.label}: {geoms[hover].bin.detail.join(', ')},
+            {geoms[hover].bin.label}: {geoms[hover].bin.detail.join(', ')},
             {' '}{num(geoms[hover].bin.n)} rows
           </span>
         )}

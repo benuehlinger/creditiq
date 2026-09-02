@@ -25,6 +25,35 @@ export function errorText(body: unknown, fallback: string): string {
   return fallback
 }
 
+/** POST with a hard timeout.
+ *
+ *  A fetch has no timeout of its own, so a request that stalls — a dev-server
+ *  module swap mid-flight, a dropped connection, a backend that never answers —
+ *  leaves its promise pending forever, and any mutation waiting on it stays
+ *  "in progress" with no way to finish. Every projection and fit goes through
+ *  here, so the worst case is an error after `timeoutMs`, never a spinner that
+ *  never stops. The caller then shows the error and offers a retry. */
+async function post<T>(path: string, body: unknown, timeoutMs = 45_000): Promise<T> {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs)
+  try {
+    const r = await fetch(`${base}${path}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body), signal: ctrl.signal,
+    })
+    if (!r.ok) throw new Error(errorText(await r.json().catch(() => null), r.statusText))
+    return r.json() as Promise<T>
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') {
+      throw new Error(`Timed out after ${Math.round(timeoutMs / 1000)}s at ${path}. `
+        + 'The server did not answer. Try again.')
+    }
+    throw e
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 async function get<T>(path: string, params?: Record<string, string | number | undefined>): Promise<T> {
   const q = params
     ? '?' + new URLSearchParams(
@@ -33,7 +62,7 @@ async function get<T>(path: string, params?: Record<string, string | number | un
       ).toString()
     : ''
   const r = await fetch(`${base}${path}${q}`)
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText} — ${path}`)
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText} at ${path}`)
   return r.json() as Promise<T>
 }
 
@@ -114,6 +143,17 @@ export interface ScenarioInfo {
   note: string; horizon_quarters: number; variables: string[]
   start: string; end: string
 }
+
+/** A specification's macro terms as the projection consumes them: one shared
+ *  history, then the baseline and severely adverse branches. */
+export interface ModelPathSeries {
+  term: string; key: string; transform: string; lag_months: number
+  label: string; unit: string
+  history: { date: string; value: number }[]
+  baseline: { date: string; value: number }[]
+  severely_adverse: { date: string; value: number }[]
+}
+export interface ModelPaths { as_of: string; series: ModelPathSeries[] }
 
 export interface SplicedSeries {
   splice_date: string
@@ -212,6 +252,11 @@ export interface BinningResult {
   observed_sign: number | null
   domain: [number, number] | null
   histogram: { bounds: number[]; counts: number[] } | null
+  /** What the editor asked for and what the data would carry. They differ when
+   *  a monotonic trend cannot survive the extra split; the editor says so
+   *  rather than leaving the control looking broken. */
+  requested_bins?: number | null
+  achieved_bins?: number | null
   column_costs: Record<string, number | null>
   supports_continuous: boolean
   n_levels_raw: number
@@ -245,6 +290,14 @@ export interface CorrelationResult {
 export interface Coefficient {
   name: string; estimate: number; std_error: number; z_stat: number
   p_value: number; vif: number; contribution: number
+  /** The term this column belongs to, and that TERM's variance inflation on the
+   *  one-column scale. `vif` above is the ordinary per-column figure, which for
+   *  one column of a multi-column term says almost nothing: bin indicators from
+   *  one variable are mutually exclusive, so they inflate each other before any
+   *  other variable is considered. */
+  term?: string | null
+  term_vif?: number | null
+  term_df?: number
 }
 
 export interface Cohort {
@@ -279,6 +332,9 @@ export interface FitResponse {
   }
   backtest: {
     cohorts: Cohort[]
+    /** Error rates on the annualised default rate, in percentage points, split
+     *  at the out-of-time boundary. The numbers behind the cohort chart. */
+    errors?: { all: BacktestErrors; in_time: BacktestErrors; out_of_time: BacktestErrors }
     rank_order: { deciles: number; periods: number; breaks: number
                   share_monotone: number
                   rows: { period: string; monotone: boolean; rates_annual: (number|null)[] }[] }
@@ -301,7 +357,17 @@ export interface FitResponse {
                  ok: boolean; significant: boolean; message: string }[]
   woe_maps: Record<string, { kind: string; edges?: number[]; woe?: number[]
                              labels?: string[]; iv: number; missing_woe: number }>
+  /** Reference level per dummy-encoded variable — the bin with no indicator
+   *  column, which every coefficient of that term is measured against. */
+  references?: Record<string, string>
   performance_note: string
+}
+
+export interface BacktestErrors {
+  n_cohorts: number
+  mae_pp?: number; rmse_pp?: number; bias_pp?: number; ratio?: number
+  coverage?: number; mean_actual_pp?: number; mean_predicted_pp?: number
+  worst_period?: string; worst_miss_pp?: number
 }
 
 export interface SliceMetrics {
@@ -438,6 +504,66 @@ export interface EclResponse {
  *  severity has no events to count. */
 export type LgdTreatment = 'bins' | 'continuous' | 'spline'
 
+/**
+ * Normalise a per-column setting to a real object.
+ *
+ * `treatments`, `edges` and `knots` are mappings, but they have been on the
+ * wire as a LIST OF PAIRS — the server stores them as tuples so it can hash a
+ * frozen dataclass, and that detail leaked. The two shapes are
+ * indistinguishable to `?? {}`, and spreading the list form into an object
+ * literal produces index keys:
+ *
+ *     {...[["cltv","spline"]], hpi_yoy: "bins"}
+ *       -> {"0": ["cltv","spline"], hpi_yoy: "bins"}    // rejected by the API
+ *
+ * The server now emits objects, but a specification saved in the old shape
+ * still exists in browser storage and in version files, so every read
+ * normalises. A caller must never spread one of these raw.
+ */
+export function asMap<T>(v: unknown): Record<string, T> {
+  if (!v) return {}
+  if (Array.isArray(v)) {
+    return Object.fromEntries(
+      v.filter((p): p is [string, T] => Array.isArray(p) && p.length === 2))
+  }
+  // An object that already carries index keys is a spread of the list form —
+  // drop those and keep the pairs they hold.
+  const out: Record<string, T> = {}
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    if (/^\d+$/.test(k) && Array.isArray(val) && val.length === 2) {
+      out[String(val[0])] = val[1] as T
+    } else {
+      out[k] = val as T
+    }
+  }
+  return out
+}
+
+/** Clean a specification for the wire.
+ *
+ *  Applied at the boundary rather than trusting the caller, because the store
+ *  persists to browser storage and can therefore hold a shape written by an
+ *  older build. Normalising here means one place is responsible and a stale
+ *  browser cannot send a request the API will reject. */
+/** Every query that a change to the SAVED VERSIONS invalidates.
+ *
+ *  The roll-up is the one that keeps being forgotten: it carries the list of
+ *  available versions for its model picker, and it is fetched with
+ *  `staleTime: Infinity` because projecting three books is expensive. So after
+ *  saving or deleting a version its picker offered a set of models that no
+ *  longer matched the versions page. Naming the set once means a new mutation
+ *  cannot omit one. */
+export const VERSION_QUERIES = ['versions', 'lineage', 'rollup', 'compare'] as const
+
+export function wireLgdSpec(spec: LgdSpecPayload): LgdSpecPayload {
+  return {
+    ...spec,
+    treatments: asMap<LgdTreatment>(spec.treatments),
+    edges: asMap<number[]>(spec.edges),
+    knots: asMap<number[]>(spec.knots),
+  }
+}
+
 export interface LgdSpecPayload {
   drivers: string[]
   categoricals: string[]
@@ -490,6 +616,11 @@ export interface SeverityBinning {
           weight: number; share: number }[]
   domain: [number, number] | null
   histogram: { bounds: number[]; counts: number[] } | null
+  /** What the editor asked for and what the data would carry. They differ when
+   *  a monotonic trend cannot survive the extra split; the editor says so
+   *  rather than leaving the control looking broken. */
+  requested_bins?: number | null
+  achieved_bins?: number | null
   supports_continuous: boolean
   column_costs: Record<string, number | null>
 }
@@ -508,6 +639,8 @@ export interface LgdCandidates {
 
 export interface LgdFitResult {
   portfolio: string; spec: LgdSpecPayload; hash: string
+  /** Derived from the hash, the way the PD fit's name is. */
+  name?: string
   n_defaults: number; mean_lgd: number; zero_loss_share: number
   mean_severity_given_loss: number; mean_workout_months: number
   columns: string[]
@@ -518,6 +651,9 @@ export interface LgdFitResult {
                  zero_loss_share: number }[]
   severity_histogram: { lo: number; hi: number; n: number; zero: boolean }[]
   macro_drivers: string[]; dropped: string[]; note: string
+  /** Reference bin per discretised term — what its coefficients are measured
+   *  against. */
+  references?: Record<string, string>
 }
 
 export interface LgdScreenRow {
@@ -656,6 +792,8 @@ export interface RollUpResponse {
     ead_method: string; ead_ccf: number | null
     n_accounts: number; exposure: number
     by_scenario: Record<string, { ecl: number; ecl_bps: number; pd_12m: number; lgd: number }>
+  /** The macro terms this book's model carries, canonical `key@transform@lag`. */
+  mev_terms?: string[]
     capped: boolean; extrapolation_flags: string[]; sign_flips: string[]
   }[]
   totals: Record<string, { ecl: number; exposure: number; ecl_bps: number
@@ -684,6 +822,8 @@ export const api = {
     get<{ keys: string[]; rows: Record<string, number | string | null>[] }>(
       '/mev/series', { keys: keys.join(','), start, end }),
   scenarios: () => get<{ warnings: string[]; scenarios: ScenarioInfo[] }>('/scenarios'),
+  modelPaths: (terms: string[]) =>
+    get<ModelPaths>('/scenarios/model-paths', { terms: terms.join(',') }),
   spliced: (name: string, keys: string[], historyFrom = '2008-01-01') =>
     get<{ scenario: string; published: boolean; series: Record<string, SplicedSeries> }>(
       `/scenarios/${name}/spliced`, { keys: keys.join(','), history_from: historyFrom }),
@@ -696,6 +836,12 @@ export const api = {
   binning: (k: string, col: string, edges?: number[], maxBins = 8, nKnots = 4) =>
     get<BinningResult>(`/portfolios/${k}/binning/${encodeURIComponent(col)}`, {
       max_bins: maxBins, n_knots: nKnots,
+      // The editor asks for a COUNT, not a ceiling. A ceiling does not respond
+      // to a button: a solver that chose four bins under a ceiling of eight
+      // does not move when the ceiling drops to seven, six or five, and the
+      // control appears inert. Hand-set edges are their own count, so the
+      // request is only exact when there are none.
+      exact_bins: edges?.length ? undefined : 'true',
       edges: edges?.length ? edges.join(',') : undefined,
     }),
   bivariate: (k: string, col: string, edges?: number[]) =>
@@ -734,39 +880,31 @@ export const api = {
       columns: cols.join(','),
       treatments: cols.map((c) => `${c}:${treatments[c] ?? 'woe'}`).join(','),
     }),
-  fit: async (req: FitRequest): Promise<FitResponse> => {
-    const r = await fetch('/api/fit', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(req),
-    })
-    if (!r.ok) throw new Error(errorText(await r.json().catch(() => null), r.statusText))
-    return r.json()
-  },
+  /** A fit the server still holds, by hash.
+   *
+   *  The fit RESULT used to live in component state, so walking to Explore and
+   *  back threw away the coefficients, the diagnostics and the backtest and the
+   *  stage went back to asking to be fitted. The server already caches a run
+   *  under its hash, so the result is fetched rather than recomputed. A miss is
+   *  a 404 and means the cache was evicted: the stage then asks for a refit,
+   *  which is honest, rather than showing a model it cannot produce. */
+  model: (hash: string) => get<FitResponse>(`/models/${hash}`),
+  /** The friendly name for any hash, for a half restored from a record that
+   *  stored the hash only. */
+  nameFor: (hash: string) => get<{ hash: string; name: string }>(`/name/${hash}`),
+  fit: (req: FitRequest): Promise<FitResponse> => post('/fit', req),
   /** Report an already-fitted model's backtest at another frequency. No refit —
    *  the scored account-months are held on the cached run. */
-  recohort: async (req: FitRequest, freq: 'MS' | 'QS' | 'YS') => {
-    const r = await fetch('/api/backtest/recohort', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ...req, freq }),
-    })
-    if (!r.ok) throw new Error(errorText(await r.json().catch(() => null), r.statusText))
-    return r.json() as Promise<Pick<FitResponse['backtest'],
-      'cohorts' | 'rank_order' | 'score_psi'> & { period_freq: string }>
-  },
+  recohort: (req: FitRequest, freq: 'MS' | 'QS' | 'YS') =>
+    post<Pick<FitResponse['backtest'], 'cohorts' | 'rank_order' | 'score_psi'>
+      & { period_freq: string }>('/backtest/recohort', { ...req, freq }),
   segmentBacktest: (portfolio: string, hash: string, column: string) =>
     fetch(`/api/segment-backtest?portfolio=${portfolio}&hash_=${hash}&column=${column}`,
           { method: 'POST' }).then((r) => r.json()) as Promise<{
       column: string
       segments: FitResponse['backtest']['segments']
     }>,
-  ecl: async (req: EclRequest): Promise<EclResponse> => {
-    const r = await fetch('/api/ecl', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(req),
-    })
-    if (!r.ok) throw new Error(errorText(await r.json().catch(() => null), r.statusText))
-    return r.json()
-  },
+  ecl: (req: EclRequest): Promise<EclResponse> => post('/ecl', req),
   editableScenario: (name: string, keys: string[]) =>
     fetch(`/api/scenarios/${name}/editable?keys=${keys.join(',')}`).then((r) => r.json()) as
       Promise<{ scenario: string; published: boolean; note: string
@@ -795,20 +933,14 @@ export const api = {
       `/portfolios/${k}/lgd/knots/${encodeURIComponent(col)}`, { n_knots: nKnots }),
   lgdDistribution: (k: string) => get<LgdDistribution>(`/portfolios/${k}/lgd/distribution`),
   lgdCandidates: (k: string) => get<LgdCandidates>(`/portfolios/${k}/lgd/candidates`),
-  lgdFit: async (portfolio: string, spec: LgdSpecPayload): Promise<LgdFitResult> => {
-    const r = await fetch('/api/lgd/fit', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ portfolio, ...spec }),
-    })
-    if (!r.ok) throw new Error(errorText(await r.json().catch(() => null), r.statusText))
-    return r.json()
-  },
+  lgdFit: (portfolio: string, spec: LgdSpecPayload): Promise<LgdFitResult> =>
+    post('/lgd/fit', { portfolio, ...wireLgdSpec(spec) }),
   lgdBacktest: async (portfolio: string, spec: LgdSpecPayload,
                       ootFrom = '2022-01-01',
                       freq: SeverityFreq = 'MS'): Promise<LgdBacktest> => {
     const r = await fetch('/api/lgd/backtest', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ portfolio, ...spec, oot_from: ootFrom, freq }),
+      body: JSON.stringify({ portfolio, ...wireLgdSpec(spec), oot_from: ootFrom, freq }),
     })
     if (!r.ok) throw new Error(errorText(await r.json().catch(() => null), r.statusText))
     return r.json()

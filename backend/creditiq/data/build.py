@@ -194,6 +194,27 @@ def truth_doc() -> str:
     return "\n".join(L)
 
 
+def _content_digest(panel) -> str:
+    """A short, deterministic digest of the panel's numeric content.
+
+    Summary statistics rather than the rows themselves: the point is to notice
+    that the data changed, not to reproduce it, and this has to be cheap enough
+    to run on every build. Rounded to significant figures so that a float
+    rounding difference between machines does not read as a different panel.
+    """
+    import hashlib as _h
+
+    parts: list[str] = []
+    for col in sorted(panel.columns):
+        s = panel[col]
+        if not pd.api.types.is_numeric_dtype(s):
+            continue
+        v = pd.to_numeric(s, errors="coerce")
+        parts.append(f"{col}:{float(v.mean()):.6g}:{float(v.std()):.6g}"
+                     f":{float(v.min()):.6g}:{float(v.max()):.6g}")
+    return _h.sha256("|".join(parts).encode()).hexdigest()[:12]
+
+
 def build(verbose: bool = True) -> dict:
     OUT.mkdir(parents=True, exist_ok=True)
     DOCS.mkdir(parents=True, exist_ok=True)
@@ -208,6 +229,13 @@ def build(verbose: bool = True) -> dict:
         report[key] = {
             "rows": len(panel), "accounts": len(accounts),
             "defaults": int(panel.default_flag.sum()),
+            # A digest of what the columns CONTAIN, not just how many there are.
+            # Row, account and default counts are unchanged by a rescaling of
+            # the money: rebalancing the books moved the mean commercial loan
+            # from $11.3M to $0.4M without moving any of them, so every saved
+            # version still called itself current while its stored loss figures
+            # described a portfolio 28 times larger.
+            "content": _content_digest(panel),
             "annual_default_rate_pct": round(float(panel.default_flag.mean() * 1200), 3),
             "window": [str(panel.performance_date.min().date()),
                        str(panel.performance_date.max().date())],

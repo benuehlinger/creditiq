@@ -2,10 +2,8 @@ import { Navigate, Outlet, Route, Routes, useParams } from 'react-router-dom'
 import AppShell from './components/AppShell'
 import { isPortfolioKey } from './lib/api'
 import DataSurface from './surfaces/DataSurface'
-import ExploreSurface from './surfaces/ExploreSurface'
-import ModelSurface from './surfaces/ModelSurface'
-import LgdSurface from './surfaces/LgdSurface'
-import LgdExploreSurface from './surfaces/LgdExploreSurface'
+import PdWorkbench from './surfaces/PdWorkbench'
+import LgdWorkbench from './surfaces/LgdWorkbench'
 import MacroSurface from './surfaces/MacroSurface'
 import ScenarioSurface from './surfaces/ScenarioSurface'
 import VersionsSurface from './surfaces/VersionsSurface'
@@ -34,19 +32,20 @@ export default function App() {
         <Route path="/:portfolio" element={<KnownPortfolio />}>
           <Route path="data" element={<DataSurface />} />
           <Route path="macro" element={<MacroSurface />} />
-          {/* Each model has an Explore stage and a Fit stage. */}
-          <Route path="pd/explore" element={<ExploreSurface />} />
-          <Route path="pd/fit" element={<ModelSurface />} />
-          <Route path="pd/fit/:version" element={<ModelSurface />} />
-          <Route path="lgd/explore" element={<LgdExploreSurface />} />
-          <Route path="lgd/fit" element={<LgdSurface />} />
+          {/* One workbench per model. The old Explore and Fit stages are kept
+              as redirects so a saved link still lands somewhere. */}
+          <Route path="pd" element={<PdWorkbench />} />
+          <Route path="pd/explore" element={<Navigate to="../pd" replace />} />
+          <Route path="pd/fit" element={<Navigate to="../pd" replace />} />
+          <Route path="pd/fit/:version" element={<Navigate to="../pd" replace />} />
+          <Route path="lgd" element={<LgdWorkbench />} />
+          <Route path="lgd/explore" element={<Navigate to="../lgd" replace />} />
+          <Route path="lgd/fit" element={<Navigate to="../lgd" replace />} />
           <Route path="scenarios" element={<ScenarioSurface />} />
           <Route path="versions" element={<VersionsSurface />} />
           {/* Paths from before the surfaces were grouped by model. */}
-          <Route path="explore" element={<Navigate to="../pd/explore" replace />} />
-          <Route path="model" element={<Navigate to="../pd/fit" replace />} />
-          <Route path="pd" element={<Navigate to="explore" replace />} />
-          <Route path="lgd" element={<Navigate to="explore" replace />} />
+          <Route path="explore" element={<Navigate to="../pd" replace />} />
+          <Route path="model" element={<Navigate to="../pd" replace />} />
           <Route index element={<Navigate to="data" replace />} />
         </Route>
         <Route path="*" element={<Navigate to="/rollup" replace />} />

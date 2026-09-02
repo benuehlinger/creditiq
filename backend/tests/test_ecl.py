@@ -233,10 +233,22 @@ def test_the_extrapolation_check_covers_lgd_drivers_not_just_pd_terms():
     ECL by a third while the panel reported nothing out of range, because it was
     only inspecting the PD model's macro terms. Severity is where a housing
     stress bites."""
-    from creditiq.models import rollup as R
     from creditiq.models import scenario_service as SS
-    spec, _, _ = R.spec_for("mortgage")
-    assert "hpi_yoy" not in {m.key for m in spec.mevs}, "spec changed; pick another case"
+    from creditiq.models.spec import (LgdSpec, MevSpec, ModelSpec, SampleSpec,
+                                      VariableSpec)
+
+    # Built here rather than read from `rollup.spec_for`, which returns whichever
+    # version happens to be PROMOTED. Promoting a model on the mortgage book,
+    # which is a normal thing to do in the product, then broke this test for a
+    # reason that has nothing to do with what it checks.
+    spec = ModelSpec(
+        portfolio="mortgage",
+        variables=[VariableSpec("fico_orig"), VariableSpec("current_ltv")],
+        mevs=[MevSpec("unemployment_rate")],
+        sample=SampleSpec(oot_from="2023-01-01", downsample_rows=200_000),
+        lgd=LgdSpec(portfolio="mortgage", drivers=("current_ltv", "hpi_yoy")),
+    )
+    assert "hpi_yoy" not in {m.key for m in spec.mevs}
     flagged = {e.key for e in SS.run(spec).extrapolation if e.outside}
     assert "hpi_yoy" in flagged
 

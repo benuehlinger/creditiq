@@ -59,7 +59,7 @@ institution's portfolio and must never be presented as one.
 | `scheduled_payment` | float64 | 0.0% | Contractual monthly payment, USD. |
 | `dscr_orig` | float64 | 0.0% | Account attribute. |
 | `original_ltv` | float64 | 0.0% | Account attribute. |
-| `noi` | float64 | 14.7% | Account attribute. |
+| `noi` | float64 | 14.8% | Account attribute. |
 | `risk_rating` | float64 | 0.0% | Credit driver. higher raises risk |
 | `lease_rollover_pct` | float64 | 29.6% | Credit driver. higher raises risk |
 | `property_type` | object | 0.0% | Categorical credit driver. |

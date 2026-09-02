@@ -49,9 +49,9 @@ and close it.
 
 ## 2:15 — The leakage guardrail (2 minutes) — **the first key point**
 
-**Click:** Explore.
+**Click:** PD model.
 
-The ranking is sorted by information value. The top three are flagged red.
+The candidate list on the left is sorted by information value. The top three are flagged red.
 
 > "The screen ranks every candidate by information value. Three are flagged as
 > leakage. `foreclosure_referral_flag` scores 7.4 — that's not a predictor, it's
@@ -209,9 +209,9 @@ Scroll to the **Scenario editor**. Drag an unemployment quarter upward. Click
 **Click:** LGD model.
 
 > "Expected credit loss is PD times LGD times exposure, so severity is half the
-> calculation. This stage has the same structure as the PD side: an Explore
-> stage that ranks candidate drivers on the defaulted population, and a Fit
-> stage.
+> calculation. This screen has the same shape as the PD side: candidate
+> drivers ranked on the defaulted population down the left, the fitted model
+> on the right, and any driver one click away.
 >
 > The model is a fractional logit on realised severity. Coefficients are per
 > standard deviation of the driver. Twenty-three percent of these defaults

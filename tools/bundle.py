@@ -32,6 +32,10 @@ ROOT = Path(__file__).resolve().parent.parent
 EXCLUDE_DIRS = {
     ".git", ".venv", "node_modules", "dist", "__pycache__",
     ".pytest_cache", ".ruff_cache", "synthetic",
+    # data/cache holds pickled fit results — derived, gigabytes, and
+    # regenerated on demand. It postdates this bundler, which is how a
+    # "~2 MB" bundle once shipped at 2.2 GB.
+    "cache",
 }
 EXCLUDE_SUFFIXES = {".pyc", ".tsbuildinfo"}
 EXCLUDE_NAMES = {".DS_Store"}
@@ -102,8 +106,10 @@ def wanted(p: Path) -> bool:
         return False
     if any(part in EXCLUDE_DIRS for part in p.parts):
         return False
-    # saved model versions are demo state, not source
-    return not (p.parent.name == "versions" and p.suffix == ".json")
+    # saved model versions are demo state, not source — the whole directory,
+    # including archived subfolders, which the old parent-name check let
+    # through.
+    return not (p.parts and p.parts[0] == "versions")
 
 
 def pack() -> str:

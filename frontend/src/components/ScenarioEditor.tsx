@@ -87,7 +87,7 @@ export default function ScenarioEditor({ portfolio, mevs, onApply, busy }: {
       <CardHead
         title="Scenario editor"
         subtitle="Drag a quarter to build a custom path"
-        caption="Everything downstream reprojects against the dragged path — PD, LGD, exposure, ECL and the bridge. A custom scenario is never labelled as supervisory."
+        caption="PD, LGD, exposure, ECL and the bridge all reproject against the dragged path. A custom scenario is never labelled as supervisory."
         right={
           <div className="flex items-center gap-2">
             <select value={variable} onChange={(e) => setVariable(e.target.value)}
@@ -109,7 +109,7 @@ export default function ScenarioEditor({ portfolio, mevs, onApply, busy }: {
       />
       {dirty && (
         <div className="border-b border-hairline px-4 py-1.5">
-          <StatusPill severity="warning">Custom path — not a supervisory scenario</StatusPill>
+          <StatusPill severity="warning">Custom path, not a supervisory scenario</StatusPill>
         </div>
       )}
       <div ref={wrap} className="px-2">

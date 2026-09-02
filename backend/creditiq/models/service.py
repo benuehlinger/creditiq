@@ -29,6 +29,7 @@ import pandas as pd
 from .. import store
 from ..analysis.rates import annualize
 from . import backtest as B
+from . import runcache
 from . import design as D
 from . import metrics as M
 from .fit import FitResult, fit as run_fit, predict
@@ -94,6 +95,17 @@ def run(spec: ModelSpec, force: bool = False) -> ModelRun:
     key = spec.hash()
     if not force and key in _CACHE:
         return _CACHE[key]
+    if not force:
+        # Fitted before, in a previous process. Serving it from disk is what
+        # makes "have I run this specification?" answer the same way across a
+        # restart. The disk key carries the data fingerprint, so a run fitted
+        # on a superseded panel is never found here.
+        prev = runcache.load(spec.portfolio, "pd", key)
+        if prev is not None:
+            if len(_CACHE) >= MAX_CACHE:
+                _CACHE.pop(next(iter(_CACHE)))
+            _CACHE[key] = prev
+            return prev
 
     t = {}
     t0 = time.perf_counter()
@@ -188,8 +200,12 @@ def run(spec: ModelSpec, force: bool = False) -> ModelRun:
     seg_col = next((c for c in df.columns
                     if c in getattr(store.load(spec.portfolio).spec,
                                     "categorical_betas", {})), None)
+    cohorts = B.by_cohort(des_all.dates, des_all.y, p_all)
     bt = {
-        "cohorts": B.by_cohort(des_all.dates, des_all.y, p_all),
+        "cohorts": cohorts,
+        # The numbers behind the cohort chart, split at the out-of-time
+        # boundary. A validator reads these before the picture.
+        "errors": B.error_summary(cohorts, spec.sample.oot_from),
         "rank_order": B.rank_order_stability(des_all.dates, des_all.y, p_all),
         "score_psi": B.score_psi(des_all.dates, p_all),
         "vintages": B.vintage_curves(df, spec.target_column),
@@ -209,6 +225,7 @@ def run(spec: ModelSpec, force: bool = False) -> ModelRun:
         spec=spec, hash=key, name=spec.label or friendly_name(key), fit=res,
         diagnostics=diag, backtest=bt,
         scored={"dates": np.asarray(des_all.dates), "y": des_all.y.astype(np.int8),
+                "oot_from": spec.sample.oot_from,
                 "p": p_all.astype(np.float32)},
         scorecard={"base_score": sc.base_score, "base_odds": sc.base_odds,
                    "pdo": sc.pdo, "factor": sc.factor, "offset": sc.offset,
@@ -221,11 +238,23 @@ def run(spec: ModelSpec, force: bool = False) -> ModelRun:
     if len(_CACHE) >= MAX_CACHE:
         _CACHE.pop(next(iter(_CACHE)))
     _CACHE[key] = out
+    runcache.save(spec.portfolio, "pd", key, out)
     return out
 
 
 def cached(hash_: str) -> ModelRun | None:
-    return _CACHE.get(hash_)
+    hit = _CACHE.get(hash_)
+    if hit is not None:
+        return hit
+    # The hash alone does not say which portfolio it belongs to, so the disk
+    # fallback has to look in each book's directory. Three stat calls.
+    from ..data.portfolios import PORTFOLIOS
+    for p in PORTFOLIOS:
+        prev = runcache.load(p, "pd", hash_)
+        if prev is not None:
+            _CACHE[hash_] = prev
+            return prev
+    return None
 
 
 def clear() -> None:

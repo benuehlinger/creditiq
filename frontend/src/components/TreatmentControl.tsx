@@ -66,7 +66,7 @@ export default function TreatmentControl({ value, result, onChange, nKnots, onKn
             return (
               <button key={o.key} disabled={!ok} onClick={() => onChange(o.key)}
                 title={ok ? o.blurb
-                  : 'Not available for a categorical variable — there is no continuum to fit.'}
+                  : 'Not available for a categorical variable. There is no continuum to fit.'}
                 className={`rounded-[5px] px-2.5 py-1 text-xs font-medium transition-colors ${
                   on ? 'bg-raised text-ink shadow-sm'
                      : ok ? 'text-ink-muted hover:text-ink-secondary'

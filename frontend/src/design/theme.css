@@ -9,16 +9,18 @@
    side against the real mark on the brand page (Cmd-K, "Brand assets"). */
 @import '@fontsource/merriweather/latin-700.css';
 
-/* The unchosen candidates, imported only so the brand page can show them
-   against the real mark. Remove these and the packages once the face is
-   settled — a font nobody renders is dead weight in the bundle. */
+/* The interface face. Inter, self-hosted from node_modules so the offline
+   guarantee holds. Three weights: regular for text, medium for labels and
+   controls, semibold for headings and figures. The system stack was drawing a
+   different face on every machine, and none of them set numbers well. */
+@import '@fontsource/inter/latin-400.css';
+@import '@fontsource/inter/latin-500.css';
 @import '@fontsource/inter/latin-600.css';
-@import '@fontsource/tinos/latin-700.css';
-@import '@fontsource/dm-sans/latin-500.css';
-@import '@fontsource/manrope/latin-600.css';
-@import '@fontsource-variable/instrument-sans/standard.css';
-@import '@fontsource/lora/latin-600.css';
-@import '@fontsource/fraunces/latin-600.css';
+
+/* Hashes, column names and code. A face designed for it rather than whatever
+   monospace the machine has, which on a Mac is Menlo and reads as a terminal. */
+@import '@fontsource/jetbrains-mono/latin-400.css';
+@import '@fontsource/jetbrains-mono/latin-500.css';
 
 /* Space Grotesk, self-hosted. A fonts.googleapis.com link would be a network
    dependency, and the brief requires this to run in a conference room with
@@ -84,7 +86,6 @@
      brand hue at a legible lightness. */
   --brand-kpmg: #F2F4F7;
   --brand-name: #F2F4F7;
-  --brand-name-accent: #4DA3E8;
   --brand-mark-bg: #0061be;
   --brand-mark-bar: rgba(255, 255, 255, 0.42);
   --brand-mark-curve: #FFFFFF;
@@ -122,8 +123,7 @@
 
   /* On the light surface the true KPMG deep blue is used, as intended. */
   --brand-kpmg: #00338D;
-  --brand-name: #00338D;
-  --brand-name-accent: #0091DA;
+  --brand-name: #0B0F14;
   --brand-mark-bg: #00338D;
   --brand-mark-bar: rgba(255, 255, 255, 0.45);
   --brand-mark-curve: #FFFFFF;
@@ -149,14 +149,18 @@
   body {
     background: var(--surface-page);
     color: var(--ink-primary);
-    font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
     font-size: 14px;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+    /* Inter's contextual alternates and slashed zero: the zero in a hash must
+       not read as an O. */
+    font-feature-settings: 'calt', 'zero';
   }
   /* Tabular figures in columns only. A large standalone number keeps the font's
      proportional figures — tabular-nums makes 121 look loose at display sizes. */
   th, td, .tnum { font-variant-numeric: tabular-nums; }
+  code, pre, .font-mono { font-feature-settings: 'zero'; }
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
   ::selection { background: var(--accent-soft); }
 }
@@ -197,3 +201,13 @@
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
+
+/* The fit-progress sheen and the running ellipsis. */
+@keyframes sheen { from { left: -6rem; } to { left: 100%; } }
+@keyframes dots { 0% { content: ''; } 25% { content: '.'; } 50% { content: '..'; } 75% { content: '...'; } }
+.animate-\[dots_1\.2s_steps\(4\,end\)_infinite\]::after { content: ''; animation: dots 1.2s steps(4, end) infinite; }
+
+/* KaTeX sits inside running caption text, so it takes the caption's size and
+   colour rather than KaTeX's larger default, and never sets its own black. */
+.katex { font-size: 1.05em; color: inherit; }
+.katex .mord, .katex .mbin, .katex .mrel, .katex .mopen, .katex .mclose { color: inherit; }

@@ -325,11 +325,18 @@ def _metric_keys():
 
 def test_the_pd_half_has_its_own_identity_and_ignores_lgd():
     """`pd_hash` covers the PD specification only."""
-    from creditiq.models import rollup as R
-
     import dataclasses
 
-    spec, _, _ = R.spec_for("mortgage")
+    from creditiq.models.spec import LgdSpec, ModelSpec, VariableSpec
+
+    # Built here rather than read from `rollup.spec_for`, which returns whichever
+    # version is PROMOTED. With a champion carrying one LGD driver, the change
+    # below was a no-op and the assertion failed for an unrelated reason.
+    spec = ModelSpec(
+        portfolio="mortgage",
+        variables=[VariableSpec("fico_orig"), VariableSpec("current_ltv")],
+        lgd=LgdSpec(portfolio="mortgage", drivers=("current_ltv", "hpi_yoy")),
+    )
     before, pair_before = spec.pd_hash(), spec.hash()
     spec.lgd = dataclasses.replace(spec.lgd, drivers=spec.lgd.drivers[:1])
     assert spec.pd_hash() == before, "the PD identity moved when only LGD changed"

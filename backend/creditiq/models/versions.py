@@ -49,8 +49,14 @@ def data_fingerprint(portfolio: str) -> str:
         rep = json.loads(BUILD_REPORT.read_text())[portfolio]
     except Exception:                                                   # noqa: BLE001
         return ""
+    # `content` is a digest of what the columns hold. Without it the fingerprint
+    # only counted rows, accounts, defaults and the window, all of which survive
+    # a rescaling of the money: rebalancing the books moved the mean commercial
+    # loan from $11.3M to $0.4M and every saved version still reported itself as
+    # current, with stored loss figures describing a portfolio 28 times larger.
     blob = json.dumps({k: rep[k] for k in ("rows", "accounts", "defaults", "window",
-                                           "seed") if k in rep}, sort_keys=True)
+                                           "seed", "content") if k in rep},
+                      sort_keys=True)
     return hashlib.sha256(blob.encode()).hexdigest()[:12]
 
 
@@ -211,6 +217,9 @@ def compare(hashes: list[str]) -> dict:
         ("log_loss_test", "Log loss (test)", "down"),
         ("brier_test", "Brier (test)", "down"),
         ("calibration_error", "PD calibration error", "down"),
+        ("pd_oot_rmse_pp", "PD backtest RMSE, out of time (pp)", "down"),
+        ("pd_oot_bias_pp", "PD backtest bias, out of time (pp)", "zero"),
+        ("pd_oot_coverage", "PD cohorts inside the 95% band, out of time", "up"),
         # Severity. `zero` is a third direction: a bias is best at nothing, and
         # neither the largest nor the smallest signed value is the good one.
         ("lgd_bias", "LGD bias (out of time)", "zero"),

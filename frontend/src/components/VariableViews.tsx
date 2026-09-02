@@ -112,7 +112,7 @@ export default function VariableViews({
           ? `${data.resolution} quantile buckets · ${num(data.n_events)} defaults`
           : `${data.n_levels} levels ordered by risk · ${num(data.n_events)} defaults`}
         caption={data.kind === 'numeric'
-          ? 'Log-odds of default per bucket, with a 95% interval, and the number of observations behind each bucket on the same axis. The candidate curves are fitted with the estimator the model uses, on the rows the model uses, with the same spline basis — not by least squares through the bucket means.'
+          ? 'Log-odds of default per bucket, with a 95% interval, and the number of observations behind each bucket on the same axis. The candidate curves are fitted with the estimator the model uses, on the rows the model uses, with the same spline basis, not by least squares through the bucket means.'
           : 'Levels ordered by log-odds of default, with the number of observations beside each. The vertical rule is the book base rate.'}
         right={data.kind === 'numeric' && (
           <div className="flex items-center gap-1">
@@ -160,7 +160,7 @@ function Verdict({ data, treatment }: { data: CurveResult; treatment: Treatment 
       <StatusPill severity={agrees ? 'good' : 'warning'}>
         {agrees ? `Consistent with ${treatment}` : `Shape indicates ${rec.treatment}`}
       </StatusPill>
-      <p className="min-w-0 flex-1 text-tiny leading-relaxed text-ink-secondary">{rec.reason}</p>
+      <p className="min-w-0 max-w-[88ch] flex-1 text-tiny leading-relaxed text-ink-secondary">{rec.reason}</p>
       {data.linear && (
         <span className="shrink-0 text-micro tabular-nums text-ink-muted"
               title={`Both curves are fitted with the estimator the model uses, on ${data.linear.n_rows.toLocaleString()} rows carrying ${data.linear.n_events.toLocaleString()} events. Pseudo R-squared is McFadden's. BIC penalises by the event count, which is the effective sample size for a rare outcome.`}>
@@ -463,7 +463,7 @@ function CategoricalShape({ data }: { data: CurveResult }) {
           </div>
         ))}
       </div>
-      <p className="pt-2 text-micro text-ink-muted">
+      <p className="max-w-[88ch] pt-2 text-micro text-ink-muted">
         The dot is the log-odds for the level, the rule behind it the 95% interval,
         and the hairline the book base rate. Grey dots carry fewer than 20 defaults,
         so their position is estimated imprecisely. Empirical-Bayes shrinkage on the

@@ -167,7 +167,7 @@ export default function FitDiagnostics({ r }: { r: FitResponse }) {
                 const d = r.diagnostics[s]
                 if (!d) return null
                 return (
-                  <tr key={s} className="border-b border-hairline/40">
+                  <tr key={s} className="border-b border-hairline">
                     <td className="px-4 py-1.5 text-ink">
                       {s === 'oot' ? 'Out of time' : s === 'test' ? 'Test' : 'Train'}
                     </td>

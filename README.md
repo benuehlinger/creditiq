@@ -40,7 +40,7 @@ make dev       # run the backend and the frontend together
 ```
 
 `make setup` is needed once. The panels are NOT included in this archive —
-they are 233 MB and they are reproducible, so `make setup` generates them.
+they are ~280 MB and they are reproducible, so `make setup` generates them.
 
 Then open <http://localhost:5173>.
 
@@ -55,7 +55,7 @@ generator is deterministic. One fixed seed per portfolio:
 
 | Portfolio | Seed | Accounts | Account-months | Defaults |
 |---|---|---|---|---|
-| Consumer installment | `20260819` | 50,000 | 1,509,093 | 5,254 |
+| Consumer installment | `20260819` | 150,000 | 4,513,875 | 15,419 |
 | Residential mortgage | `20260820` | 55,000 | 2,869,721 | 4,631 |
 | Commercial real estate | `20260821` | 45,000 | 1,793,840 | 2,385 |
 
@@ -124,7 +124,7 @@ backend/                 FastAPI service and the modelling engine
     models/              PD fit, LGD fit, diagnostics, backtest, ECL, versioning
     mev/                 FRED cache, frequency reconciliation, scenario splicing
     api/main.py          every HTTP endpoint
-  tests/                 244 tests
+  tests/                 275 tests
 frontend/                React + Vite interface
   src/surfaces/          one file per stage: Data, Macro, PD, LGD, Scenarios, Versions
   src/charts/            the shared chart layer
@@ -136,6 +136,7 @@ docs/
 data/
   synthetic/             generated panels — rebuild with `make data`
   mev_cache/             committed FRED cache
+  cache/                 derived fit/projection results — safe to delete, gitignored
 versions/                saved model specifications, one JSON file each
 ```
 
@@ -144,8 +145,8 @@ versions/                saved model specifications, one JSON file each
 ## Tests
 
 ```bash
-make test        # backend: 244 tests
-cd frontend && npm test    # frontend: 26 tests
+make test        # backend: 275 tests
+cd frontend && npm test    # frontend: 45 tests
 ```
 
 ---
@@ -156,12 +157,16 @@ cd frontend && npm test    # frontend: 26 tests
 make reset
 ```
 
-Deletes every saved model version and regenerates the panels, so the
-application starts from a blank slate. Because the generator is seeded, the
-regenerated panels are byte-identical to the ones they replace — resetting
-changes what is SAVED, never what the models are fitted on.
+Deletes every saved model version, clears the derived result cache and
+regenerates the panels, so the application starts from a blank slate — with
+nothing saved, the landing page shows the first-open welcome. Because the
+generator is seeded, the regenerated panels are byte-identical to the ones
+they replace — resetting changes what is SAVED, never what the models are
+fitted on.
 
-Restart the backend afterwards to clear its in-process caches.
+Restart the backend afterwards to clear its in-process caches. (Fitted
+results also persist to `data/cache/` so previously fitted specifications
+survive a restart; `make reset` clears that too.)
 
 ---
 

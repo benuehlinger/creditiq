@@ -1,10 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { api } from '../lib/api'
+import { api, VERSION_QUERIES } from '../lib/api'
 import type { PortfolioKey } from '../lib/api'
 import { Card, CardHead, EmptyState, Skeleton, StatusPill } from '../components/ui'
-import { useUi, NONE } from '../lib/store'
+import { useUi } from '../lib/store'
+import { columns } from '../lib/spec'
 import { useLoadVersion } from '../lib/loadVersion'
 import { useProgress } from '../lib/progress'
 import { ratio, usd } from '../lib/format'
@@ -17,7 +18,7 @@ import { ratio, usd } from '../lib/format'
 function NoLgd() {
   return (
     <span className="text-ink-muted"
-          title="This version was saved before the record measured the severity model. Its LGD specification is intact and re-runs — open it and refit to record these numbers.">—</span>
+          title="This version was saved before the record measured the severity model. Its LGD specification is intact and re-runs. Open it and refit to record these numbers.">—</span>
   )
 }
 
@@ -40,12 +41,12 @@ function LgdRmse({ m }: { m: Record<string, any> }) {
              + `${m.lgd_basis_note ? ` (${m.lgd_basis_note})` : ''}. `
              + `Calibration bias ${pts >= 0 ? '+' : '−'}${Math.abs(pts).toFixed(2)} LGD points`
              + `${Math.abs(pts) < 0.5 ? ', immaterial against the interval on this many workouts'
-                  : pts > 0 ? ' — severity is overstated, so the loss figure is too high'
-                            : ' — severity is understated, so the loss figure is too low'}.`}>
+                  : pts > 0 ? '. Severity is overstated, so the loss figure is too high'
+                            : '. Severity is understated, so the loss figure is too low'}.`}>
       {r.toFixed(3)}
       {m.lgd_basis === 'in sample' && (
         <span className="ml-1 text-micro" style={{ color: 'var(--status-warning)' }}
-              title="Scored in sample — this book cannot support an out-of-time severity split.">!</span>
+              title="Scored in sample. This book cannot support an out-of-time severity split.">!</span>
       )}
     </td>
   )
@@ -78,7 +79,7 @@ function Components({ v, all }: {
     return (
       <span style={{ color: others.length ? 'var(--accent)' : undefined }}
             title={others.length
-              ? `The same ${label} specification is in ${others.join(', ')}. It is one model, not a coincidence — anything wrong with it is wrong in all of them.`
+              ? `The same ${label} specification is in ${others.join(', ')}. It is one model, not a coincidence: anything wrong with it is wrong in all of them.`
               : `This ${label} specification is unique to this version.`}>
         {label} {h.slice(0, 8)}{others.length ? ` ·${others.length + 1}` : ''}
       </span>
@@ -97,12 +98,13 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 export default function VersionsSurface() {
   const { portfolio = 'consumer' } = useParams()
   const qc = useQueryClient()
-  const picked = useUi((s) => s.selectedVariables[portfolio as PortfolioKey] ?? NONE) as string[]
+  const picked = columns(useUi((s) => s.pdSpec[portfolio as PortfolioKey]))
   const pk = portfolio as PortfolioKey
   const fitted = useUi((s) => s.fitted[pk])
   const fittedLgd = useUi((s) => s.fittedLgd[pk])
   const loaded = useUi((s) => s.loaded[pk])
   const setLoaded = useUi((s) => s.setLoaded)
+  const setFitted = useUi((s) => s.setFitted)
   // The tray can drift after a fit. One state machine decides this, so the
   // panel, the navigation and this surface cannot disagree about it.
   const progress = useProgress(portfolio)
@@ -126,7 +128,7 @@ export default function VersionsSurface() {
     // current tray state would save a different specification from the one on
     // the model surfaces.
     mutationFn: () => {
-      if (!fitted) throw new Error('Fit a model first — there is nothing to save.')
+      if (!fitted) throw new Error('Fit a model first. There is nothing to save.')
       if (!fittedLgd) {
         throw new Error(
           'Fit an LGD model first. A Model ID covers the PD specification and the ' +
@@ -144,12 +146,41 @@ export default function VersionsSurface() {
         replaces: saveMode === 'replace' ? base : null,
       })
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['versions', portfolio] })
-      qc.invalidateQueries({ queryKey: ['lineage', portfolio] })
+    onSuccess: (v) => {
+      VERSION_QUERIES.forEach((k) => qc.invalidateQueries({ queryKey: [k] }))
+      // The model on screen IS the version that was just written. Without this
+      // the state machine still saw an unsaved draft, so the call to action
+      // stayed "Save this model" after every save — a loop with no exit, since
+      // saving again changed nothing.
+      //
+      // The fit record is brought onto the saved identity too. Its hash was
+      // computed with the severity half as it stood when the PD was fitted; the
+      // record's hash carries the severity half as saved. Leaving the two
+      // different made the machine read a freshly saved model as DRIFTED, and
+      // the call to action jumped straight to "Refit and compare".
+      if (fitted && fittedLgd) {
+        setFitted(pk, { ...fitted, hash: v.hash,
+                        request: { ...fitted.request, lgd: fittedLgd.spec } })
+      }
+      setLoaded(pk, { hash: v.hash, name: v.name, status: v.status,
+                      loadedAt: new Date().toISOString() })
     },
   })
   const load = useLoadVersion(portfolio)
+
+  // The model bar's call to action, clicked while this surface is already on
+  // screen. It performs the default save — a new version — exactly as the
+  // button below would; the guard mirrors that button's disabled state.
+  const cta = useUi((s) => s.cta)
+  const setCta = useUi((s) => s.setCta)
+  useEffect(() => {
+    if (cta !== 'versions') return
+    setCta(null)
+    if (save.isPending || !progress.complete || progress.mode === 'clean') return
+    setSaveMode('new')
+    save.mutate()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cta])
 
   const act = useMutation({
     mutationFn: ({ hash, kind }: { hash: string; kind: 'promote' | 'star' | 'delete' }) =>
@@ -157,8 +188,7 @@ export default function VersionsSurface() {
         : kind === 'delete' ? api.deleteVersion(hash)
         : api.patchVersion(hash, { starred: !list.data?.find((v) => v.hash === hash)?.starred }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['versions', portfolio] })
-      qc.invalidateQueries({ queryKey: ['lineage', portfolio] })
+      VERSION_QUERIES.forEach((k) => qc.invalidateQueries({ queryKey: [k] }))
     },
   })
 
@@ -184,7 +214,7 @@ export default function VersionsSurface() {
             <h3 className="text-sm font-semibold text-ink">
               Delete {pendingDelete.name}?
             </h3>
-            <p className="mt-2 text-xs leading-relaxed text-ink-secondary">
+            <p className="max-w-[88ch] mt-2 text-xs leading-relaxed text-ink-secondary">
               The specification file is removed. Versions recording it as their parent
               keep the reference, which will no longer resolve. Export it first if you
               need a copy.
@@ -252,7 +282,7 @@ export default function VersionsSurface() {
                 progress.pdStale ? 'The PD fit no longer matches the selected variables. Refit before saving.'
                 : progress.lgdStale ? 'No LGD drivers are selected. Refit before saving.'
                 : !fitted ? 'Fit a PD model first'
-                : !fittedLgd?.spec ? 'Fit an LGD model first — a Model ID covers both'
+                : !fittedLgd?.spec ? 'Fit an LGD model first. A Model ID covers both'
                 : progress.mode === 'clean' ? `Nothing has changed since ${loaded!.name} was opened.`
                 : loaded ? `Keep ${loaded.name} and save this as a separate version, recording ${loaded.name} as its parent.`
                 : 'Save this specification as a version'}>
@@ -274,7 +304,7 @@ export default function VersionsSurface() {
                     The last fit, {fitted!.name}, is still held and will be discarded
                     when you refit.</>
                 : <>The variable tray no longer matches {fitted!.name}. Refit on the
-                    PD model surface so the saved version is the model on screen.</>}
+                    PD model Fit stage so the saved version is the model on screen.</>}
             </span>
           </div>
         )}
@@ -294,7 +324,7 @@ Fit a model, then save it here. A version records the data, the target, the
       ) : (
         <Card>
           <CardHead title="Versions" subtitle={`${portfolio} · select 2 to 4 to compare`}
-            caption="The name is derived from the configuration hash, so an identical specification always produces an identical name — an accidental duplicate is visible immediately." />
+            caption="The name is derived from the configuration hash, so an identical specification always produces an identical name. An accidental duplicate is visible immediately." />
           <div className="thin-scroll overflow-auto">
             <table className="w-full text-left text-xs">
               <thead className="sticky top-0 bg-surface">
@@ -319,13 +349,13 @@ Fit a model, then save it here. A version records the data, the target, the
                   <th className="border-l border-hairline px-3 pb-2 text-right font-medium"
                       title="Variables in the PD specification.">Vars</th>
                   <th className="px-3 pb-2 text-right font-medium"
-                      title="Area under the ROC curve on the held-out test split. Rank ordering only — it says nothing about the level.">AUC test</th>
+                      title="Area under the ROC curve on the held-out test split. Rank ordering only. It says nothing about the level.">AUC test</th>
                   <th className="px-3 pb-2 text-right font-medium"
                       title="Area under the ROC curve on months after the out-of-time boundary, which were not used in estimation.">AUC OOT</th>
                   <th className="border-l border-hairline px-3 pb-2 text-right font-medium"
                       title="Drivers in the LGD specification.">Drivers</th>
                   <th className="px-3 pb-2 text-right font-medium"
-                      title="Root mean squared error on realised severity, scored out of time, in LGD units. Hover a value for the predicted and realised means behind it. Calibration bias is in the comparison panel — select two or more versions.">RMSE</th>
+                      title="Root mean squared error on realised severity, scored out of time, in LGD units. Hover a value for the predicted and realised means behind it. Calibration bias is in the comparison panel. Select two or more versions.">RMSE</th>
                   <th className="border-l border-hairline px-3 pb-2 text-right font-medium"
                       title="Lifetime expected credit loss under the Federal Reserve supervisory baseline.">Baseline</th>
                   <th className="px-3 pb-2 text-right font-medium"
@@ -336,7 +366,7 @@ Fit a model, then save it here. A version records the data, the target, the
               </thead>
               <tbody>
                 {versions.map((v) => (
-                  <tr key={v.hash} className={`border-b border-hairline/40 ${
+                  <tr key={v.hash} className={`border-b border-hairline ${
                     selected.includes(v.hash) ? 'bg-accent-soft' : ''}`}>
                     <td className="px-3 py-1.5">
                       <input type="checkbox" checked={selected.includes(v.hash)}
@@ -348,7 +378,7 @@ Fit a model, then save it here. A version records the data, the target, the
                         {v.data_is_current === false && (
                           <span className="rounded px-1 text-micro"
                                 style={{ color: 'var(--status-warning)' }}
-                                title="Fitted on a panel that no longer exists. The specification still re-runs — that is the point of it — but the stored metrics describe different data, so re-run it before quoting them.">
+                                title="Fitted on a panel that no longer exists. The specification still re-runs, but the stored metrics describe different data. Re-run it before quoting them.">
                             stale data
                           </span>
                         )}
@@ -385,7 +415,7 @@ Fit a model, then save it here. A version records the data, the target, the
                         <button onClick={() => load.mutate(v.hash)}
                           disabled={load.isPending}
                           className="rounded border border-accent/50 px-1.5 py-0.5 text-micro font-medium text-accent hover:bg-accent/10 disabled:opacity-40"
-                          title="Replay this specification and put every surface into it — Explore, PD, LGD, Scenarios and the roll-up.">
+                          title="Replay this specification and open it on every stage: Explore, PD, LGD, Scenarios and the roll-up.">
                           {load.isPending && load.variables === v.hash ? 'loading…' : 'open'}
                         </button>
                         {v.status !== 'champion' && (
@@ -454,7 +484,7 @@ function CompareView({ cmp }: { cmp: import('../lib/api').CompareResult }) {
               const worst = vals.length
                 ? vals.reduce((a, b) => (rank(b) > rank(a) ? b : a)) : NaN
               return (
-                <tr key={row.key} className="border-b border-hairline/40">
+                <tr key={row.key} className="border-b border-hairline">
                   <td className="px-4 py-1.5 text-ink-secondary">{row.label}</td>
                   {row.values.map((v, i) => (
                     <td key={i} className="px-3 py-1.5 text-right tnum"
@@ -527,7 +557,7 @@ function CompareView({ cmp }: { cmp: import('../lib/api').CompareResult }) {
             </thead>
             <tbody>
               {cmp.coefficients.map((c) => (
-                <tr key={c.variable} className="border-b border-hairline/40">
+                <tr key={c.variable} className="border-b border-hairline">
                   <td className="px-4 py-1.5 font-mono text-tiny">
                     <span className="text-ink">{c.variable}</span>
                     {c.sign_flip && <span className="ml-1.5"><StatusPill severity="critical">flip</StatusPill></span>}

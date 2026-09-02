@@ -1,0 +1,372 @@
+import { useQuery } from '@tanstack/react-query'
+import { api, type PortfolioKey, type Treatment } from '../lib/api'
+import { Card, CardHead, Skeleton, StatusPill } from '../components/ui'
+import BinningEditor from '../components/BinningEditor'
+import {
+  DEFAULT_MAX_BINS, DEFAULT_N_KNOTS, columns, setVariable, toggleTerm, variable,
+} from '../lib/spec'
+import VariableViews from '../components/VariableViews'
+import BinStability from '../components/BinStability'
+import TreatmentControl from '../components/TreatmentControl'
+import { useUi } from '../lib/store'
+import { isDiscretised } from '../lib/api'
+import { num, pct } from '../lib/format'
+import { diverging, mode } from '../design/tokens'
+
+/**
+ * One variable, in full: its leakage check, its binning or treatment, its
+ * shape against the target, its stability through time and its bin table.
+ *
+ * This was the right-hand column of a separate Explore stage. It is now the
+ * right pane of the model workbench, opened by clicking a candidate or a
+ * coefficient, because looking at a variable and fitting a model are not two
+ * stages of anything: they are the two halves of one loop.
+ *
+ * Every control writes THE specification. There is no local copy: a local copy
+ * is what let the editor show one binning while the model was estimated on
+ * another.
+ */
+export default function VariableDetail({ portfolio, column }: {
+  portfolio: string; column: string
+}) {
+  const spec = useUi((s) => s.pdSpec[portfolio as PortfolioKey])
+  const editPd = useUi((s) => s.editPd)
+  const picked = columns(spec)
+  const current = variable(spec, column)
+  const edges = current?.edges
+  const maxBins = current?.maxBins ?? DEFAULT_MAX_BINS
+  const nKnots = current?.nKnots ?? DEFAULT_N_KNOTS
+  const treatment = current?.treatment ?? 'woe'
+
+  // Editing the edges by hand IS a change of bin count, so it moves the count
+  // with it. A new bin COUNT invalidates hand-set edges: they were a different
+  // number of bins.
+  const setEdges = (e: number[] | undefined) =>
+    editPd(portfolio as PortfolioKey,
+           (x) => setVariable(x, column, e ? { edges: e, maxBins: e.length + 1 }
+                                           : { edges: undefined }),
+           `${column} binning`)
+  const setMaxBins = (n: number) =>
+    editPd(portfolio as PortfolioKey,
+           (x) => setVariable(x, column, { maxBins: n, edges: undefined }),
+           `${column} to ${n} bins`)
+  const setNKnots = (n: number) =>
+    editPd(portfolio as PortfolioKey,
+           (x) => setVariable(x, column, { nKnots: n, knots: undefined }),
+           `${column} to ${n} knots`)
+  const setKnots = (k: number[] | undefined) =>
+    editPd(portfolio as PortfolioKey,
+           (x) => setVariable(x, column, { knots: k }), `${column} knots`)
+  const setTreatment = (t: Treatment) =>
+    editPd(portfolio as PortfolioKey,
+           (x) => setVariable(x, column, { treatment: t }), `${column} as ${t}`)
+
+  const binning = useQuery({
+    queryKey: ['binning', portfolio, column, edges?.join(','), maxBins, nKnots],
+    queryFn: () => api.binning(portfolio, column, edges, maxBins, nKnots),
+    placeholderData: (prev) => prev,
+  })
+  // How many bins are ON SCREEN. Everything that reports a bin count reads
+  // this, so the header, the stepper and the chart cannot disagree.
+  const shownBins = binning.data?.achieved_bins
+    ?? (binning.data?.bins.filter((b) => !b.is_special).length || DEFAULT_MAX_BINS)
+
+  if (!binning.data) return <Skeleton className="h-[600px]" />
+
+  return (
+    <div className="min-w-0 space-y-3">
+    {binning.data && (
+      <>
+        {binning.data.leakage_risk !== 'none' && (
+          <LeakageBanner risk={binning.data.leakage_risk}
+                         reason={binning.data.leakage_reason}
+                         lift={binning.data.max_bin_lift}
+                         bin={binning.data.max_lift_bin} />
+        )}
+        <Card>
+          <CardHead
+            title={isDiscretised(treatment)
+              ? `Binning: ${binning.data.column}`
+              : `Treatment: ${binning.data.column}`}
+            subtitle={isDiscretised(treatment)
+              ? `${shownBins} bins · ${num(binning.data.n_total)} account-months · ${num(binning.data.n_events)} events`
+              : `${num(binning.data.n_total)} account-months · ${num(binning.data.n_events)} events`}
+            caption={isDiscretised(treatment)
+              ? "Bin height is the event rate; fill is the weight of evidence, blue for safer and magenta for riskier. The grey footer band is each bin's share of the population."
+              : undefined}
+            right={
+              <div className="flex items-center gap-3">
+                {/* The natural place to commit: look at the shape, then
+                    add it. Previously only the tray's suggestion chips
+                    could add a variable, so anything unsuggested was
+                    unreachable. */}
+                <button
+                  onClick={() => editPd(portfolio as PortfolioKey,
+                    (x) => toggleTerm(x, binning.data!.column),
+                    binning.data!.column)}
+                  className={`rounded-ctl px-2.5 py-1 text-micro font-medium ${
+                    picked.includes(binning.data!.column)
+                      ? 'border border-accent text-accent'
+                      : 'bg-accent text-white'}`}>
+                  {picked.includes(binning.data!.column)
+                    ? '− Remove from specification' : '+ Add to specification'}
+                </button>
+                {/* Information value and the bin-count stepper describe a
+                    discretisation. Shown beside a spline they invite a
+                    comparison that does not exist. */}
+                {isDiscretised(treatment) && (
+                  <div className="text-right">
+                    <div className="text-micro text-ink-muted">Information value</div>
+                    <div className="text-lg font-semibold tabular-nums text-accent">
+                      {binning.data.iv.toFixed(4)}
+                    </div>
+                  </div>
+                )}
+                {isDiscretised(treatment) && (
+                  <div className="flex flex-col gap-1">
+                    <button onClick={() => setMaxBins(DEFAULT_MAX_BINS)}
+                      className="rounded border border-hairline px-2 py-0.5 text-micro text-ink-secondary hover:text-ink">
+                      Auto-bin
+                    </button>
+                    {/* The stepper steps from the count that is DRAWN,
+                        not from a remembered request. Stepping from a
+                        request is what made the control appear inert:
+                        after an edge was removed by hand the request
+                        still held its old number, so the next press
+                        asked for a count the chart was already on. */}
+                    <div className="flex items-center gap-1">
+                      <button disabled={shownBins <= 2}
+                        onClick={() => setMaxBins(shownBins - 1)}
+                        title="One fewer bin"
+                        className="rounded border border-hairline px-1.5 py-0.5 text-micro text-ink-secondary hover:text-ink disabled:opacity-30">−</button>
+                      <span className="text-micro tabular-nums text-ink-muted">{shownBins}</span>
+                      <button disabled={shownBins >= 15}
+                        onClick={() => setMaxBins(shownBins + 1)}
+                        title="One more bin"
+                        className="rounded border border-hairline px-1.5 py-0.5 text-micro text-ink-secondary hover:text-ink disabled:opacity-30">+</button>
+                    </div>
+                    {/* The count asked for is not always available: a
+                        monotonic trend may not survive the extra
+                        split. Say so, rather than showing a number the
+                        binning does not have. */}
+                    {!edges && shownBins !== maxBins && (
+                      <span className="text-micro" style={{ color: 'var(--status-warning)' }}
+                            title={`${maxBins} bins were requested. The binning returned ${shownBins}: at that count it could not hold a monotonic trend, or the data does not support a split that fine.`}>
+                        {shownBins} of {maxBins} requested
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+            }
+          />
+          <TreatmentControl
+            value={treatment}
+            result={binning.data}
+            onChange={setTreatment}
+            nKnots={nKnots} onKnots={setNKnots} />
+          {/* The editor follows the decision. A binning editor is an
+              editor for a decision a spline does not make, and leaving
+              it on screen for a continuous treatment was the single most
+              confusing thing on this page. */}
+          {isDiscretised(treatment) ? (
+            <>
+              {binning.data.kind === 'numeric' && binning.data.domain ? (
+                <BinningEditor result={binning.data} pending={binning.isFetching}
+                               onEdgesChange={(e) => setEdges(e)} />
+              ) : (
+                <CategoricalNote b={binning.data} />
+              )}
+              <MonotonicityRow b={binning.data} />
+            </>
+          ) : (
+            <p className="px-4 pb-2.5 text-micro text-ink-muted">
+              {treatment === 'continuous'
+                ? 'No binning and no information value. Both are properties of a discretisation.'
+                : 'Knots are placed on the relationship panel below.'}
+            </p>
+          )}
+        </Card>
+
+        {/* The view that decides the treatment. It sits ABOVE stability
+            and the bin table because it answers the first question —
+            what shape is this — and those two answer later ones. */}
+        <VariableViews
+          portfolio={portfolio}
+          column={binning.data.column}
+          treatment={treatment}
+          knots={current?.knots}
+          nKnots={nKnots}
+          onKnots={setKnots}
+        />
+
+        {isDiscretised(treatment) && (
+          <BinStability portfolio={portfolio} column={binning.data.column}
+                        edges={binning.data.edges ?? undefined} />
+        )}
+
+        {isDiscretised(treatment) && (
+        <Card>
+          <CardHead title="Bin detail"
+            subtitle="Weight of evidence and information value contribution per bin"
+            caption="Weight of evidence and its contribution to information value, per bin. Bins holding under 2% of the population produce unstable weights." />
+          <BinTable b={binning.data} />
+        </Card>
+        )}
+      </>
+    )}
+    </div>
+  )
+}
+
+function LeakageBanner({ risk, reason, lift, bin }: {
+  risk: string; reason: string; lift: number; bin: string
+}) {
+  const likely = risk === 'likely'
+  return (
+    <div className="rounded-card border px-4 py-3"
+         style={{
+           borderColor: `var(--status-${likely ? 'critical' : 'warning'})`,
+           background: `color-mix(in srgb, var(--status-${likely ? 'critical' : 'warning'}) 10%, transparent)`,
+         }}>
+      <div className="flex items-start gap-2">
+        <StatusPill severity={likely ? 'critical' : 'warning'}>
+          {likely ? 'Leakage likely' : 'Review'}
+        </StatusPill>
+        <div className="min-w-0 max-w-[88ch] text-xs leading-relaxed text-ink">
+          {reason}
+          <div className="mt-1 text-tiny text-ink-secondary">
+            Strongest bin “{bin}” · {lift.toFixed(1)}x event-capture lift.
+            
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** What was done to a wide categorical, and why — stated rather than asked.
+ *
+ *  A mortgage tape carries a few hundred metros, most holding a fraction of a
+ *  percent of the book. Left alone, weight of evidence hands a metro with a
+ *  handful of loans a weight of its own, and the information value comes out
+ *  nearly ten times its honest value. The app collapses the tail and shrinks thin
+ *  cells automatically, then says so — the analyst should not have to know to
+ *  ask. */
+function CategoricalNote({ b }: { b: any }) {
+  const collapsed = b.n_levels_raw > b.bins.length
+  const shrunk = (b.shrinkage ?? 0) > 0
+  if (!collapsed && !shrunk) {
+    return (
+      <p className="px-4 py-6 text-center text-xs text-ink-muted">
+        Categorical with {b.n_levels_raw} levels, grouped rather than cut, so there
+        are no edges to drag. The grouping is in the table below.
+      </p>
+    )
+  }
+  return (
+    <div className="space-y-2 px-4 py-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <StatusPill severity="warning">High cardinality</StatusPill>
+        <span className="text-xs text-ink">
+          {b.n_levels_raw} levels, reduced to {b.bins.length} bins
+        </span>
+      </div>
+      <ul className="max-w-[88ch] space-y-1.5 text-tiny leading-relaxed text-ink-secondary">
+        {(b.warnings ?? []).map((w: string) => <li key={w}>· {w}</li>)}
+      </ul>
+      <p className="max-w-[88ch] border-t border-hairline pt-2 text-micro leading-relaxed text-ink-muted">
+        Both steps apply automatically and both lower the information value,
+        because most of the apparent signal in a wide categorical is the tail
+        carrying weights it has not earned. Compare the value above against the
+        null floor before selecting this variable.
+      </p>
+    </div>
+  )
+}
+
+function MonotonicityRow({ b }: { b: NonNullable<ReturnType<typeof useQuery>['data']> & any }) {
+  const signMismatch = b.expected_sign != null && b.observed_sign != null
+    && b.expected_sign !== b.observed_sign
+  return (
+    <div className="flex flex-wrap items-center gap-4 border-t border-hairline px-4 py-2 text-tiny">
+      <span className="flex items-center gap-1.5">
+        <span className="text-ink-muted">Monotonic</span>
+        {b.kind === 'categorical' ? (
+          <span className="text-ink-muted">not applicable, nominal</span>
+        ) : (
+          <StatusPill severity={b.monotone ? 'good' : 'warning'}>{b.monotone_direction}</StatusPill>
+        )}
+      </span>
+      {b.expected_sign != null && (
+        <span className="flex items-center gap-1.5">
+          <span className="text-ink-muted">Economic sign</span>
+          <StatusPill severity={signMismatch ? 'critical' : 'good'}>
+            {signMismatch ? 'flipped vs prior' : 'matches prior'}
+          </StatusPill>
+        </span>
+      )}
+    </div>
+  )
+}
+
+function BinTable({ b }: { b: any }) {
+  const m = mode()
+  const maxWoe = Math.max(...b.bins.map((x: any) => Math.abs(x.woe) || 0), 1e-9)
+  return (
+    <div className="thin-scroll max-h-[280px] overflow-auto">
+      <table className="w-full text-left text-xs">
+        <thead className="sticky top-0 bg-surface">
+          <tr className="border-b border-hairline text-tiny text-ink-muted">
+            <th className="px-3 py-1.5 font-medium">Bin</th>
+            <th className="px-3 py-1.5 text-right font-medium">Rows</th>
+            <th className="px-3 py-1.5 text-right font-medium">%</th>
+            <th className="px-3 py-1.5 text-right font-medium">Events</th>
+            <th className="px-3 py-1.5 text-right font-medium">Event rate</th>
+            <th className="px-3 py-1.5 text-right font-medium">WoE</th>
+            <th className="px-3 py-1.5 font-medium">IV contribution</th>
+          </tr>
+        </thead>
+        <tbody>
+          {b.bins.map((x: any) => (
+            <tr key={x.label} className="border-b border-hairline">
+              <td className="px-3 py-1 font-mono text-tiny text-ink">
+                {x.label}
+                {x.is_special && <span className="ml-1 text-micro text-ink-muted">special</span>}
+              </td>
+              <td className="px-3 py-1 text-right tnum text-ink-secondary">{num(x.count)}</td>
+              <td className="px-3 py-1 text-right tnum text-ink-muted">
+                {(x.pct_of_total * 100).toFixed(1)}
+              </td>
+              <td className="px-3 py-1 text-right tnum text-ink-secondary">{num(x.events)}</td>
+              <td className="px-3 py-1 text-right tnum text-ink-secondary">
+                {pct(x.event_rate * 100, 3)}
+              </td>
+              <td className="px-3 py-1 text-right tnum" style={{ color: 'var(--ink-primary)' }}>
+                {x.woe.toFixed(4)}
+              </td>
+              <td className="px-3 py-1">
+                {/* a diverging bar keyed to the same ramp as the editor above, so
+                    the two read as one system */}
+                <div className="flex items-center gap-2">
+                  <div className="relative h-2 w-24 rounded-sm bg-sunken">
+                    <div className="absolute inset-y-0 rounded-sm"
+                         style={{
+                           left: x.woe < 0 ? `${50 - Math.min(Math.abs(x.woe) / maxWoe, 1) * 50}%` : '50%',
+                           width: `${Math.min(Math.abs(x.woe) / maxWoe, 1) * 50}%`,
+                           background: diverging(x.woe / maxWoe, m),
+                         }} />
+                    <div className="absolute inset-y-0 left-1/2 w-px bg-axis" />
+                  </div>
+                  <span className="tnum text-tiny text-ink-muted">
+                    {x.iv_contribution.toFixed(4)}
+                  </span>
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}

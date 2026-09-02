@@ -340,19 +340,23 @@ def screen_variables(key: str):
             "floor prices in the binning step's own overfitting. It is estimated "
             "once per data type, not per column."),
         "sample_note": (
-            f"Screened on {res['n_rows']:,} account-months"
-            + (" — a deterministic subsample. Every default is retained and only "
-               "non-events are thinned, so the event rate is not reduced. Model "
-               "fits use the full panel."
-               if res["sampled"] else " — the full panel.")),
+            "Screened on a deterministic subsample. Every default is retained "
+            "and only non-events are thinned, so the event rate is not reduced. "
+            "Model fits use the full panel."
+            if res["sampled"] else "Screened on the full panel."),
     })
 
 
 @app.get("/api/portfolios/{key}/binning/{column}")
 def binning(key: str, column: str, edges: str | None = None, max_bins: int = 8,
-            monotone: bool = True, n_knots: int = 4):
+            monotone: bool = True, n_knots: int = 4, exact_bins: bool = False):
     """Bin a variable. Pass `edges` as a comma-separated list to override the
-    optimal edges — this is what the drag interaction in the editor sends."""
+    optimal edges — this is what the drag interaction in the editor sends.
+
+    `exact_bins` asks for `max_bins` bins rather than at most that many. The
+    editor sets it, because a ceiling does not respond to a button. The
+    response reports `requested_bins` and `achieved_bins` so the editor can say
+    when the count could not be delivered instead of appearing inert."""
     if key not in PORTFOLIOS:
         raise HTTPException(404, f"unknown portfolio {key!r}")
     df, sampled = store.screening_frame(key)
@@ -363,7 +367,8 @@ def binning(key: str, column: str, edges: str | None = None, max_bins: int = 8,
     use_numeric = pd.api.types.is_numeric_dtype(x) and x.nunique(dropna=True) > 12
     if use_numeric:
         ed = [float(e) for e in edges.split(",") if e.strip()] if edges else None
-        b = binmod.bin_numeric(x, y, edges=ed, max_bins=max_bins, monotone=monotone)
+        b = binmod.bin_numeric(x, y, edges=ed, max_bins=max_bins, monotone=monotone,
+                               exact_bins=exact_bins and not ed)
     else:
         b = binmod.bin_categorical(x, y)
     lift, where = screen.max_bin_lift(b)
@@ -395,6 +400,10 @@ def binning(key: str, column: str, edges: str | None = None, max_bins: int = 8,
     }
     return _jsonable({
         **b.to_dict(), "sampled": sampled, "domain": domain, "histogram": hist,
+        # What was asked for against what the data would carry. The editor shows
+        # the difference rather than leaving the control looking broken.
+        "requested_bins": max_bins if use_numeric else None,
+        "achieved_bins": n_real if use_numeric else None,
         "column_costs": costs, "supports_continuous": bool(use_numeric),
         "shape": binmod.shape_diagnostic(b),
         "knots": knot_positions,
@@ -606,10 +615,11 @@ from pydantic import BaseModel, field_validator                         # noqa: 
 
 from ..models import fit as modelfit                                    # noqa: E402
 from ..models import design                                             # noqa: E402
+from ..models import rollup as rollupsvc                                # noqa: E402
 from ..models import service as modelsvc                                # noqa: E402
 from ..models.naming import friendly_name                               # noqa: E402
-from ..models.spec import (LgdSpec, MevSpec, ModelSpec, SampleSpec,  # noqa: E402
-                           VariableSpec)
+from ..models.spec import (LGD_MACRO, LgdSpec, MevSpec, ModelSpec,  # noqa: E402
+                           SampleSpec, VariableSpec)
 
 
 class FitRequest(BaseModel):
@@ -687,6 +697,30 @@ def _sign_checks(r) -> list[dict]:
     return out
 
 
+def _references(r) -> dict[str, str]:
+    """The reference level of every dummy-encoded variable.
+
+    A k-bin variable enters as k-1 indicators, and the bin with no column is
+    what every coefficient is measured against. The table has to say which bin
+    that is, or the coefficients read as absolute effects."""
+    out: dict[str, str] = {}
+    for v in r.spec.variables:
+        if v.treatment not in ("bins", "indicator"):
+            continue
+        m = r.fit.woe_maps.get(v.column)
+        if not m:
+            continue
+        if m.get("kind") == "numeric":
+            labels = m.get("labels")
+            if labels:
+                out[v.column] = str(labels[0])
+        else:
+            keys = list((m.get("map") or {}).keys())
+            if keys:
+                out[v.column] = str(keys[0])
+    return out
+
+
 def _run_payload(r) -> dict:
     spec = PORTFOLIOS[r.spec.portfolio]
     return {
@@ -707,6 +741,7 @@ def _run_payload(r) -> dict:
         "ead": {"method": spec.ead_method, "note": spec.ead_note},
         "expected_signs": spec.expected_signs,
         "sign_checks": _sign_checks(r),
+        "references": _references(r),
         "woe_maps": {k: {kk: vv for kk, vv in v.items() if kk != "map"}
                      for k, v in r.fit.woe_maps.items()},
         "performance_note": (
@@ -720,14 +755,49 @@ def _run_payload(r) -> dict:
     }
 
 
+def _reject_unknown_columns(portfolio: str, columns: list[str], what: str) -> None:
+    """Refuse a specification naming a column the panel does not have.
+
+    A missing column used to pass straight through. The design matrix skipped
+    it, the fit succeeded, no warning was raised, and the term simply was not in
+    the model. The hash is taken from the specification rather than from the
+    design, so the phantom column still changed the hash and the generated name:
+    two Model IDs for one model, with the difference invisible in the
+    coefficients. On the severity side it was worse, and the whole LGD fit came
+    back with no coefficients at all.
+
+    A model cannot be fitted on a variable that is not there, so this is an
+    error rather than a warning.
+    """
+    if not columns:
+        return
+    have = set(store.analysis_frame(portfolio).columns)
+    missing = [c for c in dict.fromkeys(columns)
+               # A macro driver is joined from the published series rather than
+               # read off the account panel, so it is legitimately absent here.
+               # A transformed term carries '@' and is resolved the same way.
+               if c not in have and c not in LGD_MACRO and "@" not in c]
+    if missing:
+        raise HTTPException(
+            400,
+            f"{what} not in the {portfolio} panel: {', '.join(sorted(missing))}")
+
+
 @app.post("/api/fit")
 def fit_model(req: FitRequest):
     if req.portfolio not in PORTFOLIOS:
         raise HTTPException(404, f"unknown portfolio {req.portfolio!r}")
     if not req.variables:
         raise HTTPException(400, "select at least one variable")
+    spec = req.to_spec()
+    _reject_unknown_columns(req.portfolio, [v.column for v in spec.variables],
+                            "variables")
+    if spec.lgd is not None:
+        _reject_unknown_columns(req.portfolio,
+                                [*spec.lgd.drivers, *spec.lgd.categoricals],
+                                "LGD drivers")
     try:
-        r = modelsvc.run(req.to_spec())
+        r = modelsvc.run(spec)
     except Exception as e:                                              # noqa: BLE001
         raise HTTPException(400, f"{type(e).__name__}: {e}") from e
     return _jsonable(_run_payload(r))
@@ -796,6 +866,77 @@ def segment_backtest(portfolio: str, hash_: str, column: str):
 
 # ── scenarios and ECL ────────────────────────────────────────────────────────
 from ..models import scenario_service as scensvc                        # noqa: E402
+
+
+@app.get("/api/scenarios/model-paths")
+def scenario_model_paths(terms: str = Query(...), history_from: str = "2022-01-01"):
+    """Each macro term of a specification, as the projection consumes it.
+
+    The scenario editor showed raw supervisory variables; the model responds to
+    its TERMS — a transform of a variable, at a lag — and the honest display of
+    "what is stressed" is the transformed, lagged series itself: history up to
+    the projection date, then the baseline and severely adverse branches the
+    projection actually walks. One shared history and two forward branches per
+    term, so the divergence at the projection date is the picture.
+    """
+    from ..models.design import apply_mev_transform
+    hist = mev_panel.monthly_panel()
+    as_of = hist.index.max()
+    paths = {name: scensvc.scenario_mev_path(name, as_of)
+             for name in ("baseline", "severely_adverse")}
+    lo = pd.Timestamp(history_from)
+    # A derived series like cre_price_index_yoy has no registry entry of its
+    # own; its base does. Resolve the label through the base and fold the
+    # implied year-over-year into the reported transform, so the chart is
+    # titled "Commercial property price index" over "12-month % change"
+    # rather than a raw column slug.
+    raw_keys = [t.split("@")[0] for t in terms.split(",") if t.strip()]
+    meta = by_key(raw_keys + [k[:-4] for k in raw_keys if k.endswith("_yoy")])
+
+    series = []
+    seen: set[str] = set()
+    for raw in [t.strip() for t in terms.split(",") if t.strip()]:
+        if raw in seen:
+            continue
+        seen.add(raw)
+        parts = raw.split("@")
+        key = parts[0]
+        tf = parts[1] if len(parts) > 1 else "level"
+        lag = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+
+        branches: dict[str, list[dict]] = {}
+        history: list[dict] = []
+        for name, path in paths.items():
+            if key not in path.columns:
+                break
+            s = apply_mev_transform(path[key], tf)
+            if lag:
+                s = s.shift(lag)
+            s = s.loc[s.index >= lo].dropna()
+            fwd = s.loc[s.index > as_of]
+            branches[name] = [{"date": str(d.date()), "value": float(v)}
+                              for d, v in fwd.items()]
+            if name == "baseline":
+                back = s.loc[s.index <= as_of]
+                history = [{"date": str(d.date()), "value": float(v)}
+                           for d, v in back.items()]
+        if not branches:
+            continue
+        m = meta.get(key)
+        rep_tf = tf
+        if m is None and key.endswith("_yoy") and key[:-4] in meta:
+            m = meta[key[:-4]]
+            rep_tf = {"level": "yoy", "ma3": "yoy_ma3"}.get(tf, tf)
+        series.append({
+            "term": raw, "key": key, "transform": rep_tf, "lag_months": lag,
+            "label": m.label if m else key,
+            "unit": (m.unit if m and rep_tf == "level" else ""),
+            "history": history,
+            "baseline": branches.get("baseline", []),
+            "severely_adverse": branches.get("severely_adverse", []),
+        })
+    return _jsonable({"as_of": str(as_of.date()), "series": series})
+
 from ..models import lgd_diag as lgddiag                                # noqa: E402
 from ..analysis import severity_binning as sevbin                      # noqa: E402
 
@@ -1065,6 +1206,8 @@ def lgd_fit(req: LgdFitRequest):
     spec = req.to_spec()
     if not spec.drivers and not spec.categoricals:
         raise HTTPException(400, "select at least one driver")
+    _reject_unknown_columns(req.portfolio, [*spec.drivers, *spec.categoricals],
+                            "LGD drivers")
     try:
         m = scensvc.lgd_model(req.portfolio, spec)
     except ValueError as e:
@@ -1074,6 +1217,9 @@ def lgd_fit(req: LgdFitRequest):
     diag = lgddiag.diagnostics(m, d)
     return _jsonable({
         "portfolio": req.portfolio, "spec": spec.to_dict(), "hash": spec.hash(),
+        # The same naming as the PD fit. Half of a model with a name and half
+        # with a code read as two different kinds of thing; they are not.
+        "name": friendly_name(spec.hash()),
         "columns": m.columns, "diagnostics": diag,
         "n_defaults": m.n_defaults, "mean_lgd": m.mean_lgd,
         "zero_loss_share": m.zero_loss_share,
@@ -1082,6 +1228,11 @@ def lgd_fit(req: LgdFitRequest):
         "coefficients": m.coefficients, "calibration": m.calibration,
         "severity_histogram": m.severity_histogram,
         "macro_drivers": spec.macro_drivers, "dropped": m.dropped, "note": m.fit_note,
+        # The reference bin of every discretised term — the bin with no
+        # indicator column, which every coefficient is measured against.
+        "references": {c: str(m.maps[c]["labels"][0])
+                       for c in (*spec.drivers, *spec.categoricals)
+                       if c in m.maps and m.maps[c].get("labels")},
     })
 
 
@@ -1301,6 +1452,12 @@ def _metrics_for(r) -> dict:
         "brier_test": (d.get("test") or {}).get("brier"),
         "calibration_error": err,
         "mcfadden_r2": d.get("mcfadden_r2"),
+        # Out-of-time error on the annualised default rate, in percentage
+        # points. The cohort backtest is the strongest evidence a PD model
+        # carries, and these are its summary, so they belong on the record.
+        "pd_oot_rmse_pp": (r.backtest.get("errors", {}).get("out_of_time") or {}).get("rmse_pp"),
+        "pd_oot_bias_pp": (r.backtest.get("errors", {}).get("out_of_time") or {}).get("bias_pp"),
+        "pd_oot_coverage": (r.backtest.get("errors", {}).get("out_of_time") or {}).get("coverage"),
         "n_variables": len(r.spec.variables),
         "n_mevs": len(r.spec.mevs),
         "estimator": r.spec.estimator,
@@ -1360,6 +1517,7 @@ def save_version(req: SaveVersionRequest):
             ecl_summary["weighted_ecl"] = sr.weighted_ecl
         except Exception as e:                                          # noqa: BLE001
             ecl_summary = {"error": f"{type(e).__name__}: {e}"}
+    rollupsvc.clear_cache()     # the roll-up's version picker is now stale
     v = vstore.save(spec, _metrics_for(run) | _lgd_metrics_for(spec), ecl_summary,
                     label=req.label,
                     notes=req.notes, tags=req.tags, parent_hash=req.parent_hash,
@@ -1417,6 +1575,7 @@ def patch_version(hash_: str, name: str | None = None, notes: str | None = None,
 
 @app.post("/api/versions/{hash_}/promote")
 def promote_version(hash_: str):
+    rollupsvc.clear_cache()     # the roll-up's version picker is now stale
     v = vstore.promote(hash_)
     if v is None:
         raise HTTPException(404, "unknown version")
@@ -1425,6 +1584,7 @@ def promote_version(hash_: str):
 
 @app.delete("/api/versions/{hash_}")
 def delete_version(hash_: str):
+    rollupsvc.clear_cache()     # the roll-up's version picker is now stale
     return {"deleted": vstore.delete(hash_)}
 
 
@@ -1470,7 +1630,6 @@ def import_version(payload: dict):
 
 
 # ── roll-up ──────────────────────────────────────────────────────────────────
-from ..models import rollup as rollupsvc                                # noqa: E402
 
 
 @app.get("/api/rollup")

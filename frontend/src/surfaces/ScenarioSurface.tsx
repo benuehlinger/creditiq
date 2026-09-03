@@ -53,19 +53,23 @@ export default function ScenarioSurface() {
   // switching BACK to a model already projected this session shows its numbers
   // instantly from the cache with no request at all. Comparing challengers is
   // exactly that switch, so it must not cost a re-projection each way.
+  // Both halves, or nothing. This used to project with the documented default
+  // severity model when none was fitted, behind a banner — and the fallback
+  // chain could even resurrect an LGD spec embedded in an old PD fit request.
+  // A number produced by a severity model the analyst never fitted is not
+  // their model's number, and quietly showing one is exactly the "old fit out
+  // of nowhere" experience. The roll-up still uses documented defaults, and
+  // says so per book; this page is the analyst's own model only.
+  const lgdReady = !!fittedLgd?.hash
   const run = useQuery({
-    queryKey: ['ecl', portfolio, fitted?.hash, fittedLgd?.hash || 'default',
-               capped],
+    queryKey: ['ecl', portfolio, fitted?.hash, fittedLgd?.hash, capped],
     queryFn: () => api.ecl({
       ...fitted!.request,
-      // Severity is half the loss number, so it has to be the LGD model the
-      // analyst actually fitted. Absent, the engine falls back to the
-      // documented default and the banner above says so.
-      lgd: fittedLgd?.spec ?? fitted!.request.lgd ?? null,
+      lgd: fittedLgd!.spec,
       cap_to_fitted_range: capped,
       weights,
     }),
-    enabled: !!fitted,
+    enabled: !!fitted && lgdReady,
     staleTime: Infinity,
     gcTime: 30 * 60_000,
     retry: 1,
@@ -149,21 +153,22 @@ export default function ScenarioSurface() {
           stage; the paths panel below now states what this projection actually
           uses, which is the question this page answers. */}
       <>
-      {!fittedLgd?.hash && (
+      {!lgdReady && (
         <Card>
-          <div className="flex items-start gap-3 px-4 py-2.5">
-            <StatusPill severity="warning">Severity model not fitted</StatusPill>
-            <p className="max-w-[88ch] min-w-0 flex-1 text-tiny leading-relaxed text-ink-secondary">
-              These figures use the documented default LGD specification for this
-              book, not one you fitted. Half of every loss number below comes from
-              severity, so a projection on a substituted severity model is not the
-              projection of your model.{' '}
-              <button onClick={() => nav(`/${portfolio}/lgd`)}
-                className="font-medium text-accent underline">Fit the LGD model</button>.
-            </p>
-          </div>
+          <CardHead title="Scenarios" subtitle={portfolio} />
+          <EmptyState title="The severity model is not fitted"
+            action={<button onClick={() => nav(`/${portfolio}/lgd`)}
+              className="mt-2 rounded-ctl bg-accent px-4 py-1.5 text-xs font-semibold text-white">
+              Fit the LGD model
+            </button>}>
+            A projection is PD times LGD times exposure, so it needs both halves
+            of the model. Nothing is substituted in its place: a loss number
+            produced by a severity model you never fitted would not be your
+            model's number.
+          </EmptyState>
         </Card>
       )}
+      {lgdReady && (
       <Card>
         <div className="flex flex-wrap items-center gap-4 px-4 py-3">
           <span className="text-xs text-ink-secondary">Supervisory scenarios</span>
@@ -192,6 +197,7 @@ export default function ScenarioSurface() {
           </div>
         )}
       </Card>
+      )}
 
       {(busy || justRan) && (
         <FitProgress done={!busy} doneLabel="Projected"
@@ -419,7 +425,7 @@ export default function ScenarioSurface() {
         </>
       )}
 
-      {!res && !busy && (
+      {lgdReady && !res && !busy && (
         <Card>
           <EmptyState title="Not projected yet"
             action={<button onClick={() => run.refetch()}

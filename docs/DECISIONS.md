@@ -2427,3 +2427,24 @@ membership is not a question there. Each path gets the full card width
 (over 1000px against the tile's ~300), the figures land in aligned
 columns, and the exhibit is the same shape at any term count. The tile
 grid had no remaining callers and was deleted.
+
+## No silent substitutes, anywhere in the analyst flow
+
+Two fallbacks produced numbers the analyst never asked for. The scenario
+stage projected with the documented default severity specification when
+none was fitted — behind a banner, which is a confession, not a fix — and
+its fallback chain could even resurrect an LGD spec embedded in an old PD
+fit request. And the LGD workbench auto-fitted the proposed default
+specification the first time a virgin book was visited, so a severity
+model existed that nobody chose, which everything downstream then treated
+as the analyst's model. Together these were the "old fit out of nowhere"
+experience.
+
+The rule now: nothing in the analyst flow substitutes a default. Scenarios
+requires both halves fitted — otherwise a full empty state names what is
+missing and carries the one action that fixes it, and no request is made.
+The LGD workbench presents its starting drivers as a visible, pre-selected
+PROPOSAL; becoming a model requires the click that makes it a decision.
+The one place documented defaults remain is the roll-up, where they exist
+to keep the executive total covering every book — and every use is
+labelled on the card that shows it.

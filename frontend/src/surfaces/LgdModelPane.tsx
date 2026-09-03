@@ -157,14 +157,12 @@ export default function LgdModelPane({ portfolio, onOpenVariable }: {
   // a default specification and nothing has ever been estimated. Everything
   // else is either served by the query (a model with a hash) or waits for the
   // Refit button (an edited draft, whose hash is cleared by the edit).
-  const firstFit = useRef(false)
-  useEffect(() => {
-    const n = spec.drivers.length + spec.categoricals.length
-    if (!n || fittedLgd || busy || firstFit.current) return
-    firstFit.current = true
-    fit.mutate()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [spec.drivers.length, spec.categoricals.length])
+  // No automatic first fit. A virgin book used to fit the proposed default
+  // specification on arrival, so a severity model existed that nobody chose —
+  // and everything downstream (the band, the scenarios gate) then treated it
+  // as the analyst's model. The proposal stays visible as pre-selected
+  // drivers in the list; becoming a model requires the one click that makes
+  // it a decision.
 
   const sens = useQuery({
     queryKey: ['lgdsens', portfolio, res?.hash],
@@ -256,9 +254,14 @@ export default function LgdModelPane({ portfolio, onOpenVariable }: {
 
         {!res ? (
           <Card>
-            <EmptyState title="Not fitted">
-              Tick drivers in the list to add them, then fit. Click a driver to see
-              its relationship with realised severity first.
+            <EmptyState title="No severity model on this book yet"
+              action={<button onClick={() => fit.mutate()} disabled={busy}
+                className="mt-2 rounded-ctl bg-accent px-4 py-1.5 text-xs font-semibold text-white disabled:opacity-60">
+                {busy ? 'Fitting…' : 'Fit the LGD model'}
+              </button>}>
+              A starting set of drivers is pre-selected in the list as a proposal —
+              nothing is fitted until you say so. Click a driver first to see its
+              relationship with realised severity, adjust the selection, then fit.
             </EmptyState>
           </Card>
         ) : (

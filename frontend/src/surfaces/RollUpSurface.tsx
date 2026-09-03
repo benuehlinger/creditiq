@@ -302,16 +302,21 @@ export default function RollUpSurface() {
             const champ = data.champions[p.portfolio]
             const options = data.available[p.portfolio] ?? []
             return (
-              <div key={p.portfolio} className="flex flex-col bg-surface p-4">
+              // The whole card opens the book's workspace — a target this
+              // size should not demand a hit on the six-word title. The model
+              // picker inside stops the click from bubbling, so choosing a
+              // model never navigates.
+              <div key={p.portfolio} role="link" tabIndex={0}
+                onClick={() => nav(champ ? `/${p.portfolio}/versions` : `/${p.portfolio}/data`)}
+                onKeyDown={(e) => { if (e.key === 'Enter') nav(champ ? `/${p.portfolio}/versions` : `/${p.portfolio}/data`) }}
+                title={`Open the ${p.label} workspace`}
+                className="flex cursor-pointer flex-col bg-surface p-4 transition-colors hover:bg-sunken">
                 <div className="flex items-center justify-between gap-2">
-                  <button
-                    onClick={() => nav(champ ? `/${p.portfolio}/versions` : `/${p.portfolio}/data`)}
-                    className="group flex items-center gap-2 text-left"
-                    title={`Open the ${p.label} workspace`}>
+                  <span className="flex items-center gap-2">
                     <span className="h-2.5 w-2.5 rounded-full"
                           style={{ background: portfolioColor(p.portfolio, m) }} />
-                    <span className="text-sm font-medium text-ink group-hover:text-accent">{p.label}</span>
-                  </button>
+                    <span className="text-sm font-medium text-ink">{p.label}</span>
+                  </span>
                   <StatusPill severity={p.source === 'champion' ? 'good'
                     : p.source === 'selected' ? 'serious' : 'warning'}>
                     {p.source === 'champion' ? 'champion'
@@ -354,7 +359,8 @@ export default function RollUpSurface() {
                     object it changes, not in a separate control strip. Pinned
                     to the card's bottom edge so the three pickers align
                     whatever each card carries above them. */}
-                <div className="mt-auto border-t border-hairline pt-2.5">
+                <div className="mt-auto border-t border-hairline pt-2.5"
+                     onClick={(e) => e.stopPropagation()}>
                   <select
                     value={p.version_hash ?? ''}
                     onChange={(e) => setSelection({ ...selection, [p.portfolio]: e.target.value })}

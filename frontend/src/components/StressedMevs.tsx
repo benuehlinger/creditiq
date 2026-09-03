@@ -112,85 +112,6 @@ function useMevCharts(terms: string[]) {
   return { charts, isLoading: q.isLoading }
 }
 
-export function MevPathGrid({ terms, height = 120, tags }: {
-  terms: string[]
-  height?: number
-  /** Which books carry each term, for the roll-up. A term shared by two books
-   *  is ONE exposure seen twice, so it renders once with both dots — that is
-   *  information (a common factor), and it is also what keeps the grid dense. */
-  tags?: Record<string, { color: string; label: string }[]>
-}) {
-  const { charts, isLoading } = useMevCharts(terms)
-
-  if (isLoading) {
-    return <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-3">
-      {terms.map((t) => <Skeleton key={t} className="h-44" />)}
-    </div>
-  }
-  if (!charts?.length) {
-    return <p className="px-4 py-6 text-center text-xs text-ink-muted">
-      This specification carries no macro terms, so the projection does not respond to a scenario.
-    </p>
-  }
-  return (
-    <div className="grid gap-x-6 gap-y-5 px-4 pb-4 pt-3"
-         style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))' }}>
-      {charts.map(({ s, option, fmt, now, base, severe }) => (
-        <figure key={s.term} className="min-w-0" title={s.term}>
-          <figcaption className="mb-1">
-            <div className="flex items-baseline justify-between gap-2">
-              <span className="truncate text-xs font-semibold text-ink">{s.label}</span>
-              {tags?.[s.term] && (
-                <span className="flex shrink-0 items-center gap-1.5"
-                      title={tags[s.term].map((t) => t.label).join(' · ')}>
-                  {tags[s.term].map((t) => (
-                    <span key={t.label} className="h-1.5 w-1.5 rounded-full"
-                          style={{ background: t.color }} />
-                  ))}
-                </span>
-              )}
-            </div>
-            <div className="text-micro text-ink-muted">
-              {entersAs(s)}
-              {tags?.[s.term] && (
-                <span> · {tags[s.term].map((t) => t.label).join(' · ')}</span>
-              )}
-            </div>
-          </figcaption>
-          <EChart option={option} height={height} compact
-                  ariaLabel={`${s.label} under both scenarios`} externalLegend />
-          {/* The break-off, in the same three words on every chart, so the
-              grid reads as one table of figures rather than three captions. */}
-          <div className="mt-1.5 flex items-baseline gap-4 border-t border-hairline pt-1.5 text-micro">
-            <span className="text-ink-muted">Now{' '}
-              <span className="tnum font-medium text-ink">{now != null ? fmt(now) : '—'}</span></span>
-            <span className="text-ink-muted">Baseline{' '}
-              <span className="tnum font-medium text-ink">{base != null ? fmt(base) : '—'}</span></span>
-            <span className="text-ink-muted">Severe{' '}
-              <span className="tnum font-medium" style={{ color: 'var(--status-serious)' }}>
-                {severe != null ? fmt(severe) : '—'}</span></span>
-          </div>
-        </figure>
-      ))}
-    </div>
-  )
-}
-
-export default function StressedMevs({ terms, subtitle }: {
-  terms: string[]
-  subtitle?: string
-}) {
-  return (
-    <Card>
-      <CardHead title="Macro paths in this projection"
-        subtitle={subtitle}
-        caption="Each macro term of the fitted specification, exactly as the model consumes it: history to the projection date, then the two Federal Reserve branches the projection walks. The gap that opens at the dashed seam is the stress."
-        right={<MevLegend />} />
-      <MevPathGrid terms={terms} />
-    </Card>
-  )
-}
-
 /** The roll-up's exhibit: one row per macro term, with an explicit membership
  *  matrix.
  *
@@ -203,15 +124,17 @@ export default function StressedMevs({ terms, subtitle }: {
  *  break-off figures land in aligned columns on the right, so the whole
  *  card reads as one table.
  */
-export function MevPathRows({ terms, books, membership }: {
+export function MevPathRows({ terms, books = [], membership = {} }: {
   terms: string[]
-  /** The fixed columns, in display order. */
-  books: { key: string; short: string; label: string; color: string }[]
+  /** The membership columns, in display order. Omit them — the scenario page
+   *  does, its terms all belong to the one model on screen — and the table is
+   *  simply term, path and figures. */
+  books?: { key: string; short: string; label: string; color: string }[]
   /** term -> the book keys whose model carries it. */
-  membership: Record<string, string[]>
+  membership?: Record<string, string[]>
 }) {
   const { charts, isLoading } = useMevCharts(terms)
-  const cols = `minmax(160px,220px) repeat(${books.length}, 3.4rem) minmax(0,1fr) repeat(3, 4.4rem)`
+  const cols = `minmax(160px,220px)${books.length ? ` repeat(${books.length}, 3.4rem)` : ''} minmax(0,1fr) repeat(3, 4.4rem)`
 
   if (isLoading) {
     return <div className="space-y-3 p-4">
@@ -225,7 +148,7 @@ export function MevPathRows({ terms, books, membership }: {
   }
   return (
     <div className="overflow-x-auto">
-      <div className="min-w-[860px] px-4 pb-3">
+      <div className={books.length ? "min-w-[860px] px-4 pb-3" : "min-w-[720px] px-4 pb-3"}>
         <div className="grid items-end gap-x-3 border-b border-hairline pb-1.5 pt-2.5 text-micro uppercase tracking-wider text-ink-muted"
              style={{ gridTemplateColumns: cols }}>
           <span>Macro term</span>
@@ -277,5 +200,23 @@ export function MevPathRows({ terms, books, membership }: {
         ))}
       </div>
     </div>
+  )
+}
+
+export default function StressedMevs({ terms, subtitle }: {
+  terms: string[]
+  subtitle?: string
+}) {
+  return (
+    <Card>
+      <CardHead title="Macro paths in this projection"
+        subtitle={subtitle}
+        caption="Each macro term of the fitted specification, exactly as the model consumes it: history to the projection date, then the two Federal Reserve branches the projection walks. The gap that opens at the dashed seam is the stress."
+        right={<MevLegend />} />
+      {/* The same row-per-term table the roll-up uses, without its book
+          columns. Rows are the answer to "look right at any count": a grid of
+          tiles was tuned for three-across and left holes at one or two. */}
+      <MevPathRows terms={terms} />
+    </Card>
   )
 }

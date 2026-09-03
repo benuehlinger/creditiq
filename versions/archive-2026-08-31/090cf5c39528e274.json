@@ -1,0 +1,190 @@
+{
+  "hash": "090cf5c39528e274",
+  "name": "patient-foundry-61",
+  "portfolio": "cre",
+  "created_at": "2026-08-31T15:24:22+00:00",
+  "spec": {
+    "portfolio": "cre",
+    "variables": [
+      {
+        "column": "utilisation",
+        "treatment": "woe",
+        "edges": null,
+        "groups": null,
+        "knots": null,
+        "n_knots": 4,
+        "max_bins": 8,
+        "shrinkage": 0.0
+      },
+      {
+        "column": "dscr_orig",
+        "treatment": "woe",
+        "edges": null,
+        "groups": null,
+        "knots": null,
+        "n_knots": 4,
+        "max_bins": 8,
+        "shrinkage": 0.0
+      },
+      {
+        "column": "undrawn_amount",
+        "treatment": "woe",
+        "edges": null,
+        "groups": null,
+        "knots": null,
+        "n_knots": 4,
+        "max_bins": 8,
+        "shrinkage": 0.0
+      },
+      {
+        "column": "months_on_book",
+        "treatment": "spline",
+        "edges": null,
+        "groups": null,
+        "knots": [
+          4.124853829969152,
+          30.09716220577387
+        ],
+        "n_knots": 4,
+        "max_bins": 8,
+        "shrinkage": 0.0
+      },
+      {
+        "column": "current_ltv",
+        "treatment": "bins",
+        "edges": [
+          65.26298904418945,
+          82.67205047607422
+        ],
+        "groups": null,
+        "knots": null,
+        "n_knots": 4,
+        "max_bins": 3,
+        "shrinkage": 0.0
+      },
+      {
+        "column": "dscr_reported",
+        "treatment": "woe",
+        "edges": null,
+        "groups": null,
+        "knots": null,
+        "n_knots": 4,
+        "max_bins": 8,
+        "shrinkage": 0.0
+      }
+    ],
+    "mevs": [
+      {
+        "key": "cre_price_index_yoy",
+        "transform": "level",
+        "lag_months": 0
+      }
+    ],
+    "estimator": "logistic",
+    "regularization": 1.0,
+    "seasoning_spline": true,
+    "vintage_effect": false,
+    "sample": {
+      "test_fraction": 0.3,
+      "oot_from": "2023-01-01",
+      "seed": 42,
+      "downsample_rows": null
+    },
+    "lgd": {
+      "portfolio": "cre",
+      "drivers": [
+        "current_ltv",
+        "dscr_reported",
+        "workout_months",
+        "cre_price_index_yoy",
+        "utilisation",
+        "original_ltv",
+        "ltv_at_appraisal",
+        "undrawn_amount",
+        "risk_rating",
+        "hpi_yoy",
+        "unemployment_rate",
+        "bbb_yield@level@3"
+      ],
+      "categoricals": [
+        "guarantor_flag",
+        "property_type"
+      ],
+      "treatments": {
+        "remaining_term": "spline"
+      },
+      "edges": {},
+      "knots": {
+        "remaining_term": [
+          17.953088000292446,
+          89.2095067249645
+        ]
+      },
+      "n_knots": 3,
+      "max_bins": 5
+    },
+    "target_column": "default_flag",
+    "label": null,
+    "parent_hash": null,
+    "notes": "",
+    "hash": "090cf5c39528e274"
+  },
+  "metrics": {
+    "auc_test": 0.7682462197660685,
+    "auc_oot": 0.7418616525205062,
+    "ks_test": 0.42966639113326155,
+    "gini_test": 0.5364924395321371,
+    "log_loss_test": 0.009267781764460052,
+    "brier_test": 0.001327750086916247,
+    "calibration_error": 9.718004189989676e-05,
+    "mcfadden_r2": 0.09646956774839754,
+    "pd_oot_rmse_pp": 0.32089428105732215,
+    "pd_oot_bias_pp": 0.0033559486744004032,
+    "pd_oot_coverage": 0.8333333333333334,
+    "n_variables": 6,
+    "n_mevs": 1,
+    "estimator": "logistic",
+    "coefficients": {
+      "intercept": -7.1623574203512925,
+      "utilisation_woe": 0.3397832807714301,
+      "dscr_orig_woe": 0.14984351123382958,
+      "undrawn_amount_woe": 0.09304525899379966,
+      "months_on_book_basis1": 0.19935573711941096,
+      "months_on_book_basis2": -0.5351143473720811,
+      "months_on_book_basis3": -0.16867002401958234,
+      "current_ltv=[65.3, 82.7)": 0.22884257484472245,
+      "current_ltv=>= 82.7": 0.2720289873707404,
+      "dscr_reported_woe": 0.14149122778967713,
+      "mev:cre_price_index_yoy": -0.29860924738463474
+    },
+    "lgd_bias": -0.0011606493521597039,
+    "lgd_rmse": 0.2259724519798247,
+    "lgd_mae": 0.18670648845705462,
+    "lgd_deviance_r2": 0.06139692314757572,
+    "lgd_spearman": 0.4311869443344087,
+    "lgd_mean_predicted": 0.31575656397465307,
+    "lgd_mean_actual": 0.3169172133268128,
+    "lgd_n": 566,
+    "lgd_basis": "out of time",
+    "lgd_basis_note": "defaults from 2022-01-01",
+    "n_lgd_drivers": 14,
+    "lgd_hash": "8fd026b4cc99",
+    "pd_hash": "0d869390ee59"
+  },
+  "ecl": {
+    "ecl_baseline": 53126126.21043697,
+    "ecl_severely_adverse": 343439165.0623473,
+    "ecl_bps_baseline": 130.45260798408614,
+    "ecl_bps_severely_adverse": 843.3239530545424,
+    "weighted_ecl": 125704385.92341456
+  },
+  "status": "challenger",
+  "starred": false,
+  "tags": [],
+  "notes": "",
+  "parent_hash": null,
+  "replaced_hash": null,
+  "author": "CreditIQ",
+  "data_fingerprint": "df76bcb52dd8",
+  "schema_version": 2
+}

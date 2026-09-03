@@ -71,6 +71,14 @@ export type PortfolioKey = (typeof PORTFOLIO_KEYS)[number]
 export const isPortfolioKey = (k: string | undefined): k is PortfolioKey =>
   !!k && (PORTFOLIO_KEYS as readonly string[]).includes(k)
 
+export interface DataInitStatus {
+  ready: boolean
+  portfolios_present: string[]
+  state: 'idle' | 'running' | 'done' | 'error'
+  step: number; total: number; label: string
+  elapsed_s: number; eta_s: number | null; error: string
+}
+
 export interface PortfolioInfo {
   key: PortfolioKey
   label: string
@@ -810,6 +818,9 @@ export interface RollUpResponse {
 export const api = {
   health: () => get<{ status: string; portfolios: PortfolioKey[]; mev_series_resolved: number
                       mev_series_failed: number; mev_cache_built_at: string }>('/health'),
+  /** Whether the synthetic panels exist, and generation progress if running. */
+  dataStatus: () => get<DataInitStatus>('/data/status'),
+  dataGenerate: () => post<{ state: string; total?: number }>('/data/generate', {}),
   portfolios: () => get<PortfolioInfo[]>('/portfolios'),
   dataHealth: (k: string) => get<DataHealth>(`/portfolios/${k}/health`),
   timeseries: (k: string, by?: string) => get<TimeseriesPoint[]>(`/portfolios/${k}/timeseries`, { by }),

@@ -575,14 +575,88 @@ def vif_for(key: str, columns: str = Query(...), treatments: str = Query("")):
     })
 
 
+# ── data initialization ──────────────────────────────────────────────────────
+# The panels are not shipped — they are generated, deterministically, from
+# seeds. A fresh clone therefore boots with no data, and the frontend offers a
+# generate button instead of failing on empty endpoints. Progress is tracked
+# here so the person waiting knows the step, the count and the clock, rather
+# than staring at a spinner of unknown length.
+import threading as _threading
+import time as _time
+
+_GEN = {"state": "idle", "step": 0, "total": 0, "label": "", "started_at": 0.0,
+        "error": ""}
+_GEN_LOCK = _threading.Lock()
+
+
+@app.get("/api/data/status")
+def data_status():
+    ready = len(store.available()) == len(PORTFOLIOS)
+    with _GEN_LOCK:
+        g = dict(_GEN)
+    elapsed = _time.time() - g["started_at"] if g["state"] == "running" else 0.0
+    # A rough remaining-time estimate from the average pace of completed
+    # steps. Steps are not equal-sized, so it is labelled rough in the UI.
+    eta = (elapsed / g["step"] * (g["total"] - g["step"])
+           if g["state"] == "running" and g["step"] > 0 else None)
+    return {"ready": ready, "portfolios_present": store.available(),
+            "state": g["state"], "step": g["step"], "total": g["total"],
+            "label": g["label"], "elapsed_s": round(elapsed, 1),
+            "eta_s": round(eta, 1) if eta is not None else None,
+            "error": g["error"]}
+
+
+@app.post("/api/data/generate")
+def data_generate():
+    from ..data import build as databuild
+    with _GEN_LOCK:
+        if _GEN["state"] == "running":
+            return {"state": "running"}
+        _GEN.update(state="running", step=0, total=databuild.BUILD_TOTAL_STEPS,
+                    label="Starting", started_at=_time.time(), error="")
+
+    def tick(label: str) -> None:
+        with _GEN_LOCK:
+            _GEN["step"] += 1
+            _GEN["label"] = label
+
+    def run() -> None:
+        try:
+            databuild.build(verbose=False, progress=tick)
+            # Every derived cache is stale the moment the panels change hands.
+            store.clear()
+            with _GEN_LOCK:
+                _GEN.update(state="done", label="Done")
+        except Exception as e:                                          # noqa: BLE001
+            with _GEN_LOCK:
+                _GEN.update(state="error", error=str(e))
+
+    _threading.Thread(target=run, daemon=True).start()
+    return {"state": "running", "total": databuild.BUILD_TOTAL_STEPS}
+
+
 @app.on_event("startup")
 def _warm() -> None:
     """Warm the caches in the background so the first click of a demo is instant.
 
     Screening a book takes a few seconds. Paying that while a client watches is
     the difference between a product and a prototype, so it is paid at boot.
+
+    OPT-IN, because the price is real: warming loads and profiles all three
+    panels, roughly 9 GB of memory. On a smaller laptop that swaps, every
+    request starves behind it, and the frontend sits on its loading skeleton —
+    the app looks broken on exactly the machine it was just handed to. Cold,
+    the first click on each surface pays a few seconds instead, once.
     """
+    import os
     import threading
+
+    if os.environ.get("CREDITIQ_WARM", "") != "1":
+        print("creditiq: cache warm-up off — first click per surface pays a few "
+              "seconds, once. Set CREDITIQ_WARM=1 (or `make demo`) to pre-warm.")
+        return
+    if not store.available():
+        return
 
     def run():
         for k in store.available():

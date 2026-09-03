@@ -1,0 +1,146 @@
+{
+  "hash": "77b7707223ea6537",
+  "name": "nimble-portico-00",
+  "portfolio": "mortgage",
+  "created_at": "2026-08-28T00:50:42+00:00",
+  "spec": {
+    "portfolio": "mortgage",
+    "variables": [
+      {
+        "column": "second_lien_pct",
+        "treatment": "spline",
+        "edges": null,
+        "groups": null,
+        "knots": [
+          1.3,
+          5,
+          8.1
+        ],
+        "n_knots": 4,
+        "max_bins": 8,
+        "shrinkage": 0.0
+      },
+      {
+        "column": "dti",
+        "treatment": "continuous",
+        "edges": null,
+        "groups": null,
+        "knots": null,
+        "n_knots": 4,
+        "max_bins": 8,
+        "shrinkage": 0.0
+      },
+      {
+        "column": "current_ltv",
+        "treatment": "woe",
+        "edges": null,
+        "groups": null,
+        "knots": null,
+        "n_knots": 4,
+        "max_bins": 3,
+        "shrinkage": 0.0
+      }
+    ],
+    "mevs": [
+      {
+        "key": "unemployment_rate",
+        "transform": "level",
+        "lag_months": 0
+      }
+    ],
+    "estimator": "logistic",
+    "regularization": 1.0,
+    "seasoning_spline": true,
+    "vintage_effect": false,
+    "sample": {
+      "test_fraction": 0.3,
+      "oot_from": "2023-01-01",
+      "seed": 42,
+      "downsample_rows": null
+    },
+    "lgd": {
+      "portfolio": "mortgage",
+      "drivers": [
+        "cltv",
+        "current_ltv",
+        "workout_months",
+        "hpi_yoy",
+        "months_on_book"
+      ],
+      "categoricals": [
+        "occupancy"
+      ],
+      "treatments": {},
+      "edges": {},
+      "knots": {},
+      "n_knots": 3,
+      "max_bins": 5
+    },
+    "target_column": "default_flag",
+    "label": null,
+    "parent_hash": null,
+    "notes": "",
+    "hash": "77b7707223ea6537"
+  },
+  "metrics": {
+    "auc_test": 0.8020839958119506,
+    "auc_oot": 0.6677683057204667,
+    "ks_test": 0.4809081274044777,
+    "gini_test": 0.6041679916239011,
+    "log_loss_test": 0.011525877989119648,
+    "brier_test": 0.0017645078402140477,
+    "calibration_error": 0.0001458930433190494,
+    "mcfadden_r2": 0.12251547860918732,
+    "n_variables": 3,
+    "n_mevs": 1,
+    "estimator": "logistic",
+    "coefficients": {
+      "intercept": -7.8057027808884865,
+      "second_lien_pct_basis1": 0.004857155213882397,
+      "second_lien_pct_basis2": -0.015331102410971307,
+      "second_lien_pct_basis3": 0.010977257496368803,
+      "second_lien_pct_basis4": 0.013835844361037231,
+      "dti": 0.03581770883375613,
+      "current_ltv_woe": 0.613201608501076,
+      "seasoning_basis1": 0.7227630794945457,
+      "seasoning_basis2": -4.356086899158256,
+      "seasoning_basis3": -0.7105999322925939,
+      "seasoning_basis4": -0.1280263260801064,
+      "seasoning_basis5": -0.11530106065866799,
+      "seasoning_basis6": -0.03941499453438927,
+      "seasoning_basis7": 0.07753245247103299,
+      "seasoning_basis8": 0.12017754794471168,
+      "seasoning_basis9": 0.10922716946118237,
+      "mev:unemployment_rate": 0.25377919509084423
+    },
+    "lgd_bias": -0.009086850064234306,
+    "lgd_rmse": 0.16952090702184497,
+    "lgd_mae": 0.11933419718139679,
+    "lgd_deviance_r2": 0.13296426606096634,
+    "lgd_spearman": 0.5128453414526924,
+    "lgd_mean_predicted": 0.1208644649242155,
+    "lgd_mean_actual": 0.1299513149884498,
+    "lgd_n": 565,
+    "lgd_basis": "out of time",
+    "lgd_basis_note": "defaults from 2022-01-01",
+    "n_lgd_drivers": 6,
+    "lgd_hash": "69ecffd09456",
+    "pd_hash": "31b8187be657"
+  },
+  "ecl": {
+    "ecl_baseline": 33003967.183902897,
+    "ecl_severely_adverse": 262486130.461797,
+    "ecl_bps_baseline": 76.58271481221075,
+    "ecl_bps_severely_adverse": 609.0752775054538,
+    "weighted_ecl": 90374508.00337642
+  },
+  "status": "challenger",
+  "starred": false,
+  "tags": [],
+  "notes": "",
+  "parent_hash": null,
+  "replaced_hash": null,
+  "author": "CreditIQ",
+  "data_fingerprint": "fb94e3f88242",
+  "schema_version": 2
+}

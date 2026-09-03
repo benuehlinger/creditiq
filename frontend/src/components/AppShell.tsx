@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
@@ -10,6 +10,7 @@ import ForkDialog from './ForkDialog'
 import CommandPalette from './CommandPalette'
 import MethodologyDrawer from './MethodologyDrawer'
 import ModelBar from './ModelBar'
+import InitSurface from '../surfaces/InitSurface'
 
 /** Five destinations. Two of them have stages, which appear in the row below
  *  rather than inline here — nesting them in one row put seven links, two group
@@ -36,6 +37,19 @@ export default function AppShell() {
   const { theme, toggleTheme, setPaletteOpen } = useUi()
   const brandVariant = useUi((s) => s.brandVariant) as CoBrandVariant
   const { data: health } = useQuery({ queryKey: ['health'], queryFn: api.health })
+  // A fresh clone has no panels — they are generated, not shipped. Until they
+  // exist, every surface is gated behind the initialize screen, so no
+  // endpoint is ever asked about data that is not there.
+  const init = useQuery({ queryKey: ['datastatus'], queryFn: api.dataStatus })
+  const dataReady = init.data?.ready !== false
+  // When generation completes, every query already in the cache was made
+  // against a machine that had no data. One clean reload beats invalidating
+  // hundreds of queries at once — the app restarts fresh on the new panels.
+  const sawNoData = useRef(false)
+  useEffect(() => {
+    if (init.data?.ready === false) sawNoData.current = true
+    if (init.data?.ready && sawNoData.current) window.location.reload()
+  }, [init.data?.ready])
 
   // The portfolio accent is set on <html>, so every chart, badge and focus ring
   // in the workspace follows the book being worked on without threading a prop.
@@ -203,7 +217,7 @@ export default function AppShell() {
           and centred rather than stretched to fill. */}
       <main className="thin-scroll min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-[1560px]">
-          <Outlet />
+          {dataReady ? <Outlet /> : <InitSurface />}
         </div>
       </main>
 

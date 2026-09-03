@@ -12,11 +12,12 @@ help:  ## show this help
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) \
 	 | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-10s\033[0m %s\n",$$1,$$2}'
 
-setup:  ## one time: create the venv, install dependencies, build the panels
+setup:  ## one time: create the venv and install dependencies
 	uv venv --python 3.12 backend/.venv
 	uv pip install --python $(PY) $(DEPS)
 	cd frontend && npm install
-	$(MAKE) data
+	@echo "Setup done. Run 'make dev' — the app offers to generate the data on first launch."
+	@echo "(Or run 'make data' now to generate it from the command line.)"
 
 fred:  ## refresh the committed FRED cache (needs network; the app does not)
 	cd backend && .venv/bin/python -m creditiq.mev.fred_cache
@@ -31,9 +32,12 @@ lint:
 	cd backend && .venv/bin/ruff check creditiq tests || true
 	cd frontend && ./node_modules/.bin/tsc -b --pretty false
 
-dev:  ## run backend and frontend together
-	@echo "CreditIQ starting — the API warms its caches for about 30 seconds."
+dev:  ## run backend and frontend together (lazy: first click per surface computes once)
 	@$(MAKE) -j2 backend frontend
+
+demo:  ## like dev, but pre-warms every cache at boot (~9 GB of memory, instant first click)
+	@echo "CreditIQ starting warm — all three books load and screen at boot."
+	@CREDITIQ_WARM=1 $(MAKE) -j2 backend frontend
 
 backend:
 	cd backend && .venv/bin/uvicorn creditiq.api.main:app --reload --port 8000

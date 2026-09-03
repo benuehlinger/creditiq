@@ -18,5 +18,3 @@ data/synthetic/*.parquet
 !data/synthetic/*_dictionary.md
 .DS_Store
 data/cache/
-# superseded saved versions, archived out of the app
-versions/archive-*/

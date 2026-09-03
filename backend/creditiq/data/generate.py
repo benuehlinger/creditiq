@@ -82,7 +82,8 @@ class GenerationResult:
 
 
 def generate(spec: PortfolioSpec, seed: int = 20260819,
-             start: str = PANEL_START, end: str = PANEL_END) -> GenerationResult:
+             start: str = PANEL_START, end: str = PANEL_END,
+             progress=None) -> GenerationResult:
     rng = np.random.default_rng(seed)
     months = pd.date_range(start, end, freq="MS")
     n = spec.n_accounts
@@ -233,7 +234,12 @@ def generate(spec: PortfolioSpec, seed: int = 20260819,
     rows: list[dict] = []
     thresh = spec.target.dpd_state
 
-    for when in months:
+    # The loop is where the minutes go, so progress reports from inside it —
+    # one tick every three simulated years keeps the step count honest without
+    # instrumenting every month.
+    for _mi, when in enumerate(months):
+        if progress and (_mi + 1) % 36 == 0:
+            progress(f"Simulating {spec.label}: year {(_mi + 1) // 12} of {len(months) // 12}")
         gi = midx[when]
         st["alive"] |= (~st["done"]) & (orig_i <= gi) & (orig_i >= 0)
         act = st["alive"] & (~st["done"])

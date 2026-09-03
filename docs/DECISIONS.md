@@ -2341,3 +2341,24 @@ The hero gained the page's one legitimate knob: a probability-weight slider
 on the weighted ECL. The weight is a management assumption, not a
 supervisory number, and the weighted figure is linear in the two scenario
 ECLs, so it recomputes instantly client-side as the slider moves.
+
+## Data generation moved into the app; cache warm-up became opt-in
+
+Two boot problems, one machine: the repository ships no panels (they are
+generated), so a fresh clone failed on empty endpoints until `make setup`
+had built them — and once they existed, a startup hook eagerly loaded and
+profiled all three books, roughly 9 GB, which on a smaller laptop swapped
+the machine and left the frontend on its loading skeletons. The app looked
+broken on exactly the machine it had just been handed to.
+
+Now the app boots instantly in either state. With no panels, every surface
+is gated behind an initialize screen: one button, and generation reports 29
+tracked steps (the simulation loop ticks once per three simulated years, so
+the long steps move too) with a step counter, elapsed time and a rough
+remaining estimate — a person waiting three minutes deserves to know it is
+three minutes. Polling continues in a background tab, and completion
+reloads the app rather than invalidating hundreds of queries. The warm-up
+is opt-in: `make dev` is lazy (first click per surface computes once, then
+the disk cache holds it, across restarts), `make demo` sets CREDITIQ_WARM=1
+for instant first clicks when the memory is there. docs/HANDOFF.md now
+carries the new-machine instructions, including this trade.

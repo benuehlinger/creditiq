@@ -1,0 +1,171 @@
+{
+  "hash": "1fcf42494a9ea400",
+  "name": "canny-sextant-06",
+  "portfolio": "mortgage",
+  "created_at": "2026-08-28T01:23:53+00:00",
+  "spec": {
+    "portfolio": "mortgage",
+    "variables": [
+      {
+        "column": "current_ltv",
+        "treatment": "bins",
+        "edges": null,
+        "groups": null,
+        "knots": null,
+        "n_knots": 4,
+        "max_bins": 2,
+        "shrinkage": 0.0
+      },
+      {
+        "column": "months_on_book",
+        "treatment": "spline",
+        "edges": null,
+        "groups": null,
+        "knots": [
+          6,
+          43,
+          116,
+          173
+        ],
+        "n_knots": 4,
+        "max_bins": 8,
+        "shrinkage": 0.0
+      },
+      {
+        "column": "interest_rate",
+        "treatment": "woe",
+        "edges": null,
+        "groups": null,
+        "knots": null,
+        "n_knots": 4,
+        "max_bins": 8,
+        "shrinkage": 0.0
+      },
+      {
+        "column": "original_ltv",
+        "treatment": "bins",
+        "edges": [
+          71.64999771118164,
+          76.75,
+          82.54999923706055,
+          88.04999923706055,
+          93.35000228881836
+        ],
+        "groups": null,
+        "knots": null,
+        "n_knots": 4,
+        "max_bins": 6,
+        "shrinkage": 0.0
+      },
+      {
+        "column": "fico_orig",
+        "treatment": "continuous",
+        "edges": null,
+        "groups": null,
+        "knots": null,
+        "n_knots": 4,
+        "max_bins": 8,
+        "shrinkage": 0.0
+      }
+    ],
+    "mevs": [
+      {
+        "key": "unemployment_rate",
+        "transform": "level",
+        "lag_months": 0
+      }
+    ],
+    "estimator": "logistic",
+    "regularization": 1.0,
+    "seasoning_spline": true,
+    "vintage_effect": false,
+    "sample": {
+      "test_fraction": 0.3,
+      "oot_from": "2023-01-01",
+      "seed": 42,
+      "downsample_rows": null
+    },
+    "lgd": {
+      "portfolio": "mortgage",
+      "drivers": [
+        "cltv",
+        "current_ltv",
+        "workout_months",
+        "hpi_yoy",
+        "months_on_book"
+      ],
+      "categoricals": [],
+      "treatments": {
+        "cltv": "bins"
+      },
+      "edges": {},
+      "knots": {},
+      "n_knots": 3,
+      "max_bins": 5
+    },
+    "target_column": "default_flag",
+    "label": null,
+    "parent_hash": null,
+    "notes": "",
+    "hash": "1fcf42494a9ea400"
+  },
+  "metrics": {
+    "auc_test": 0.8096844426272759,
+    "auc_oot": 0.6758309082866669,
+    "ks_test": 0.4754609506013208,
+    "gini_test": 0.6193688852545518,
+    "log_loss_test": 0.011538776166908923,
+    "brier_test": 0.0017663793841250534,
+    "calibration_error": 0.0001245400688257226,
+    "mcfadden_r2": 0.11838643951216976,
+    "n_variables": 5,
+    "n_mevs": 1,
+    "estimator": "logistic",
+    "coefficients": {
+      "intercept": -7.331486711814402,
+      "current_ltv_flag": 0.4135178673656454,
+      "months_on_book_basis1": -0.05934701575568792,
+      "months_on_book_basis2": -1.6173347226196626,
+      "months_on_book_basis3": -0.17739955885560343,
+      "months_on_book_basis4": 0.25659670617752117,
+      "months_on_book_basis5": 0.15051102644872974,
+      "interest_rate_woe": 0.04875141836303847,
+      "original_ltv=[71.6, 76.8)": 0.04653669663067108,
+      "original_ltv=[76.8, 82.5)": 0.09582100938671831,
+      "original_ltv=[82.5, 88.0)": 0.1155817517529981,
+      "original_ltv=[88.0, 93.4)": 0.14718558045079208,
+      "original_ltv=>= 93.4": 0.1214631705388892,
+      "fico_orig": -0.23297997400522547,
+      "mev:unemployment_rate": 0.33214701030364074
+    },
+    "lgd_bias": -0.010601930222703074,
+    "lgd_rmse": 0.16981091702762424,
+    "lgd_mae": 0.11893826286534884,
+    "lgd_deviance_r2": 0.13175709565758054,
+    "lgd_spearman": 0.5165516447712327,
+    "lgd_mean_predicted": 0.11934938476574673,
+    "lgd_mean_actual": 0.1299513149884498,
+    "lgd_n": 565,
+    "lgd_basis": "out of time",
+    "lgd_basis_note": "defaults from 2022-01-01",
+    "n_lgd_drivers": 5,
+    "lgd_hash": "46de36f63862",
+    "pd_hash": "a7d6e542c549"
+  },
+  "ecl": {
+    "ecl_baseline": 35001330.98752419,
+    "ecl_severely_adverse": 277059042.7878466,
+    "ecl_bps_baseline": 81.2174165041809,
+    "ecl_bps_severely_adverse": 642.8903998642451,
+    "weighted_ecl": 95515758.9376048
+  },
+  "status": "challenger",
+  "starred": false,
+  "tags": [],
+  "notes": "",
+  "parent_hash": null,
+  "replaced_hash": null,
+  "author": "CreditIQ",
+  "data_fingerprint": "fb94e3f88242",
+  "schema_version": 2
+}

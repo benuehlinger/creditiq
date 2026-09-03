@@ -215,13 +215,26 @@ def _content_digest(panel) -> str:
     return _h.sha256("|".join(parts).encode()).hexdigest()[:12]
 
 
-def build(verbose: bool = True) -> dict:
+# The number of progress reports one full build emits, so a caller showing
+# "step 3 of N" can know N before starting: per book, one draw step, six
+# simulation ticks (one per three years of an eighteen-year panel), one
+# severity step and one write step; then the truth document and the report.
+BUILD_TOTAL_STEPS = len(PORTFOLIOS) * 9 + 2
+
+
+def build(verbose: bool = True, progress=None) -> dict:
+    """`progress` receives one human-readable line per step — see
+    BUILD_TOTAL_STEPS for how many to expect."""
+    tick = progress or (lambda label: None)
     OUT.mkdir(parents=True, exist_ok=True)
     DOCS.mkdir(parents=True, exist_ok=True)
     report = {}
     for key, spec in PORTFOLIOS.items():
-        res = generate(spec, seed=SEEDS[key])
+        tick(f"Drawing the {spec.label} book: {spec.n_accounts:,} accounts")
+        res = generate(spec, seed=SEEDS[key], progress=progress)
+        tick(f"Assembling {spec.label} severities and outcomes")
         panel, accounts = assemble(res, seed=SEEDS[key])
+        tick(f"Writing the {spec.label} panel: {len(panel):,} rows")
         panel.to_parquet(OUT / f"{key}_panel.parquet", index=False)
         accounts.to_parquet(OUT / f"{key}_accounts.parquet", index=False)
         panel.head(5_000).to_csv(OUT / f"{key}_sample.csv", index=False)
@@ -245,7 +258,9 @@ def build(verbose: bool = True) -> dict:
             r = report[key]
             print(f"  {key:9s} {r['rows']:>9,} rows  {r['accounts']:>6,} accounts  "
                   f"{r['defaults']:>5,} defaults  {r['annual_default_rate_pct']:.2f}%/yr")
+    tick("Writing the generative truth document")
     (DOCS / "GENERATIVE_TRUTH.md").write_text(truth_doc())
+    tick("Writing the build report")
     (OUT / "build_report.json").write_text(json.dumps(report, indent=2))
     if verbose:
         print(f"  -> {OUT}")

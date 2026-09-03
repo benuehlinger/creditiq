@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { api, type PortfolioKey } from '../lib/api'
 import ModelBand from '../components/ModelBand'
 import FitProgress, { ECL_PHASES } from '../components/FitProgress'
-import { Card, CardHead, EmptyState, HeroFigure, StatTile, StatusPill, ViewTabs } from '../components/ui'
+import { Card, CardHead, EmptyState, HeroFigure, StatTile, StatusPill, ViewTabs, Notice } from '../components/ui'
 import Eq from '../components/Eq'
 import { Info } from '../components/icons'
 import EChart from '../charts/EChart'
@@ -221,11 +221,8 @@ export default function ScenarioSurface() {
           almost none of the number rests on extrapolation.
         </p>
       ) : flags.length > 0 && (
-        <div className="rounded-card border px-4 py-3"
-             style={{ borderColor: 'var(--status-warning)',
-                      background: 'color-mix(in srgb, var(--status-warning) 10%, transparent)' }}>
-          <StatusPill severity="warning">Part of this scenario is beyond the model's experience</StatusPill>
-          <div className="max-w-[88ch] mt-1.5 space-y-1 text-xs leading-relaxed text-ink">
+        <Notice severity="warning" label="Beyond the model's experience">
+          <div className="space-y-1">
             {flags.map((f) => <p key={f.key}>{f.note}</p>)}
           </div>
           {sa?.alternative_ecl != null && (() => {
@@ -270,7 +267,7 @@ export default function ScenarioSurface() {
               </p>
             )
           })()}
-        </div>
+        </Notice>
       )}
 
       {res && sa && base && (

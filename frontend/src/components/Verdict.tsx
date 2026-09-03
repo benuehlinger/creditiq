@@ -1,5 +1,5 @@
 import type { FitResponse, ScreenRow } from '../lib/api'
-import { StatusPill } from './ui'
+import { StatusPill, Notice } from './ui'
 import { ratio } from '../lib/format'
 
 /**
@@ -32,15 +32,10 @@ export function LeakageNotice({ r, screen }: { r: FitResponse; screen?: ScreenRo
   const leaks = (screen ?? []).filter((s) => s.leakage_risk === 'likely' && inSpec.has(s.column))
   if (!leaks.length) return null
   return (
-    <div className="rounded-card border px-4 py-2.5 text-xs text-ink"
-         style={{ borderColor: 'var(--status-critical)',
-                  background: 'color-mix(in srgb, var(--status-critical) 10%, transparent)' }}>
-      <StatusPill severity="critical">Leakage</StatusPill>
-      <span className="ml-2">
-        {leaks.map((l) => l.column).join(', ')} {leaks.length === 1 ? 'is' : 'are'} recorded
-        after the outcome. Every figure on this model is inflated by it. Remove and refit.
-      </span>
-    </div>
+    <Notice severity="critical" label="Leakage">
+      {leaks.map((l) => l.column).join(', ')} {leaks.length === 1 ? 'is' : 'are'} recorded
+      after the outcome. Every figure on this model is inflated by it. Remove and refit.
+    </Notice>
   )
 }
 
@@ -144,12 +139,11 @@ export default function Verdict({ r, screen }: { r: FitResponse; screen?: Screen
         <StatusPill severity={worst}>{headline}</StatusPill>
       </div>
       {leaks.length > 0 && (
-        <div className="mx-5 mb-3 rounded border px-3 py-2 text-xs text-ink"
-             style={{ borderColor: 'var(--status-critical)',
-                      background: 'color-mix(in srgb, var(--status-critical) 10%, transparent)' }}>
-          <span className="font-medium" style={{ color: 'var(--status-critical)' }}>Leakage. </span>
-          {leaks.map((l) => l.column).join(', ')} {leaks.length === 1 ? 'is' : 'are'} recorded
-          after the outcome. Every figure below is inflated by it. Remove and refit.
+        <div className="mx-5 mb-3">
+          <Notice severity="critical" label="Leakage">
+            {leaks.map((l) => l.column).join(', ')} {leaks.length === 1 ? 'is' : 'are'} recorded
+            after the outcome. Every figure below is inflated by it. Remove and refit.
+          </Notice>
         </div>
       )}
       {/* Five checks, one figure each. Colour on the icon only; the figure

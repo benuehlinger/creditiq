@@ -132,6 +132,49 @@ export function StatusPill({
   )
 }
 
+/** A finding that needs the reader's attention, in the app's own voice.
+ *
+ *  The first draft of these was a status-coloured wash over the whole box —
+ *  an amber field with an orange border — which read as a browser alert
+ *  pasted into the page. This is the calm version: the card surface every
+ *  other exhibit uses, a slim accent bar on the left edge carrying the
+ *  severity, and a dot-plus-label header, so colour sits in two small places
+ *  and the words do the work. One primitive, so every callout in the app has
+ *  the same anatomy: label, finding, optional evidence line.
+ */
+export function Notice({ severity, label, children, detail, className = '' }: {
+  severity: 'warning' | 'serious' | 'critical'
+  /** Two or three words naming the finding: "Review", "Leakage likely". */
+  label: string
+  children: ReactNode
+  /** The evidence, one line, in small muted type. */
+  detail?: ReactNode
+  className?: string
+}) {
+  return (
+    <div className={`overflow-hidden rounded-card border border-hairline bg-raised ${className}`}
+         role="note">
+      <div className="border-l-[3px] px-4 py-3"
+           style={{ borderLeftColor: `var(--status-${severity})` }}>
+        <div className="flex items-center gap-1.5">
+          <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full"
+                style={{ background: `var(--status-${severity})` }} />
+          <span className="text-tiny font-semibold uppercase tracking-wider text-ink">
+            {label}
+          </span>
+        </div>
+        <div className="mt-1.5 max-w-[88ch] text-xs leading-relaxed text-ink-secondary">
+          {children}
+        </div>
+        {detail && (
+          <div className="mt-1.5 max-w-[88ch] text-micro text-ink-muted">{detail}</div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+
 export function Skeleton({ className = 'h-40' }: { className?: string }) {
   return <div className={`skeleton ${className}`} role="status" aria-label="Loading" />
 }

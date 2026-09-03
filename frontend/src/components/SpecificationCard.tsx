@@ -1,5 +1,5 @@
 import type { FitResponse } from '../lib/api'
-import { Card, CardHead, StatusPill } from './ui'
+import { Card, CardHead, StatusPill, Notice } from './ui'
 import { num } from '../lib/format'
 
 /** The variance inflation to REPORT for a column.
@@ -41,14 +41,9 @@ export default function SpecificationCard({ r, onOpenVariable }: {
   return (
     <div className="space-y-3">
       {flips.map((f) => (
-        <div key={f.term} className="rounded-card border px-4 py-3"
-             style={{ borderColor: 'var(--status-critical)',
-                      background: 'color-mix(in srgb, var(--status-critical) 10%, transparent)' }}>
-          <div className="flex items-start gap-2">
-            <StatusPill severity="critical">Economic sign flipped</StatusPill>
-            <p className="max-w-[88ch] text-xs leading-relaxed text-ink">{f.message}</p>
-          </div>
-        </div>
+        <Notice key={f.term} severity="critical" label="Economic sign flipped">
+          {f.message}
+        </Notice>
       ))}
       <div className="grid gap-3 lg:grid-cols-3">
         <Card>

@@ -2544,3 +2544,15 @@ The browser-side candidate caches were wiped by a store version bump
 (v4): every browser that opens the app drops its fitted records, drafts
 and specs once, keeping preferences. Saved versions live on the server
 and are untouched.
+
+## Callouts got one anatomy
+
+Six surfaces each hand-built their attention boxes as a status-coloured
+wash with an orange border — a browser alert pasted into the page, with the
+pill and the wrapped text misaligned. They now share one primitive
+(`Notice`): the same card surface every exhibit uses, a slim accent bar on
+the left edge carrying the severity, a dot-plus-label header, the finding
+in body type, and the evidence as one muted line. Colour sits in two small
+places; the words do the work. Converted: the variable review/leakage
+banner, the fit's separation warning, the sign-flip cards, both leakage
+notices, and the material extrapolation card.

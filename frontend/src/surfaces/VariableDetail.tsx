@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { api, type PortfolioKey, type Treatment } from '../lib/api'
-import { Card, CardHead, Skeleton, StatusPill } from '../components/ui'
+import { Card, CardHead, Skeleton, StatusPill, Notice } from '../components/ui'
 import BinningEditor from '../components/BinningEditor'
 import {
   DEFAULT_MAX_BINS, DEFAULT_N_KNOTS, columns, setVariable, toggleTerm, variable,
@@ -224,24 +224,11 @@ function LeakageBanner({ risk, reason, lift, bin }: {
 }) {
   const likely = risk === 'likely'
   return (
-    <div className="rounded-card border px-4 py-3"
-         style={{
-           borderColor: `var(--status-${likely ? 'critical' : 'warning'})`,
-           background: `color-mix(in srgb, var(--status-${likely ? 'critical' : 'warning'}) 10%, transparent)`,
-         }}>
-      <div className="flex items-start gap-2">
-        <StatusPill severity={likely ? 'critical' : 'warning'}>
-          {likely ? 'Leakage likely' : 'Review'}
-        </StatusPill>
-        <div className="min-w-0 max-w-[88ch] text-xs leading-relaxed text-ink">
-          {reason}
-          <div className="mt-1 text-tiny text-ink-secondary">
-            Strongest bin “{bin}” · {lift.toFixed(1)}x event-capture lift.
-            
-          </div>
-        </div>
-      </div>
-    </div>
+    <Notice severity={likely ? 'critical' : 'warning'}
+            label={likely ? 'Leakage likely' : 'Review'}
+            detail={<>Strongest bin “{bin}” · {lift.toFixed(1)}x event-capture lift.</>}>
+      {reason}
+    </Notice>
   )
 }
 

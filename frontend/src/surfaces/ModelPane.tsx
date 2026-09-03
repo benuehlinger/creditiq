@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, type FitRequest, type FitResponse } from '../lib/api'
 import type { PortfolioKey } from '../lib/api'
-import { Card, EmptyState, StatusPill, ViewTabs } from '../components/ui'
+import { Card, EmptyState, ViewTabs, Notice } from '../components/ui'
 import { Check, Close } from '../components/icons'
 import Verdict, { LeakageNotice } from '../components/Verdict'
 import FitProgress, { PD_PHASES } from '../components/FitProgress'
@@ -275,12 +275,9 @@ export default function ModelPane({ portfolio, onOpenVariable }: {
         <>
           <LeakageNotice r={result} screen={screen.data?.rows} />
           {result.separation_warning && (
-            <div className="rounded-card border px-4 py-3 text-xs text-ink"
-                 style={{ borderColor: 'var(--status-critical)',
-                          background: 'color-mix(in srgb, var(--status-critical) 10%, transparent)' }}>
-              <StatusPill severity="critical">Check the specification</StatusPill>
-              <span className="ml-2">{result.separation_warning}</span>
-            </div>
+            <Notice severity="critical" label="Check the specification">
+              {result.separation_warning}
+            </Notice>
           )}
 
           <ViewTabs value={tab} onChange={setTab} tabs={[

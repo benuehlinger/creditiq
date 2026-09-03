@@ -350,9 +350,11 @@ export interface FitResponse {
     vintages: { vintage: number; points: { mob: number; cumulative_default_pct: number; n: number }[] }[]
     oot_from: string
     segment_column: string | null
-    segments: { segment: string; n: number; events: number; auc: number
-                auc_delta: number; actual_annual: number; predicted_annual: number
-                calibrated: boolean; bias_pct: number }[]
+    /** auc/auc_delta/bias_pct are null where undefined — a segment whose rows
+     *  all share one outcome has no rank ordering to measure. */
+    segments: { segment: string; n: number; events: number; auc: number | null
+                auc_delta: number | null; actual_annual: number; predicted_annual: number
+                calibrated: boolean; bias_pct: number | null }[]
   }
   scorecard: { base_score: number; base_odds: number; pdo: number
                factor: number; offset: number

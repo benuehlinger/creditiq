@@ -266,7 +266,9 @@ export default function BacktestPanel({ r, portfolio, request }: {
   }), [bt, theme])
 
   const aucs = bt.cohorts.map((c) => c.auc).filter((a) => a === a)
-  const worstSeg = segments[0]
+  // A segment with one outcome class has no AUC — the backend sends null for
+  // it honestly, and treating null as a number here was a white screen.
+  const worstSeg = segments.find((s) => s.auc != null)
 
   return (
     <div className="space-y-3">
@@ -353,18 +355,29 @@ export default function BacktestPanel({ r, portfolio, request }: {
           right={
             <select value={segCol} onChange={(e) => setSegCol(e.target.value)}
               className="rounded-ctl border border-hairline bg-sunken px-2 py-1 text-xs text-ink">
-              {[bt.segment_column, 'vintage', 'terminal_event', 'status']
+              {/* Only true segmentations. `status` and `terminal_event` used
+                  to be offered and partition BY the outcome — every group is
+                  single-class, AUC is undefined for all of them, and the
+                  exercise answers nothing. */}
+              {[bt.segment_column, 'vintage']
                 .filter(Boolean).filter((v, i, a) => a.indexOf(v) === i)
                 .map((c) => <option key={c!} value={c!}>{c}</option>)}
             </select>
           }
         />
-        {worstSeg && (
+        {worstSeg && worstSeg.auc != null && (
           <div className="border-b border-hairline px-4 py-2 text-xs text-ink-secondary">
             Weakest segment: <span className="font-mono text-ink">{worstSeg.segment}</span> at
-            AUC {worstSeg.auc.toFixed(3)} ({worstSeg.auc_delta >= 0 ? '+' : ''}
-            {worstSeg.auc_delta.toFixed(3)} against the book), predicted
+            AUC {worstSeg.auc.toFixed(3)}
+            {worstSeg.auc_delta != null && <> ({worstSeg.auc_delta >= 0 ? '+' : ''}
+            {worstSeg.auc_delta.toFixed(3)} against the book)</>}, predicted
             {' '}{pct(worstSeg.predicted_annual)} against {pct(worstSeg.actual_annual)} realised.
+          </div>
+        )}
+        {seg.isError && (
+          <div className="border-b border-hairline px-4 py-2 text-xs"
+               style={{ color: 'var(--status-critical)' }}>
+            {String(seg.error).replace(/^Error:\s*/, '')}
           </div>
         )}
         <table className="w-full text-left text-xs">
@@ -387,16 +400,19 @@ export default function BacktestPanel({ r, portfolio, request }: {
                 <td className="px-4 py-1.5 font-mono text-tiny text-ink">{s.segment}</td>
                 <td className="px-3 py-1.5 text-right tnum text-ink-secondary">{num(s.n)}</td>
                 <td className="px-3 py-1.5 text-right tnum text-ink-secondary">{num(s.events)}</td>
-                <td className="px-3 py-1.5 text-right tnum text-ink">{s.auc.toFixed(3)}</td>
+                <td className="px-3 py-1.5 text-right tnum text-ink"
+                    title={s.auc == null ? 'Every row in this segment has the same outcome, so rank ordering is undefined here.' : undefined}>
+                  {s.auc == null ? '—' : s.auc.toFixed(3)}
+                </td>
                 <td className="px-3 py-1.5 text-right tnum"
-                    style={{ color: s.auc_delta < -0.03 ? 'var(--status-warning)' : 'var(--ink-secondary)' }}>
-                  {s.auc_delta >= 0 ? '+' : ''}{s.auc_delta.toFixed(3)}
+                    style={{ color: (s.auc_delta ?? 0) < -0.03 ? 'var(--status-warning)' : 'var(--ink-secondary)' }}>
+                  {s.auc_delta == null ? '—' : `${s.auc_delta >= 0 ? '+' : ''}${s.auc_delta.toFixed(3)}`}
                 </td>
                 <td className="px-3 py-1.5 text-right tnum text-ink-secondary">{pct(s.actual_annual)}</td>
                 <td className="px-3 py-1.5 text-right tnum text-ink-secondary">{pct(s.predicted_annual)}</td>
                 <td className="px-3 py-1.5 text-right tnum"
-                    style={{ color: Math.abs(s.bias_pct) > 15 ? 'var(--status-warning)' : 'var(--ink-secondary)' }}>
-                  {s.bias_pct >= 0 ? '+' : ''}{s.bias_pct.toFixed(1)}%
+                    style={{ color: Math.abs(s.bias_pct ?? 0) > 15 ? 'var(--status-warning)' : 'var(--ink-secondary)' }}>
+                  {s.bias_pct == null ? '—' : `${s.bias_pct >= 0 ? '+' : ''}${s.bias_pct.toFixed(1)}%`}
                 </td>
                 <td className="px-3 py-1.5">
                   <StatusPill severity={s.calibrated ? 'good' : 'warning'}>

@@ -2556,3 +2556,16 @@ in body type, and the evidence as one muted line. Colour sits in two small
 places; the words do the work. Converted: the variable review/leakage
 banner, the fit's separation warning, the sign-flip cards, both leakage
 notices, and the material extrapolation card.
+
+## The segment-backtest white screen, and the floor under every future one
+
+Choosing `status` in the segment backtest blanked the whole app. Three
+layers to the fix. The crash itself: a segment whose rows all share one
+outcome has no AUC, the backend honestly sends null, and the table called
+toFixed on it — the cells now print an em dash with the reason on hover.
+The deeper wrong: `status` and `terminal_event` were offered as
+segmentations and both partition BY the outcome, so every group is
+single-class and the exercise answers nothing — they left the dropdown.
+And the floor: an application-level error boundary now catches any render
+error, keeps the chrome alive, names the error for reporting, and offers
+"try again" and "reload" — a broken cell may cost a view, never the app.

@@ -11,6 +11,7 @@ import CommandPalette from './CommandPalette'
 import MethodologyDrawer from './MethodologyDrawer'
 import ModelBar from './ModelBar'
 import InitSurface from '../surfaces/InitSurface'
+import ErrorBoundary from './ErrorBoundary'
 
 /** Five destinations. Two of them have stages, which appear in the row below
  *  rather than inline here — nesting them in one row put seven links, two group
@@ -235,7 +236,9 @@ export default function AppShell() {
           and centred rather than stretched to fill. */}
       <main className="thin-scroll min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-[1560px]">
-          {dataReady ? <Outlet /> : <InitSurface />}
+          <ErrorBoundary>
+            {dataReady ? <Outlet /> : <InitSurface />}
+          </ErrorBoundary>
         </div>
       </main>
 

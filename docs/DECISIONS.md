@@ -2448,3 +2448,16 @@ PROPOSAL; becoming a model requires the click that makes it a decision.
 The one place documented defaults remain is the roll-up, where they exist
 to keep the executive total covering every book — and every use is
 labelled on the card that shows it.
+
+## The extrapolation note follows its materiality
+
+The "scenario leaves the estimation window" card rendered in amber however
+small the effect, and a warning box over a 1.8% difference teaches readers
+to ignore warning boxes — the user's reaction was "I don't get the point
+of this note". The point is real (the model answering beyond its fitted
+range is the first thing a validator checks), so the note stays; its
+weight now follows its size. Under a 2% effect on severely adverse ECL it
+is one quiet line stating that the path was checked and almost none of the
+number rests on extrapolation — a finding of safety. The amber card is
+reserved for a material share, and its title now says what it means in
+plain words: part of this scenario is beyond the model's experience.

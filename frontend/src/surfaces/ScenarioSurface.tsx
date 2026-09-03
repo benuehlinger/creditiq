@@ -204,11 +204,27 @@ export default function ScenarioSurface() {
           phases={ECL_PHASES(res?.scenarios?.[0]?.n_accounts, res?.timings)} />
       )}
 
-      {flags.length > 0 && (
+      {/* How much of the stressed number rests on extrapolation — the model
+          answering beyond the range it was fitted on. The presentation follows
+          the materiality: below two percent this is a finding of SAFETY
+          ("checked, immaterial") and renders as one quiet line; the amber
+          treatment is reserved for when a material share of the answer has no
+          evidence behind it. A warning box over a 1.8% effect teaches readers
+          to ignore warning boxes. */}
+      {flags.length > 0 && sa?.alternative_ecl != null
+        && Math.abs(1 - Math.min(sa.alternative_ecl, sa.ecl) / Math.max(sa.alternative_ecl, sa.ecl)) < 0.02 ? (
+        <p className="max-w-[88ch] px-1 text-tiny leading-relaxed text-ink-muted">
+          Part of the Federal Reserve path runs beyond the range the model was
+          fitted on ({flags.map((f) => f.key).join(', ')}). Constraining it to
+          the fitted range changes severely adverse ECL by under 2%
+          ({usd(sa.ecl)} against {usd(sa.alternative_ecl)} constrained), so
+          almost none of the number rests on extrapolation.
+        </p>
+      ) : flags.length > 0 && (
         <div className="rounded-card border px-4 py-3"
              style={{ borderColor: 'var(--status-warning)',
                       background: 'color-mix(in srgb, var(--status-warning) 10%, transparent)' }}>
-          <StatusPill severity="warning">Scenario leaves the estimation window</StatusPill>
+          <StatusPill severity="warning">Part of this scenario is beyond the model's experience</StatusPill>
           <div className="max-w-[88ch] mt-1.5 space-y-1 text-xs leading-relaxed text-ink">
             {flags.map((f) => <p key={f.key}>{f.note}</p>)}
           </div>

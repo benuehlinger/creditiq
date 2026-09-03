@@ -77,8 +77,13 @@ function useMevCharts(terms: string[]) {
         grid: gridFor({ left: 42, right: 6, top: 8, bottom: 20 }),
         tooltip: crosshairTooltip((v) => fmt(v), (d) => String(d).slice(0, 7)),
         xAxis: { ...(baseOption().xAxis as object), type: 'time' as const,
-                 axisLabel: { color: k.muted, fontSize: 9, formatter: '{yyyy}' } },
+                 // A year per gridline, never repeated: at full row width the
+                 // default density printed the same year three times over.
+                 splitNumber: 5,
+                 axisLabel: { color: k.muted, fontSize: 9, formatter: '{yyyy}',
+                              hideOverlap: true } },
         yAxis: { ...(baseOption().yAxis as object), type: 'value' as const, scale: true,
+                 splitNumber: 3,
                  axisLabel: { color: k.muted, fontSize: 9, formatter: (v: number) => fmt(v) } },
         series: [
           { type: 'line' as const, name: 'History', symbol: 'none', z: 1,
@@ -148,7 +153,7 @@ export function MevPathRows({ terms, books = [], membership = {} }: {
   }
   return (
     <div className="overflow-x-auto">
-      <div className={books.length ? "min-w-[860px] px-4 pb-3" : "min-w-[720px] px-4 pb-3"}>
+      <div className={`px-4 pb-3 ${books.length ? "min-w-[860px] max-w-[1160px]" : "min-w-[720px] max-w-[1040px]"}`}>
         <div className="grid items-end gap-x-3 border-b border-hairline pb-1.5 pt-2.5 text-micro uppercase tracking-wider text-ink-muted"
              style={{ gridTemplateColumns: cols }}>
           <span>Macro term</span>

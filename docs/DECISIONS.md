@@ -2487,3 +2487,17 @@ or data/cache/ is deleted (`make reset` does both). Acceptable in a
 repository whose analytics are stable; the person it can surprise is the
 developer editing the screening logic itself, who knows where the cache
 lives.
+
+## Switching tabs no longer refits — mounted is not opened
+
+With a saved version open, every visit to the PD stage re-ran the "a
+version was opened" hydration effect — an effect's dependency array does
+not stop its first render, and a tab switch IS a fresh first render. The
+hydration's setResult(null) deleted the cached fit each time; the query
+refetched, and when the fit was in no cache the auto-replay fired a full
+estimation. Felt as: "it refits every time I switch between PD and LGD."
+
+The guard is a module-scoped record of which version each book has
+hydrated this session — module scope, not a ref, because a ref dies with
+the unmount that a tab switch is. Measured after the fix: two full
+PD-LGD-PD-LGD round trips produce zero API calls beyond the health ping.

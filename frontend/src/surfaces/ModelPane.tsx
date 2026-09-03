@@ -20,6 +20,17 @@ import { canonical, columns, fromRequest, toRequest } from '../lib/spec'
  * no variable is open. The candidate list beside it belongs to the workbench,
  * so this pane no longer computes one.
  */
+/** Which version each book last hydrated, for the whole session.
+ *
+ *  ONCE PER OPENED VERSION, not once per mount: the hydration effect's
+ *  dependency is loaded.hash, but an effect always runs on its first render —
+ *  so every visit to the PD stage with a version open re-ran it, and its
+ *  setResult(null) DELETED the cached fit. The query then refetched; when the
+ *  fit was in no cache, the auto-refit fired a full estimation. Felt as: "it
+ *  refits every time I switch tabs". Module scope, not a ref, because a ref
+ *  dies with the unmount that a tab switch IS. */
+const HYDRATED: Partial<Record<PortfolioKey, string>> = {}
+
 export default function ModelPane({ portfolio, onOpenVariable }: {
   portfolio: string
   /** Open a variable in the detail pane, from a coefficient row. */
@@ -79,6 +90,8 @@ export default function ModelPane({ portfolio, onOpenVariable }: {
   useEffect(() => {
     const r = fitted?.request
     if (!loaded || !r) return
+    if (HYDRATED[pk] === loaded.hash) return
+    HYDRATED[pk] = loaded.hash
     // The whole specification, restored in one move — see `fromRequest`.
     setPdSpec(pk, fromRequest(r as unknown as Record<string, unknown>, portfolio))
     setResult(null)

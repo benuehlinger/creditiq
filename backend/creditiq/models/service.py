@@ -259,4 +259,10 @@ def cached(hash_: str) -> ModelRun | None:
 
 def clear() -> None:
     _CACHE.clear()
+    _SPLIT_CACHE.clear()
     D.clear_woe_cache()
+
+
+# A fitted run is DERIVED from the panel: the store must be able to drop it
+# when the panel changes underneath the process.
+store.register_dependent_cache(clear)

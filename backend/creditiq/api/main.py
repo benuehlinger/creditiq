@@ -70,6 +70,12 @@ def health():
         "mev_series_resolved": man["n_resolved"],
         "mev_series_failed": man["n_failed"],
         "mev_cache_built_at": man["built_at"],
+        # One string that changes whenever any panel is rebuilt. The frontend
+        # compares it across polls and reloads itself on a change, so a panel
+        # rebuilt mid-session can never keep serving results computed on data
+        # that no longer exists.
+        "data_fingerprint": "|".join(
+            vstore.data_fingerprint(k) for k in PORTFOLIOS),
     }
 
 
@@ -1824,3 +1830,6 @@ if _DIST.is_dir():
         if full_path and candidate.is_file():
             return FileResponse(candidate)
         return FileResponse(_DIST / "index.html")
+
+
+store.register_dependent_cache(_screen_all.cache_clear)

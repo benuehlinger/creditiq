@@ -36,7 +36,25 @@ export default function AppShell() {
   const nav = useNavigate()
   const { theme, toggleTheme, setPaletteOpen } = useUi()
   const brandVariant = useUi((s) => s.brandVariant) as CoBrandVariant
-  const { data: health } = useQuery({ queryKey: ['health'], queryFn: api.health })
+  const { data: health } = useQuery({ queryKey: ['health'], queryFn: api.health,
+                                      refetchInterval: 20_000,
+                                      // the watchdog must run in a background
+                                      // tab too — a rebuild happens in a
+                                      // terminal precisely while this tab is
+                                      // not the one being looked at
+                                      refetchIntervalInBackground: true })
+  // The panels can be rebuilt under a running session — `make data` in a
+  // terminal, or the in-app generate button in another tab. Every result on
+  // screen then describes a dataset that no longer exists. The fingerprint
+  // changes with the data; on a change, reload — the same clean transition
+  // the initialize flow uses.
+  const fpRef = useRef<string | null>(null)
+  useEffect(() => {
+    const fp = health?.data_fingerprint
+    if (!fp) return
+    if (fpRef.current && fpRef.current !== fp) window.location.reload()
+    fpRef.current = fp
+  }, [health?.data_fingerprint])
   // A fresh clone has no panels — they are generated, not shipped. Until they
   // exist, every surface is gated behind the initialize screen, so no
   // endpoint is ever asked about data that is not there.

@@ -23,6 +23,31 @@ from .data.portfolios import PORTFOLIOS
 from .data.spec import PortfolioSpec
 
 DATA = Path(__file__).resolve().parents[2] / "data" / "synthetic"
+_BUILD_REPORT = DATA / "build_report.json"
+
+# The mtime of the build report the caches were filled against. The panels can
+# be rebuilt UNDER a running server — `make data` in another terminal, or the
+# in-app generate button — and every cache in the process is then a cache of a
+# dataset that no longer exists. Nothing used to notice: a fitted LGD would
+# keep answering from the old panel until the server was restarted by hand,
+# which read as "sometimes an old fit appears at random". Every public read
+# below stats this one file first (microseconds) and, on a change, drops the
+# store's own caches AND every registered dependent in one move.
+_data_stamp: float | None = None
+
+
+def _check_current() -> None:
+    global _data_stamp
+    try:
+        stamp = _BUILD_REPORT.stat().st_mtime
+    except OSError:
+        stamp = -1.0
+    if _data_stamp is None:
+        _data_stamp = stamp
+        return
+    if stamp != _data_stamp:
+        _data_stamp = stamp
+        clear()
 
 
 @dataclass(frozen=True)
@@ -40,8 +65,13 @@ def available() -> list[str]:
     return [k for k in PORTFOLIOS if (DATA / f"{k}_panel.parquet").exists()]
 
 
-@lru_cache(maxsize=8)
 def load(key: str) -> Portfolio:
+    _check_current()
+    return _load(key)
+
+
+@lru_cache(maxsize=8)
+def _load(key: str) -> Portfolio:
     if key not in PORTFOLIOS:
         raise KeyError(f"unknown portfolio {key!r}")
     p = pd.read_parquet(DATA / f"{key}_panel.parquet")
@@ -84,8 +114,13 @@ def _compact(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-@lru_cache(maxsize=8)
 def analysis_frame(key: str) -> pd.DataFrame:
+    _check_current()
+    return _analysis_frame(key)
+
+
+@lru_cache(maxsize=8)
+def _analysis_frame(key: str) -> pd.DataFrame:
     """Panel joined to account attributes — the frame every surface analyses.
 
     Built once per portfolio. This is the single largest object in the process and
@@ -100,8 +135,13 @@ def analysis_frame(key: str) -> pd.DataFrame:
 SCREEN_ROWS = 300_000
 
 
-@lru_cache(maxsize=8)
 def screening_frame(key: str, n: int = SCREEN_ROWS) -> tuple[pd.DataFrame, bool]:
+    _check_current()
+    return _screening_frame(key, n)
+
+
+@lru_cache(maxsize=8)
+def _screening_frame(key: str, n: int = SCREEN_ROWS) -> tuple[pd.DataFrame, bool]:
     """A deterministic subsample used for VARIABLE SCREENING only.
 
     Information value, correlation and stability are population statistics that
@@ -136,8 +176,8 @@ def register_dependent_cache(clear_fn) -> None:
 
 
 def clear() -> None:
-    load.cache_clear()
-    analysis_frame.cache_clear()
-    screening_frame.cache_clear()
+    _load.cache_clear()
+    _analysis_frame.cache_clear()
+    _screening_frame.cache_clear()
     for fn in _DEPENDENT:
         fn()

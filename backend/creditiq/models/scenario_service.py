@@ -317,3 +317,6 @@ def run(spec: ModelSpec, scenarios: list[str] | None = None,
 def clear() -> None:
     _LGD_CACHE.clear()
     _ECL_CACHE.clear()
+
+
+store.register_dependent_cache(clear)

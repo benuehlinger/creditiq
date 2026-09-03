@@ -83,6 +83,7 @@ def pf_spec_signs(portfolio: str) -> dict[str, int]:
     from ..data.portfolios import PORTFOLIOS
     return PORTFOLIOS[portfolio].expected_signs
 _CACHE: dict[tuple, "RollUp"] = {}
+store.register_dependent_cache(_CACHE.clear)
 
 
 def clear_cache() -> None:

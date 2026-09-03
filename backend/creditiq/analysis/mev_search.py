@@ -339,3 +339,9 @@ def series_for(portfolio: str, column: str) -> dict:
 
 def clear() -> None:
     library.cache_clear()
+
+
+# The library ranks candidates against targets built from the panel, so it is
+# stale the moment the panel is rebuilt.
+from .. import store as _store  # noqa: E402
+_store.register_dependent_cache(library.cache_clear)

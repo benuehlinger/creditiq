@@ -69,10 +69,16 @@ export default function LgdModelPane({ portfolio, onOpenVariable }: {
     gcTime: 30 * 60_000,
     retry: 1,
   })
-  // A switched-to model's stored metrics may predate this fit; refresh them.
+  // The store's metrics ALWAYS follow the fit on screen. The old guard only
+  // refreshed when rmse was missing, so metrics recorded against a previous
+  // panel survived a data rebuild and the band described a fit that no longer
+  // existed. Refreshing on every result is idempotent — the value check stops
+  // the loop.
   useEffect(() => {
     const r = fitQuery.data
-    if (!r || !fittedLgd || fittedLgd.hash !== r.hash || fittedLgd.rmse != null) return
+    if (!r || !fittedLgd || fittedLgd.hash !== r.hash) return
+    if (fittedLgd.rmse === r.diagnostics.rmse
+        && fittedLgd.devianceR2 === r.diagnostics.deviance_r2) return
     setFittedLgd(pk, {
       ...fittedLgd, name: r.name, meanLgd: r.mean_lgd, nDefaults: r.n_defaults,
       rmse: r.diagnostics.rmse,

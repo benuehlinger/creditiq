@@ -2387,3 +2387,32 @@ book as dumbbells from baseline to severely adverse, in the same two
 scenario colours every chart uses. It states, in one glance, which half of
 which book's loss number the stress actually moves; the data was already in
 the payload.
+
+## One data identity, checked at every read
+
+"Sometimes an old LGD fit appears at random" was not random. Every cache in
+the process — fitted PD runs, severity models, projections, screenings, the
+macro library, the roll-up — was keyed on the SPECIFICATION alone, and only
+one of them was registered to clear when the panels changed. Rebuild the
+data under a running server (`make data` in a second terminal, or the
+in-app generate button) and every layer kept answering from the dataset
+that no longer existed until someone restarted the process by hand.
+
+The store now stamps the build report's mtime and checks it — one stat
+call, microseconds — at the top of every public read. On a change it drops
+its own frames and every registered dependent in one move, and every
+derived cache is now registered: the fit service, the severity and
+projection caches, the screening and health profiles, the macro library,
+the roll-up. The disk cache was already fingerprint-keyed and needed
+nothing.
+
+The frontend gets the same discipline through one number: /api/health now
+carries a combined data fingerprint, the shell polls it every twenty
+seconds (in background tabs too — a rebuild happens in a terminal precisely
+while the tab is not being looked at), and a change reloads the app, the
+same clean transition the initialize flow uses. And the severity pane's
+stored metrics now always follow the fit on screen; the old guard only
+refreshed them when they were missing, so numbers recorded against a
+previous panel survived into the band. Two regression tests hold the
+mechanism: a touched build report fires every dependent exactly once, and
+the model-service caches must be on the dependent list.

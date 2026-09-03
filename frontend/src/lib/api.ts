@@ -817,6 +817,7 @@ export interface RollUpResponse {
 
 export const api = {
   health: () => get<{ status: string; portfolios: PortfolioKey[]; mev_series_resolved: number
+                      data_fingerprint?: string
                       mev_series_failed: number; mev_cache_built_at: string }>('/health'),
   /** Whether the synthetic panels exist, and generation progress if running. */
   dataStatus: () => get<DataInitStatus>('/data/status'),

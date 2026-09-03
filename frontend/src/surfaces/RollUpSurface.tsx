@@ -6,9 +6,9 @@ import { Card, CardHead, HeroFigure, Skeleton, StatTile, StatusPill, ViewTabs } 
 import EChart from '../charts/EChart'
 import Legend from '../charts/Legend'
 import FitProgress, { ROLLUP_PHASES } from '../components/FitProgress'
-import { MevLegend, MevPathGrid } from '../components/StressedMevs'
+import { MevLegend, MevPathRows } from '../components/StressedMevs'
 import { baseOption, barSeries, crosshairTooltip, escapeHtml, lineSeries, markTooltip, xName, yName, gridFor } from '../charts/base'
-import { diverging, ink, mode, portfolioColor, sequential } from '../design/tokens'
+import { diverging, ink, mode, ordinal, portfolioColor } from '../design/tokens'
 import { useUi } from '../lib/store'
 import { month, num, pct, usd } from '../lib/format'
 
@@ -77,11 +77,6 @@ export default function RollUpSurface() {
   // stress it separates from the run-rate as losses emerge, then contracts as
   // the stressed cohorts resolve. Both shapes of the same series.
   const [emergence, setEmergence] = useState<'cumulative' | 'monthly'>('cumulative')
-  // The probability weight on severely adverse, as a percentage. A weighted
-  // ECL is linear in the two scenario figures, so the slider recomputes it
-  // instantly with no request — the one number on this page that is a
-  // management assumption gets the one control.
-  const [wSevere, setWSevere] = useState(25)
   useEffect(() => {
     if (isFetching) { setJustRan(true); return }
     if (!justRan) return
@@ -147,16 +142,23 @@ export default function RollUpSurface() {
   // which books carry each one — a shared term renders once with several dots
   // rather than once per book, which is both the honest reading (one factor)
   // and what keeps the grid dense instead of one sparse row per book.
+  const SHORT: Record<string, string> = {
+    consumer: 'Consumer', mortgage: 'Mortgage', cre: 'CRE',
+  }
   const mevUnion = useMemo(() => {
-    const tags: Record<string, { color: string; label: string }[]> = {}
+    const membership: Record<string, string[]> = {}
     const terms: string[] = []
     for (const p of data?.portfolios ?? []) {
       for (const t of p.mev_terms ?? []) {
-        if (!tags[t]) { tags[t] = []; terms.push(t) }
-        tags[t].push({ color: portfolioColor(p.portfolio, m), label: p.label })
+        if (!membership[t]) { membership[t] = []; terms.push(t) }
+        membership[t].push(p.portfolio)
       }
     }
-    return { terms, tags }
+    const books = (data?.portfolios ?? []).map((p) => ({
+      key: p.portfolio, short: SHORT[p.portfolio] ?? p.portfolio,
+      label: p.label, color: portfolioColor(p.portfolio, m),
+    }))
+    return { terms, membership, books }
   }, [data, theme])
 
   const tornado = useMemo(() => {
@@ -240,25 +242,6 @@ export default function RollUpSurface() {
               explain="Cumulative probability of default over the first twelve months, exposure-weighted across all three books, under severely adverse. It covers a quarter of the horizon. The supervisory path troughs in quarters six to eight, so this understates the stress in the ECL figure." />
             <StatTile label="Weighted LGD, first 12 months" value={sa.weighted_lgd.toFixed(3)}
               explain="Mean predicted severity over the first twelve months, exposure-weighted, under severely adverse. A 12-month figure against a 39-month ECL, so it does not multiply out to the stress multiple." />
-            {/* The one management assumption on the page gets the one control.
-                ECL is linear in the two scenario figures, so the weighted
-                number answers the slider instantly, with no request. */}
-            <div className="px-4 py-3"
-                 title="A CECL allowance weights the scenarios by management's probability assessment. The weight is an assumption, not a supervisory number — so it is adjustable, and the figure recomputes as it moves.">
-              <div className="text-tiny text-ink-muted">Probability-weighted ECL</div>
-              <div className="mt-1 text-2xl font-semibold tracking-tight text-accent">
-                {usd(base.ecl * (1 - wSevere / 100) + sa.ecl * (wSevere / 100))}
-              </div>
-              <div className="mt-1.5 flex items-center gap-2">
-                <input type="range" min={0} max={100} step={5} value={wSevere}
-                  onChange={(e) => setWSevere(Number(e.target.value))}
-                  className="h-1 w-28 accent-[var(--accent)]"
-                  aria-label="Probability weight on severely adverse" />
-                <span className="tnum whitespace-nowrap text-micro text-ink-muted">
-                  {wSevere}% severe
-                </span>
-              </div>
-            </div>
           </div>
         </div>
         {/* Which models produced the number above — folded into the hero,
@@ -443,9 +426,10 @@ export default function RollUpSurface() {
 
       <Card>
         <CardHead title="What the models respond to"
-          caption="The macro exposure behind the numbers above, one chart per term. A term carried by more than one book appears once with each book's dot: the same series is one exposure however many models load on it, and a factor shared across books is exactly what a committee wants to see stated."
+          caption="One row per macro term. The dot columns say which book's model carries it: a factor shared across books is one exposure however many models load on it, and the gaps say what a book is NOT exposed to. The path is history to the projection date, then the two Federal Reserve branches; the figures are the break-off."
           right={<MevLegend />} />
-        <MevPathGrid terms={mevUnion.terms} tags={mevUnion.tags} height={118} />
+        <MevPathRows terms={mevUnion.terms} books={mevUnion.books}
+                     membership={mevUnion.membership} />
       </Card>
 
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
@@ -463,33 +447,100 @@ export default function RollUpSurface() {
         </Card>
 
         <Card>
-          <CardHead title="Concentration"
-            subtitle="Drawn balances at the latest performance date"
-            caption="Exposure by band. This is a property of the book, not of a model, so it does not move when the adopted model above is changed. The bands total to the exposure on each portfolio's card." />
-          <div className="space-y-4 px-4 py-3">
+          <CardHead title="Risk parameters under stress"
+            subtitle="12-month PD and LGD per book, baseline against severely adverse"
+            caption="The two halves of every loss number, shown as the distance stress moves them. PD is the exposure-weighted 12-month default probability; LGD is the mean predicted severity over the same window. The books whose dumbbells stretch furthest are where the stress number comes from."
+            right={<Legend items={[
+              { name: 'Supervisory Baseline', color: ordinal(0, 2) },
+              { name: 'Supervisory Severely Adverse', color: ordinal(1, 2) },
+            ]} />} />
+          <div className="space-y-5 px-4 py-4">
+            {([['12-month PD', 'pd_12m', (v: number) => `${(v * 100).toFixed(1)}%`],
+               ['LGD, first 12 months', 'lgd', (v: number) => (v as number).toFixed(2)]] as const)
+              .map(([label, key, fmt]) => {
+                const hi = Math.max(...data.portfolios.map(
+                  (b) => Number(b.by_scenario.severely_adverse?.[key] ?? 0)), 1e-9) * 1.15
+                return (
+                  <div key={key}>
+                    <div className="mb-1.5 flex items-baseline justify-between">
+                      <span className="text-tiny font-medium uppercase tracking-wider text-ink-muted">{label}</span>
+                      <span className="tnum text-micro text-ink-muted">0 — {fmt(hi)}</span>
+                    </div>
+                    <div className="space-y-2.5">
+                      {data.portfolios.map((b) => {
+                        const lo = Number(b.by_scenario.baseline?.[key] ?? 0)
+                        const sv = Number(b.by_scenario.severely_adverse?.[key] ?? 0)
+                        const x = (v: number) => `${(v / hi) * 100}%`
+                        return (
+                          <div key={b.portfolio} className="flex items-center gap-3"
+                               title={`${b.label}: ${fmt(lo)} baseline, ${fmt(sv)} severely adverse`}>
+                            <span className="flex w-24 shrink-0 items-center gap-1.5 text-tiny text-ink-secondary">
+                              <span className="h-1.5 w-1.5 rounded-full"
+                                    style={{ background: portfolioColor(b.portfolio, m) }} />
+                              {SHORT[b.portfolio] ?? b.portfolio}
+                            </span>
+                            <div className="relative h-4 flex-1">
+                              <div className="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-hairline" />
+                              <div className="absolute top-1/2 h-0.5 -translate-y-1/2 rounded-full"
+                                   style={{ left: x(Math.min(lo, sv)), width: x(Math.abs(sv - lo)),
+                                            background: 'var(--chrome-axis)' }} />
+                              <span className="absolute top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full"
+                                    style={{ left: x(lo), background: ordinal(0, 2) }} />
+                              <span className="absolute top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full"
+                                    style={{ left: x(sv), background: ordinal(1, 2) }} />
+                            </div>
+                            <span className="w-11 shrink-0 text-right tnum text-micro text-ink-secondary">{fmt(lo)}</span>
+                            <span className="w-11 shrink-0 text-right tnum text-micro font-medium text-ink">{fmt(sv)}</span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )
+              })}
+          </div>
+        </Card>
+      </div>
+
+      <Card>
+        <CardHead title="Concentration"
+            subtitle="Share of each book's drawn balance, at the latest performance date"
+            caption="Each book is cut along the dimension its committee actually watches: origination FICO for consumer, current LTV for mortgage, property type for commercial. Bar length is the band's share of that book's balance; the figure is the balance itself. A property of the book, not of a model — changing the adopted model above moves nothing here." />
+          <div className="grid gap-x-8 gap-y-4 px-4 py-3"
+               style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}>
             {Object.entries(data.concentration).map(([p, bands]) => {
               const maxShare = Math.max(...bands.map((b) => b.share), 0.01)
+              const DIM: Record<string, string> = {
+                consumer: 'by origination FICO', mortgage: 'by current LTV',
+                cre: 'by property type',
+              }
               return (
                 <div key={p}>
-                  <div className="flex items-center gap-2 text-tiny">
-                    <span className="h-2 w-2 rounded-full"
+                  <div className="flex items-baseline gap-2 text-tiny">
+                    <span className="h-2 w-2 self-center rounded-full"
                           style={{ background: portfolioColor(p as any, m) }} />
-                    <span className="text-ink-secondary">
+                    <span className="font-medium text-ink">
                       {data.portfolios.find((x) => x.portfolio === p)?.label ?? p}
                     </span>
+                    <span className="text-micro text-ink-muted">{DIM[p] ?? ''}</span>
                   </div>
                   <div className="mt-1.5 space-y-1">
                     {bands.map((b) => (
-                      <div key={b.band} className="flex items-center gap-2">
+                      <div key={b.band} className="flex items-center gap-2"
+                           title={`${b.band}: ${usd(b.exposure)} drawn, ${(b.share * 100).toFixed(1)}% of the book`}>
                         <span className="w-20 shrink-0 text-right font-mono text-micro text-ink-muted">
                           {b.band}
                         </span>
                         <div className="h-3 flex-1 rounded-sm bg-sunken">
                           <div className="h-3 rounded-sm"
                                style={{ width: `${(b.share / maxShare) * 100}%`,
-                                        background: sequential(0.3 + 0.6 * (b.share / maxShare), m) }} />
+                                        background: portfolioColor(p as any, m),
+                                        opacity: 0.85 }} />
                         </div>
-                        <span className="w-16 shrink-0 text-right tnum text-micro text-ink-secondary">
+                        <span className="w-9 shrink-0 text-right tnum text-micro text-ink-secondary">
+                          {(b.share * 100).toFixed(0)}%
+                        </span>
+                        <span className="w-14 shrink-0 text-right tnum text-micro text-ink-muted">
                           {usd(b.exposure)}
                         </span>
                       </div>
@@ -500,7 +551,6 @@ export default function RollUpSurface() {
             })}
           </div>
         </Card>
-      </div>
     </div>
   )
 }

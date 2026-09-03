@@ -48,14 +48,9 @@ export function MevLegend() {
   ]} />
 }
 
-export function MevPathGrid({ terms, height = 120, tags }: {
-  terms: string[]
-  height?: number
-  /** Which books carry each term, for the roll-up. A term shared by two books
-   *  is ONE exposure seen twice, so it renders once with both dots — that is
-   *  information (a common factor), and it is also what keeps the grid dense. */
-  tags?: Record<string, { color: string; label: string }[]>
-}) {
+/** The fetched paths turned into chart options and break-off figures — one
+ *  builder for every layout that draws these series. */
+function useMevCharts(terms: string[]) {
   const theme = useUi((s) => s.theme)
   const q = useQuery({
     queryKey: ['mevpaths', terms.slice().sort().join(',')],
@@ -114,8 +109,20 @@ export function MevPathGrid({ terms, height = 120, tags }: {
                base: s.baseline.at(-1)?.value ?? null, severe: dev(s.severely_adverse) }
     })
   }, [q.data, theme])
+  return { charts, isLoading: q.isLoading }
+}
 
-  if (q.isLoading) {
+export function MevPathGrid({ terms, height = 120, tags }: {
+  terms: string[]
+  height?: number
+  /** Which books carry each term, for the roll-up. A term shared by two books
+   *  is ONE exposure seen twice, so it renders once with both dots — that is
+   *  information (a common factor), and it is also what keeps the grid dense. */
+  tags?: Record<string, { color: string; label: string }[]>
+}) {
+  const { charts, isLoading } = useMevCharts(terms)
+
+  if (isLoading) {
     return <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-3">
       {terms.map((t) => <Skeleton key={t} className="h-44" />)}
     </div>
@@ -181,5 +188,94 @@ export default function StressedMevs({ terms, subtitle }: {
         right={<MevLegend />} />
       <MevPathGrid terms={terms} />
     </Card>
+  )
+}
+
+/** The roll-up's exhibit: one row per macro term, with an explicit membership
+ *  matrix.
+ *
+ *  The grid layout answered "what does this series do under stress" but made
+ *  "whose model carries it" a pair of six-pixel dots. Here the answer is
+ *  structural: every row crosses the same three book columns, a filled dot
+ *  where the book's model carries the term and a faint ring where it does
+ *  not, so shared factors and gaps read at a glance — and one term or six,
+ *  the exhibit is the same shape. The path gets the full row width, and the
+ *  break-off figures land in aligned columns on the right, so the whole
+ *  card reads as one table.
+ */
+export function MevPathRows({ terms, books, membership }: {
+  terms: string[]
+  /** The fixed columns, in display order. */
+  books: { key: string; short: string; label: string; color: string }[]
+  /** term -> the book keys whose model carries it. */
+  membership: Record<string, string[]>
+}) {
+  const { charts, isLoading } = useMevCharts(terms)
+  const cols = `minmax(160px,220px) repeat(${books.length}, 3.4rem) minmax(0,1fr) repeat(3, 4.4rem)`
+
+  if (isLoading) {
+    return <div className="space-y-3 p-4">
+      {terms.map((t) => <Skeleton key={t} className="h-24" />)}
+    </div>
+  }
+  if (!charts?.length) {
+    return <p className="px-4 py-6 text-center text-xs text-ink-muted">
+      No reported model carries a macro term, so nothing here responds to a scenario.
+    </p>
+  }
+  return (
+    <div className="overflow-x-auto">
+      <div className="min-w-[860px] px-4 pb-3">
+        <div className="grid items-end gap-x-3 border-b border-hairline pb-1.5 pt-2.5 text-micro uppercase tracking-wider text-ink-muted"
+             style={{ gridTemplateColumns: cols }}>
+          <span>Macro term</span>
+          {books.map((b) => (
+            <span key={b.key} className="flex flex-col items-center gap-1" title={b.label}>
+              <span className="h-2 w-2 rounded-full" style={{ background: b.color }} />
+              {b.short}
+            </span>
+          ))}
+          <span>History and the two branches</span>
+          <span className="text-right normal-case">Now</span>
+          <span className="text-right normal-case">Baseline</span>
+          <span className="text-right normal-case">Severe</span>
+        </div>
+        {charts.map(({ s, option, fmt, now, base, severe }) => (
+          <div key={s.term} title={s.term}
+               className="grid items-center gap-x-3 border-b border-hairline py-2 last:border-b-0"
+               style={{ gridTemplateColumns: cols }}>
+            <div className="min-w-0">
+              <div className="truncate text-xs font-semibold text-ink">{s.label}</div>
+              <div className="text-micro text-ink-muted">{entersAs(s)}</div>
+            </div>
+            {books.map((b) => (
+              <span key={b.key} className="flex justify-center"
+                    title={membership[s.term]?.includes(b.key)
+                      ? `${b.label} carries this term`
+                      : `${b.label} does not carry this term`}>
+                {membership[s.term]?.includes(b.key) ? (
+                  <span className="h-2.5 w-2.5 rounded-full" style={{ background: b.color }} />
+                ) : (
+                  <span className="h-2 w-2 rounded-full border"
+                        style={{ borderColor: 'var(--chrome-axis)', opacity: 0.5 }} />
+                )}
+              </span>
+            ))}
+            <EChart option={option} height={82} compact
+                    ariaLabel={`${s.label} under both scenarios`} externalLegend />
+            <span className="tnum text-right text-xs font-medium text-ink">
+              {now != null ? fmt(now) : '—'}
+            </span>
+            <span className="tnum text-right text-xs text-ink-secondary">
+              {base != null ? fmt(base) : '—'}
+            </span>
+            <span className="tnum text-right text-xs font-medium"
+                  style={{ color: 'var(--status-serious)' }}>
+              {severe != null ? fmt(severe) : '—'}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
   )
 }

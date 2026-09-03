@@ -2362,3 +2362,28 @@ is opt-in: `make dev` is lazy (first click per surface computes once, then
 the disk cache holds it, across restarts), `make demo` sets CREDITIQ_WARM=1
 for instant first clicks when the memory is there. docs/HANDOFF.md now
 carries the new-machine instructions, including this trade.
+
+## The roll-up's second aesthetic pass: a matrix, a dumbbell, an honest bar
+
+The probability-weight slider left the hero: a knob nobody asked to turn was
+costing headline space.
+
+"What the models respond to" became a matrix — one row per macro term
+crossing three fixed book columns, a filled dot where the book's model
+carries the term and a faint ring where it does not. The grid layout it
+replaced was tuned for four terms and fell apart at one; rows are the same
+shape at any count, the path gets the full row width, and the break-off
+lands in aligned Now/Baseline/Severe columns, so the card reads as one
+table. Membership stopped being a six-pixel hint and became the structure.
+
+Concentration earned its legend: each book's cut is now named (origination
+FICO, current LTV, property type), the bar is the band's share in the
+book's own colour — the old sequential ramp encoded the same number as the
+bar length, which is a decoration pretending to be a channel — and share
+and balance both print. The three books sit side by side full-width.
+
+One addition: "Risk parameters under stress" — 12-month PD and LGD per
+book as dumbbells from baseline to severely adverse, in the same two
+scenario colours every chart uses. It states, in one glance, which half of
+which book's loss number the stress actually moves; the data was already in
+the payload.

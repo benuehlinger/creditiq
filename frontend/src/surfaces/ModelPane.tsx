@@ -102,7 +102,10 @@ export default function ModelPane({ portfolio, onOpenVariable }: {
   // specification card, diagnostics and backtest are populated on arrival rather
   // than showing a page that asks to be fitted.
   useEffect(() => {
-    if (!loaded || result || fit.isPending || !picked.length) return
+    // `cached.isFetching`: the lookup for an already-computed fit may still be
+    // in flight — replaying then races it and POSTs a fit the cache was about
+    // to answer. Wait; fit only once the lookup has come back empty.
+    if (!loaded || result || fit.isPending || !picked.length || cached.isFetching) return
     // Wait until the macro terms match the specification being restored,
     // otherwise the first fit runs on the portfolio defaults.
     const want = (fitted?.request.mevs ?? [])
@@ -112,7 +115,7 @@ export default function ModelPane({ portfolio, onOpenVariable }: {
     if (want !== have) return
     fit.mutate()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded?.hash, picked.length, pdMevs.join(',')])
+  }, [loaded?.hash, picked.length, pdMevs.join(','), cached.isFetching])
 
   // The screening statistics, so the verdict can name a leakage-flagged
   // variable that made it into the specification.

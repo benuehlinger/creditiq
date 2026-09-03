@@ -2501,3 +2501,26 @@ The guard is a module-scoped record of which version each book has
 hydrated this session — module scope, not a ref, because a ref dies with
 the unmount that a tab switch is. Measured after the fix: two full
 PD-LGD-PD-LGD round trips produce zero API calls beyond the health ping.
+
+## Session-over-session smoothness comes from the server's disk, on purpose
+
+The requirement: fit only the first time and when the specification
+changes — across page reloads and browser restarts too. This already
+holds, and the durable layer is deliberately the SERVER's fingerprint-keyed
+disk cache rather than a persisted browser cache. Measured on a fresh
+session with a version open: every request the first paint needs is
+answered inside 210ms of navigation, zero fit POSTs fire, and nothing
+recomputes.
+
+One race made it look otherwise and is fixed: the auto-replay used to fire
+while the lookup for the already-computed fit was still in flight, POSTing
+a fit the cache was about to answer. It now waits for the lookup to come
+back empty before estimating anything.
+
+Persisting the query cache in the browser was considered and declined:
+localStorage quotas against multi-megabyte fit payloads, a second
+invalidation surface duplicating what the data fingerprint already does,
+and stale-flash on reload — real failure modes purchased for
+milliseconds. One durable cache, server-side, one identity. At deploy
+time that layer moves behind auth with the rest of the state, unchanged
+in design.

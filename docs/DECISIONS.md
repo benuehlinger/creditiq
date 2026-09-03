@@ -2524,3 +2524,23 @@ and stale-flash on reload — real failure modes purchased for
 milliseconds. One durable cache, server-side, one identity. At deploy
 time that layer moves behind auth with the rest of the state, unchanged
 in design.
+
+## The roll-up's documented defaults are gone too
+
+The one surviving default — the roll-up projecting an unpromoted book on a
+documented default specification, labelled — still read as a ghost: a
+number the user never made, on the page that matters most. The rule now
+has no exceptions. A book with no promoted (or explicitly selected) model
+contributes NOTHING: its position card is a prompt carrying its exposure,
+its account count and the fix (build a model, or report it on a saved
+version through the picker); the hero says "Totals cover N of M books";
+and every model-derived exhibit covers only reported books. Concentration
+stays for all books, because it is a property of the data, not of any
+model. With versions saved but no champion anywhere, the whole page is
+the prompt. The welcome screen's "skip and run on documented defaults"
+escape went with it.
+
+The browser-side candidate caches were wiped by a store version bump
+(v4): every browser that opens the app drops its fitted records, drafts
+and specs once, keeping preferences. Saved versions live on the server
+and are untouched.

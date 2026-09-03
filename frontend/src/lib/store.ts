@@ -268,13 +268,24 @@ export const useUi = create<UiState>()(
                                                         macroShortlist: s.macroShortlist,
                             pdSpec: s.pdSpec, projected: s.projected, draft: s.draft,
                             brandVariant: s.brandVariant }),
-      version: 3,
+      version: 4,
       // Work in progress must survive the change of shape. The old state held
       // the specification in five store fields plus local component state; the
       // local parts are gone either way, but everything that WAS persisted is
       // folded into the one object.
       migrate: (persisted: unknown, from: number) => {
         const s = (persisted ?? {}) as Record<string, any>
+        // v4 (2026-09-03): drop every cached working artefact — fitted records,
+        // drafts, loaded markers, per-book specs — in EVERY browser that has
+        // one, on the user's instruction. Saved versions live on the server
+        // and are untouched; this clears only the browser-side candidates.
+        // Preferences (theme, brand) survive.
+        if (from < 4) {
+          for (const k of ['fitted', 'fittedLgd', 'loaded', 'draft',
+                           'projected', 'pdSpec', 'macroShortlist']) {
+            delete s[k]
+          }
+        }
         // Nothing recorded which model had been projected, so nothing may claim
         // to have been. An empty marker reads as "not run", which is correct.
         if (!s.projected) {

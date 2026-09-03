@@ -53,8 +53,7 @@ export default function RollUpSurface() {
   // workflow instead; it disappears for good once the first version exists.
   const saved = useQuery({ queryKey: ['versions', ''], queryFn: () => api.versions() })
   const firstOpen = saved.data != null && saved.data.length === 0
-  const [welcomeSkipped, setWelcomeSkipped] = useState(false)
-  const showWelcome = firstOpen && !welcomeSkipped
+  const showWelcome = firstOpen
   const ready = saved.data != null && !showWelcome
 
   const { data, isLoading, isError, error, isFetching } = useQuery({
@@ -194,7 +193,7 @@ export default function RollUpSurface() {
   }, [data, theme])
 
   if (showWelcome) {
-    return <Welcome onSkip={() => setWelcomeSkipped(true)} />
+    return <Welcome />
   }
   if (isLoading || saved.data == null) {
     return <div className="space-y-3 p-4">
@@ -211,13 +210,68 @@ export default function RollUpSurface() {
 
   const base = data.totals.baseline
   const sa = data.totals.severely_adverse
-  const anyDefault = data.portfolios.some((p) => p.source === 'default')
-  // How much of the number the analyst's own work actually produced. A book
-  // that was never fitted still contributes ECL, from the documented default
-  // specification — so a roll-up with one model fitted is a real number, but it
-  // is mostly not this analyst's model, and the page has to say which.
-  const nFitted = data.portfolios.filter((p) => p.source !== 'default').length
-  const nBooks = data.portfolios.length
+  const uncovered = data.not_covered ?? []
+  // Only books with a promoted (or explicitly selected) model contribute.
+  // Nothing stands in for the rest; their cards below prompt for the fix.
+  const nFitted = data.portfolios.length
+  const nBooks = data.portfolios.length + uncovered.length
+
+  // Versions exist somewhere, but no book has a promoted model: there is no
+  // honest total to show, so the page IS the prompt. The position cards
+  // render (all as prompts, each with its picker), and everything derived
+  // from a model — the hero, the charts, the exposure grid — waits.
+  if (data.portfolios.length === 0) {
+    return (
+      <div className="space-y-3 p-4">
+        <Card>
+          <CardHead title="Portfolio roll-up"
+            caption="No book has a promoted model yet, so there is no loss position to report — nothing is substituted in its place. Promote a champion on a book's Versions page, or report a book on a saved version below, and the roll-up assembles from what you choose." />
+          <div className="grid gap-px border-t border-hairline bg-hairline sm:grid-cols-3">
+            {uncovered.map((u) => {
+              const options = data.available[u.portfolio] ?? []
+              return (
+                <div key={u.portfolio} className="flex flex-col bg-surface p-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-2">
+                      <span className="h-2.5 w-2.5 rounded-full"
+                            style={{ background: portfolioColor(u.portfolio as any, m) }} />
+                      <span className="text-sm font-medium text-ink">{u.label}</span>
+                    </span>
+                    <StatusPill severity="warning">no model promoted</StatusPill>
+                  </div>
+                  <dl className="mb-3 mt-3 space-y-1 text-tiny">
+                    <Row k="Exposure" v={usd(u.exposure)} />
+                    <Row k="Accounts" v={num(u.n_accounts)} />
+                    <Row k="Saved versions" v={String(u.n_versions)} />
+                  </dl>
+                  <div className="mt-auto border-t border-hairline pt-2.5">
+                    {options.length ? (
+                      <select value="" aria-label={`Model to report ${u.label} on`}
+                        onChange={(e) => setSelection({ ...selection, [u.portfolio]: e.target.value })}
+                        className="w-full rounded-ctl border border-hairline bg-sunken px-2 py-1 text-xs text-ink">
+                        <option value="" disabled>Report on a saved version…</option>
+                        {options.map((v) => (
+                          <option key={v.hash} value={v.hash}>
+                            {v.name}{v.data_is_current ? '' : ' · stale data'}
+                            {v.auc_test ? ` · AUC ${v.auc_test.toFixed(3)}` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <button onClick={() => nav(`/${u.portfolio}/data`)}
+                        className="w-full rounded-ctl bg-accent px-3 py-1.5 text-xs font-semibold text-white">
+                        Build a model on this book
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </Card>
+      </div>
+    )
+  }
   const adoptedTotal = adopted.data?.totals?.severely_adverse?.ecl
   const shownTotal = data.totals?.severely_adverse?.ecl
   const delta = !data.is_adopted && adoptedTotal && shownTotal
@@ -250,9 +304,9 @@ export default function RollUpSurface() {
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-hairline px-4 py-2.5">
           {!data.is_adopted ? (
             <StatusPill severity="warning">Selected set, not the adopted position</StatusPill>
-          ) : anyDefault ? (
+          ) : uncovered.length ? (
             <StatusPill severity="warning">
-              {nFitted} of {nBooks} books on a fitted model
+              Totals cover {nFitted} of {nBooks} books
             </StatusPill>
           ) : (
             <StatusPill severity="good">Adopted models</StatusPill>
@@ -260,11 +314,11 @@ export default function RollUpSurface() {
           <span className="max-w-[88ch] min-w-0 flex-1 text-tiny leading-relaxed text-ink-secondary">
             {!data.is_adopted
               ? 'One or more books are reported on a model that is not their champion. This is a comparison, not the position the firm holds.'
-              : anyDefault
-              ? `${nBooks - nFitted} book${nBooks - nFitted === 1 ? ' uses' : 's use'}`
-                + ' the documented default specification: computed, not assumed, but'
-                + ' not a model anyone here has fitted or reviewed. Fit and promote a'
-                + ' model on each book to replace them.'
+              : uncovered.length
+              ? `${uncovered.map((u) => u.label).join(' and ')} ${uncovered.length === 1 ? 'has' : 'have'}`
+                + ' no promoted model and contribute nothing here — nothing is'
+                + ' substituted in their place. Fit and promote a model to bring'
+                + ' each into the total.'
               : 'Each book is reported on its promoted champion.'}
           </span>
           {delta != null && (
@@ -380,6 +434,64 @@ export default function RollUpSurface() {
                     ))}
                   </select>
                   <p className="mt-1 font-mono text-micro text-ink-muted">{p.model_hash}</p>
+                </div>
+              </div>
+            )
+          })}
+          {/* A book with no promoted model is a PROMPT, not a number. Nothing
+              stands in for it; the card says what is missing and carries the
+              two ways to fix it — build one, or report an existing saved
+              version through the picker (which covers it as a selection). */}
+          {uncovered.map((u) => {
+            const options = data.available[u.portfolio] ?? []
+            return (
+              <div key={u.portfolio} role="link" tabIndex={0}
+                onClick={() => nav(`/${u.portfolio}/${options.length ? 'versions' : 'data'}`)}
+                onKeyDown={(e) => { if (e.key === 'Enter') nav(`/${u.portfolio}/data`) }}
+                title={`Open the ${u.label} workspace`}
+                className="flex cursor-pointer flex-col bg-surface p-4 transition-colors hover:bg-sunken">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-2">
+                    <span className="h-2.5 w-2.5 rounded-full"
+                          style={{ background: portfolioColor(u.portfolio as any, m) }} />
+                    <span className="text-sm font-medium text-ink">{u.label}</span>
+                  </span>
+                  <StatusPill severity="warning">no model promoted</StatusPill>
+                </div>
+                <div className="mt-3 text-2xl font-semibold tracking-tight text-ink-muted">—</div>
+                <div className="mt-0.5 text-tiny text-ink-muted">
+                  not in the totals · nothing is substituted in its place
+                </div>
+                <dl className="mb-3 mt-3 space-y-1 text-tiny">
+                  <Row k="Exposure" v={usd(u.exposure)} />
+                  <Row k="Accounts" v={num(u.n_accounts)} />
+                  <Row k="Saved versions" v={String(u.n_versions)} />
+                </dl>
+                <div className="mt-auto border-t border-hairline pt-2.5"
+                     onClick={(e) => e.stopPropagation()}>
+                  {options.length ? (
+                    <select value="" aria-label={`Model to report ${u.label} on`}
+                      onChange={(e) => setSelection({ ...selection, [u.portfolio]: e.target.value })}
+                      className="w-full rounded-ctl border border-hairline bg-sunken px-2 py-1 text-xs text-ink">
+                      <option value="" disabled>Report on a saved version…</option>
+                      {options.map((v) => (
+                        <option key={v.hash} value={v.hash}>
+                          {v.name}{v.data_is_current ? '' : ' · stale data'}
+                          {v.auc_test ? ` · AUC ${v.auc_test.toFixed(3)}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <button onClick={() => nav(`/${u.portfolio}/data`)}
+                      className="w-full rounded-ctl bg-accent px-3 py-1.5 text-xs font-semibold text-white">
+                      Build a model on this book
+                    </button>
+                  )}
+                  <p className="mt-1 text-micro text-ink-muted">
+                    {options.length
+                      ? 'Or promote a champion on its Versions page to cover it permanently.'
+                      : 'Fit PD and LGD, save, then promote a champion.'}
+                  </p>
                 </div>
               </div>
             )
@@ -579,7 +691,7 @@ function Row({ k, v }: { k: string; v: string }) {
  *  other affordance stays live behind it — the navigation works, so it is
  *  skippable by construction.
  */
-function Welcome({ onSkip }: { onSkip: () => void }) {
+function Welcome() {
   const nav = useNavigate()
   const books = useQuery({ queryKey: ['portfolios'], queryFn: api.portfolios })
   const steps: [string, string][] = [
@@ -640,16 +752,10 @@ function Welcome({ onSkip }: { onSkip: () => void }) {
         </p>
       </div>
 
-      <div className="mt-10 border-t border-hairline pt-4">
-        <button onClick={onSkip}
-          className="text-xs text-ink-muted underline-offset-2 hover:text-ink hover:underline">
-          Skip this and run the roll-up on documented default specifications
-        </button>
-        <p className="mt-1 text-micro text-ink-muted">
-          Fits and projects all three books on their documented defaults. The
-          first run computes in full and takes a few minutes.
-        </p>
-      </div>
+      <p className="mt-10 border-t border-hairline pt-4 text-xs text-ink-muted">
+        This page becomes the portfolio roll-up as books gain promoted models.
+        Nothing stands in for a model you have not built.
+      </p>
     </div>
   )
 }

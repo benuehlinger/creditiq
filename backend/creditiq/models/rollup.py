@@ -113,6 +113,10 @@ class RollUp:
     selection: dict = field(default_factory=dict)
     # Every saved version per book, so the selector needs no second request.
     available: dict = field(default_factory=dict)
+    # Books with no promoted (or selected) model. They contribute NOTHING to
+    # the totals — no documented default stands in — and the page prompts for
+    # the fit-and-promote that would cover them.
+    not_covered: list = field(default_factory=list)
 
 
 def spec_for(portfolio: str,
@@ -180,9 +184,43 @@ def run(scenarios: list[str] | None = None, with_tornado: bool = True,
     concentration: dict[str, list[dict]] = {}
     tornado: list[dict] = []
 
+    not_covered: list[dict] = []
     for portfolio in store.available():
         ts = time.perf_counter()
         spec, source, version = spec_for(portfolio, selection.get(portfolio))
+        pf = store.load(portfolio)
+
+        # Concentration is a property of the BOOK, not of any model, so every
+        # book gets it whether or not a model covers it.
+        book = ECL._as_of_frame(store.analysis_frame(portfolio),
+                                pf.panel["performance_date"].max())
+        band = _bands(book, portfolio)
+        # Bands are ORDINAL — "<620" then "620-659" and so on. Grouping on the
+        # string sorts them alphabetically, which puts "<620" last and makes the
+        # chart unreadable. Keep the categorical order the cut produced.
+        order = (list(band.cat.categories) if hasattr(band, "cat")
+                 else sorted(band.astype(str).unique()))
+        g = pd.DataFrame({"band": band.astype(str),
+                          "exposure": book["current_balance"].to_numpy(float)})
+        sums = g.groupby("band")["exposure"].sum()
+        tot = float(sums.sum()) or 1.0
+        concentration[portfolio] = [
+            {"band": str(b), "exposure": float(sums.get(str(b), 0.0)),
+             "share": float(sums.get(str(b), 0.0) / tot)}
+            for b in order if str(b) in sums.index]
+
+        if source == "default":
+            # No documented default stands in. The book is reported as not
+            # covered, with enough on it for the page to prompt the fix.
+            not_covered.append({
+                "portfolio": portfolio, "label": pf.spec.label,
+                "n_accounts": int(len(book)),
+                "exposure": float(book["current_balance"].sum()),
+                "n_versions": len(vstore.list_all(portfolio)),
+            })
+            timings[portfolio] = round(time.perf_counter() - ts, 2)
+            continue
+
         sr = SS.run(spec, scenarios=scenarios)
         # A macro term fitted against its economic prior is a finding about the
         # specification, and this page is where the number it produces is read.
@@ -194,13 +232,12 @@ def run(scenarios: list[str] | None = None, with_tornado: bool = True,
                  if c.name.startswith("mev:")
                  and priors.get(c.name[4:].split()[0]) is not None
                  and priors[c.name[4:].split()[0]] != (1 if c.estimate > 0 else -1)]
-        pf = store.load(portfolio)
         champ = vstore.champion(portfolio)
 
         rows.append({
             "portfolio": portfolio, "label": pf.spec.label,
             "accent_slot": pf.spec.accent_slot,
-            "model_name": version.name if version else "documented default",
+            "model_name": version.name if version else spec.hash(),
             "model_hash": spec.hash(),
             "version_hash": version.hash if version else None,
             "source": source,
@@ -231,23 +268,6 @@ def run(scenarios: list[str] | None = None, with_tornado: bool = True,
             per_month.setdefault(k, {})[portfolio] = [m["cumulative_loss"] for m in v.monthly]
             per_month[k].setdefault("_months", [m["month"] for m in v.monthly])
 
-        # concentration on the book as it stands
-        book = ECL._as_of_frame(store.analysis_frame(portfolio),
-                                pf.panel["performance_date"].max())
-        band = _bands(book, portfolio)
-        # Bands are ORDINAL — "<620" then "620-659" and so on. Grouping on the
-        # string sorts them alphabetically, which puts "<620" last and makes the
-        # chart unreadable. Keep the categorical order the cut produced.
-        order = (list(band.cat.categories) if hasattr(band, "cat")
-                 else sorted(band.astype(str).unique()))
-        g = pd.DataFrame({"band": band.astype(str),
-                          "exposure": book["current_balance"].to_numpy(float)})
-        sums = g.groupby("band")["exposure"].sum()
-        tot = float(sums.sum()) or 1.0
-        concentration[portfolio] = [
-            {"band": str(b), "exposure": float(sums.get(str(b), 0.0)),
-             "share": float(sums.get(str(b), 0.0) / tot)}
-            for b in order if str(b) in sums.index]
         timings[portfolio] = round(time.perf_counter() - ts, 2)
 
         if with_tornado:
@@ -270,23 +290,24 @@ def run(scenarios: list[str] | None = None, with_tornado: bool = True,
                             **{p: d[p][i] for p in d if p != "_months" and i < len(d[p])}})
 
     timings["total"] = round(time.perf_counter() - t0, 2)
-    # Adopted means every book is on its champion, or on the documented default
-    # where none has been promoted. Anything else is a hand-picked set.
-    adopted = all(r["source"] in ("champion", "default") for r in rows)
+    # Adopted means every covered book is on its champion. A book with no
+    # champion is simply not covered — nothing stands in for it.
+    adopted = all(r["source"] == "champion" for r in rows)
     available = {
-        r["portfolio"]: [
+        key_: [
             {"hash": v.hash, "name": v.name, "status": v.status,
              "created_at": v.created_at, "starred": v.starred,
              "auc_test": v.metrics.get("auc_test"),
              "n_variables": v.metrics.get("n_variables"),
              "data_is_current": v.data_is_current()}
-            for v in vstore.list_all(r["portfolio"])
-        ] for r in rows
+            for v in vstore.list_all(key_)
+        ] for key_ in store.available()
     }
     out = RollUp(scenarios=scenarios, portfolios=rows, totals=totals, monthly=monthly,
                  tornado=sorted(tornado, key=lambda r: -abs(r["delta_ecl"])),
                  concentration=concentration, timings=timings,
-                 is_adopted=adopted, selection=dict(selection), available=available)
+                 is_adopted=adopted, selection=dict(selection), available=available,
+                 not_covered=not_covered)
     _CACHE[key] = out
     return out
 

@@ -1720,8 +1720,9 @@ def rollup(tornado: bool = True, select: str = Query("")):
     """Every book on one page.
 
     `select` is `portfolio:version_hash` pairs and overrides which saved model a
-    book is reported on. Absent, each book uses its champion, and a book with no
-    champion uses the documented default. A selection that differs from the
+    book is reported on. Absent, each book uses its champion; a book with
+    neither champion nor selection contributes NOTHING and is reported in
+    `not_covered` — no default stands in. A selection that differs from the
     champions is an exploratory figure, not the adopted position, and the
     response says which it is rather than leaving it to be read off a dropdown.
     """
@@ -1734,10 +1735,11 @@ def rollup(tornado: bool = True, select: str = Query("")):
         "concentration": r.concentration, "timings": r.timings,
         "is_adopted": r.is_adopted, "selection": r.selection,
         "available": r.available,
+        "not_covered": r.not_covered,
         "champions": {k: (v.to_dict() if v else None) for k, v in champs.items()},
-        "note": ("Each book is projected with its promoted champion model where one "
-                 "exists, and with a documented default specification where none "
-                 "does. The source is shown per portfolio."),
+        "note": ("Each book is projected with its promoted champion, or with the "
+                 "saved version selected for it. A book with neither contributes "
+                 "nothing; no default stands in."),
     })
 
 

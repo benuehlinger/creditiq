@@ -810,6 +810,10 @@ export interface RollUpResponse {
   tornado: { portfolio: string; mev: string; prior: number; direction: string
              base_ecl: number; shocked_ecl: number; delta_ecl: number; delta_pct: number }[]
   concentration: Record<string, { band: string; exposure: number; share: number }[]>
+  /** Books with no promoted or selected model. They contribute nothing to the
+   *  totals — the page prompts for the fit-and-promote that would cover them. */
+  not_covered?: { portfolio: string; label: string; n_accounts: number
+                  exposure: number; n_versions: number }[]
   champions: Record<string, VersionRecord | null>
   timings: Record<string, number>
   note: string

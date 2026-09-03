@@ -2416,3 +2416,14 @@ refreshed them when they were missing, so numbers recorded against a
 previous panel survived into the band. Two regression tests hold the
 mechanism: a touched build report fires every dependent exactly once, and
 the model-service caches must be on the dependent list.
+
+## The scenario page's macro paths joined the row table
+
+The scenario stage still showed its macro paths as a grid of tiles, which
+was tuned for three-across: two terms left a hole, one term rattled in a
+wide card. It now uses the same row-per-term table the roll-up uses,
+without the book columns — the scenario page shows one model, so
+membership is not a question there. Each path gets the full card width
+(over 1000px against the tile's ~300), the figures land in aligned
+columns, and the exhibit is the same shape at any term count. The tile
+grid had no remaining callers and was deleted.

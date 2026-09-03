@@ -21,6 +21,7 @@ from ..analysis.rates import annualize
 from ..data.build import PLANTED_NOTES
 from ..data.portfolios import PORTFOLIOS
 from ..mev import panel as mev_panel
+from ..models import runcache
 from ..mev import panel as mevpanel
 from ..mev import scenarios as scen
 from ..mev.registry import PORTFOLIO_MEVS, by_key
@@ -105,6 +106,7 @@ def portfolios():
 
 
 @lru_cache(maxsize=8)
+@runcache.disk_through("health")
 def _health(key: str) -> dict:
     """Structural checks and a column profile for the whole panel.
 
@@ -288,6 +290,7 @@ def _candidates(key: str) -> list[str]:
 
 
 @lru_cache(maxsize=8)
+@runcache.disk_through("screen")
 def _screen_all(key: str) -> dict:
     df, sampled = store.screening_frame(key)
     spec = PORTFOLIOS[key]

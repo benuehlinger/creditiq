@@ -2461,3 +2461,29 @@ is one quiet line stating that the path was checked and almost none of the
 number rests on extrapolation — a finding of safety. The amber card is
 reserved for a material share, and its title now says what it means in
 plain words: part of this scenario is beyond the model's experience.
+
+## The skeletons mostly died: expensive reads joined the disk layer
+
+The PD workbench's full-page skeleton was the variable screening being
+recomputed — eleven seconds on the mortgage book — on the first visit after
+every server restart, and the development loop restarts the server on every
+code edit. The Data surface's profile (7.6s) and the macro library had the
+same disease. All three are per-portfolio, derived, read-only computations,
+so they now stack a disk layer under their memory cache through one
+decorator (`runcache.disk_through`): memory answers first, disk answers
+across restarts, a miss on both computes and saves. Measured across a
+restart: screening 11.1s to 0.0s, profile 7.6s to 0.0s.
+
+On the frontend, the query cache holds results for an hour instead of five
+minutes — leaving a surface for six minutes and returning showed the
+skeleton for data that could not have changed. Both moves are safe for the
+same reason: the data-fingerprint watchdog reloads the app when the data
+actually changes, and the disk keys carry the fingerprint.
+
+The one tradeoff, inherited from the fitted-run cache and now stated in
+the decorator's docstring: the key is the DATA's identity, so a change to
+the computation's own code serves the old result until the data is rebuilt
+or data/cache/ is deleted (`make reset` does both). Acceptable in a
+repository whose analytics are stable; the person it can surprise is the
+developer editing the screening logic itself, who knows where the cache
+lives.

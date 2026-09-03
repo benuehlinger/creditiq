@@ -46,6 +46,7 @@ from scipy import stats
 from statsmodels.tsa.stattools import adfuller
 
 from ..models.design import apply_mev_transform
+from ..models.runcache import disk_through
 
 # The transforms a scenario can carry forward. Every one of these is implemented
 # in `apply_mev_transform`, which both the fit and the projection go through.
@@ -214,6 +215,7 @@ def _correlate_loan_level(x: pd.Series, rows: pd.DataFrame) -> dict:
 
 
 @lru_cache(maxsize=8)
+@disk_through("mevlib")
 def library(portfolio: str) -> dict:
     """Every candidate term, with its stationarity test and both correlations."""
     from ..data.portfolios import PORTFOLIOS

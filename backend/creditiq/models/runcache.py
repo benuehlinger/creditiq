@@ -25,6 +25,7 @@ trust boundary.
 """
 from __future__ import annotations
 
+import functools
 import pickle
 from pathlib import Path
 
@@ -86,3 +87,31 @@ def _prune_oldest(d: Path) -> None:
     files = sorted(d.glob("*.pkl"), key=lambda p: p.stat().st_mtime)
     for f in files[:-MAX_PER_PORTFOLIO]:
         f.unlink(missing_ok=True)
+
+
+def disk_through(kind: str):
+    """Give a per-portfolio derived computation the disk layer.
+
+    Stack UNDER an lru_cache: memory answers first, this layer answers across
+    process restarts, and a miss on both computes and saves. The development
+    loop restarts the server on every code edit, so without this the expensive
+    read-only surfaces — screening, the panel profile, the macro library —
+    recomputed for seconds on every first visit after every edit, which the
+    user met as a full-page skeleton.
+
+    The one tradeoff, accepted for the fitted runs already: the key is the
+    DATA's fingerprint, so a change to the computation's own code keeps
+    serving the old result until the data is rebuilt or data/cache/ is
+    deleted. `make reset` clears it.
+    """
+    def deco(fn):
+        @functools.wraps(fn)
+        def wrapped(portfolio: str):
+            prev = load(portfolio, kind, "all")
+            if prev is not None:
+                return prev
+            out = fn(portfolio)
+            save(portfolio, kind, "all", out)
+            return out
+        return wrapped
+    return deco

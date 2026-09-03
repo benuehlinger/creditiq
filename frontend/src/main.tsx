@@ -15,6 +15,12 @@ const qc = new QueryClient({
       // on focus. This also keeps a live demo from flickering when the presenter
       // alt-tabs to their notes.
       staleTime: Infinity,
+      // An hour, not the five-minute default: leaving a surface for six
+      // minutes and coming back showed the skeleton again for data that could
+      // not have changed. The data-fingerprint watchdog reloads the app when
+      // the data DOES change, which is what makes holding results this long
+      // safe.
+      gcTime: 60 * 60_000,
       refetchOnWindowFocus: false,
       retry: 1,
     },

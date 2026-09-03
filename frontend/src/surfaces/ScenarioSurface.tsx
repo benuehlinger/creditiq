@@ -378,10 +378,16 @@ export default function ScenarioSurface() {
             )}
           </Card>
 
+          {/* The paths card shares its row with the two assumption cards
+              rather than owning a full-width band: a two-term table in a
+              1500px card was mostly card. The three of them are one story —
+              what the projection consumes, and the exposure and severity
+              assumptions it consumes it with. */}
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
           <StressedMevs terms={mevTerms}
             subtitle={`${mevTerms.length} macro term${mevTerms.length === 1 ? '' : 's'} in the fitted specification`} />
 
-          <div className="grid gap-3 lg:grid-cols-2">
+          <div className="space-y-3">
             <Card>
               <CardHead title="Exposure at default" subtitle={`Method: ${res.ead.method}`}
                 caption="The exposure assumption applied to every account, and the parameters it was estimated from. It is carried into each ECL figure on this page." />
@@ -408,6 +414,7 @@ export default function ScenarioSurface() {
                 {res.lgd.mean_workout_months.toFixed(1)} months
               </div>
             </Card>
+          </div>
           </div>
         </>
       )}

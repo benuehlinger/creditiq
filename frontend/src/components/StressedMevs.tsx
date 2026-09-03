@@ -139,7 +139,7 @@ export function MevPathRows({ terms, books = [], membership = {} }: {
   membership?: Record<string, string[]>
 }) {
   const { charts, isLoading } = useMevCharts(terms)
-  const cols = `minmax(160px,220px)${books.length ? ` repeat(${books.length}, 3.4rem)` : ''} minmax(0,1fr) repeat(3, 4.4rem)`
+  const cols = `minmax(140px,190px)${books.length ? ` repeat(${books.length}, 3.4rem)` : ''} minmax(0,1fr) repeat(3, 3.9rem)`
 
   if (isLoading) {
     return <div className="space-y-3 p-4">
@@ -153,7 +153,7 @@ export function MevPathRows({ terms, books = [], membership = {} }: {
   }
   return (
     <div className="overflow-x-auto">
-      <div className={`px-4 pb-3 ${books.length ? "min-w-[860px] max-w-[1160px]" : "min-w-[720px] max-w-[1040px]"}`}>
+      <div className={`px-4 pb-3 ${books.length ? "min-w-[860px]" : "min-w-[560px]"}`}>
         <div className="grid items-end gap-x-3 border-b border-hairline pb-1.5 pt-2.5 text-micro uppercase tracking-wider text-ink-muted"
              style={{ gridTemplateColumns: cols }}>
           <span>Macro term</span>

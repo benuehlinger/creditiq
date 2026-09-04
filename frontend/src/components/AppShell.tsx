@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { api } from '../lib/api'
+import { api, isPortfolioKey } from '../lib/api'
 import { useUi } from '../lib/store'
 import { STATE_COLOUR, rollUpSummary, useProgress } from '../lib/progress'
 import PortfolioSwitcher from './PortfolioSwitcher'
@@ -69,6 +69,24 @@ export default function AppShell() {
     if (init.data?.ready === false) sawNoData.current = true
     if (init.data?.ready && sawNoData.current) window.location.reload()
   }, [init.data?.ready])
+
+  // A loaded-version marker in the browser can outlive the version itself —
+  // a different machine, a reset, a deleted file. Carrying the stale ID
+  // produced 404 retries and phantom "saved model" state. When the book's
+  // version list is known and the marker is not in it, drop the marker: the
+  // workspace falls back to a plain draft.
+  const pkey = isPortfolioKey(portfolio) ? portfolio : null
+  const loadedMark = useUi((s) => (pkey ? s.loaded[pkey] : null))
+  const setLoadedMark = useUi((s) => s.setLoaded)
+  const vlist = useQuery({ queryKey: ['versions', portfolio],
+                           queryFn: () => api.versions(portfolio),
+                           enabled: !!pkey && !!loadedMark })
+  useEffect(() => {
+    if (!pkey || !loadedMark || !vlist.data) return
+    if (!vlist.data.some((v) => v.hash === loadedMark.hash)) {
+      setLoadedMark(pkey, null)
+    }
+  }, [pkey, loadedMark?.hash, vlist.data])
 
   // The portfolio accent is set on <html>, so every chart, badge and focus ring
   // in the workspace follows the book being worked on without threading a prop.

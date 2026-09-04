@@ -219,6 +219,22 @@ def _content_digest(panel) -> str:
 # "step 3 of N" can know N before starting: per book, one draw step, six
 # simulation ticks (one per three years of an eighteen-year panel), one
 # severity step and one write step; then the truth document and the report.
+def _atomic(path, write) -> None:
+    """Write via a sibling temp file, then atomically swap it into place.
+
+    The panels are hundreds of megabytes and a server may be READING the same
+    path while a rebuild writes it — a reader hitting a half-written parquet
+    dies with "magic bytes not found in footer". os.replace is atomic on the
+    same filesystem, so a reader sees the old complete file or the new
+    complete file, never a torso. The build report is written last and
+    atomically, which makes it a true build-complete marker for the store's
+    freshness stamp."""
+    import os
+    tmp = path.with_name(path.name + ".tmp")
+    write(tmp)
+    os.replace(tmp, path)
+
+
 BUILD_TOTAL_STEPS = len(PORTFOLIOS) * 9 + 2
 
 
@@ -235,10 +251,14 @@ def build(verbose: bool = True, progress=None) -> dict:
         tick(f"Assembling {spec.label} severities and outcomes")
         panel, accounts = assemble(res, seed=SEEDS[key])
         tick(f"Writing the {spec.label} panel: {len(panel):,} rows")
-        panel.to_parquet(OUT / f"{key}_panel.parquet", index=False)
-        accounts.to_parquet(OUT / f"{key}_accounts.parquet", index=False)
-        panel.head(5_000).to_csv(OUT / f"{key}_sample.csv", index=False)
-        (OUT / f"{key}_dictionary.md").write_text(_dictionary(spec, panel, accounts))
+        _atomic(OUT / f"{key}_panel.parquet",
+                lambda p: panel.to_parquet(p, index=False))
+        _atomic(OUT / f"{key}_accounts.parquet",
+                lambda p: accounts.to_parquet(p, index=False))
+        _atomic(OUT / f"{key}_sample.csv",
+                lambda p: panel.head(5_000).to_csv(p, index=False))
+        _atomic(OUT / f"{key}_dictionary.md",
+                lambda p: p.write_text(_dictionary(spec, panel, accounts)))
         report[key] = {
             "rows": len(panel), "accounts": len(accounts),
             "defaults": int(panel.default_flag.sum()),
@@ -259,9 +279,12 @@ def build(verbose: bool = True, progress=None) -> dict:
             print(f"  {key:9s} {r['rows']:>9,} rows  {r['accounts']:>6,} accounts  "
                   f"{r['defaults']:>5,} defaults  {r['annual_default_rate_pct']:.2f}%/yr")
     tick("Writing the generative truth document")
-    (DOCS / "GENERATIVE_TRUTH.md").write_text(truth_doc())
+    _atomic(DOCS / "GENERATIVE_TRUTH.md", lambda p: p.write_text(truth_doc()))
     tick("Writing the build report")
-    (OUT / "build_report.json").write_text(json.dumps(report, indent=2))
+    # Last, and atomic: this file is the store's freshness stamp, so it must
+    # not say "new data" until every panel is fully on disk.
+    _atomic(OUT / "build_report.json",
+            lambda p: p.write_text(json.dumps(report, indent=2)))
     if verbose:
         print(f"  -> {OUT}")
         print(f"  -> {DOCS / 'GENERATIVE_TRUTH.md'}")

@@ -312,11 +312,20 @@ def test_stressed_default_rates_never_fall_below_baseline():
                          [MevSpec(m) for m in mevs],
                          lgd=LgdSpec.default_for(portfolio))
         r = SS.run(spec)
-        base = [m["marginal_pd"] for m in r.results["baseline"].monthly]
-        sev = [m["marginal_pd"] for m in r.results["severely_adverse"].monthly]
+        # The CONDITIONAL hazard, with survival divided out. Marginal PD is
+        # hazard times survival, and a harsher scenario depletes the pool
+        # faster — so late-month marginal PD can dip slightly below baseline
+        # through pure attrition arithmetic even when the hazard responds in
+        # the right direction every month. The economic claim under test is
+        # about the hazard.
+        def conditional(res):
+            return [m["marginal_pd"] / max(m["survival"], 1e-12)
+                    for m in res.monthly]
+        base = conditional(r.results["baseline"])
+        sev = conditional(r.results["severely_adverse"])
         worst = min(s / max(b, 1e-12) for b, s in zip(base, sev))
         assert worst > 0.95, (
-            f"{portfolio}: stressed marginal PD falls to {worst:.2f}x baseline")
+            f"{portfolio}: stressed conditional PD falls to {worst:.2f}x baseline")
 
 
 def test_no_default_specification_ships_with_a_sign_flip():

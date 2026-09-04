@@ -1,0 +1,158 @@
+{
+  "hash": "08f17de451521747",
+  "name": "tidy-keystone-68",
+  "portfolio": "mortgage",
+  "created_at": "2026-09-04T13:15:17+00:00",
+  "spec": {
+    "portfolio": "mortgage",
+    "variables": [
+      {
+        "column": "current_ltv",
+        "treatment": "bins",
+        "edges": [
+          89.5836296081543,
+          98.11874389648438
+        ],
+        "groups": null,
+        "knots": null,
+        "n_knots": 4,
+        "max_bins": 3,
+        "shrinkage": 0.0
+      },
+      {
+        "column": "months_on_book",
+        "treatment": "spline",
+        "edges": null,
+        "groups": null,
+        "knots": [
+          6,
+          43,
+          116,
+          173
+        ],
+        "n_knots": 4,
+        "max_bins": 8,
+        "shrinkage": 0.0
+      },
+      {
+        "column": "fico_orig",
+        "treatment": "bins",
+        "edges": [
+          691.5,
+          705.5,
+          736.5,
+          767.5
+        ],
+        "groups": null,
+        "knots": null,
+        "n_knots": 4,
+        "max_bins": 5,
+        "shrinkage": 0.0
+      }
+    ],
+    "mevs": [
+      {
+        "key": "unemployment_rate",
+        "transform": "level",
+        "lag_months": 0
+      }
+    ],
+    "estimator": "logistic",
+    "regularization": 1.0,
+    "seasoning_spline": true,
+    "vintage_effect": false,
+    "sample": {
+      "test_fraction": 0.3,
+      "oot_from": "2023-01-01",
+      "seed": 42,
+      "downsample_rows": null
+    },
+    "lgd": {
+      "portfolio": "mortgage",
+      "drivers": [
+        "cltv",
+        "hpi_yoy",
+        "second_lien_pct"
+      ],
+      "categoricals": [],
+      "treatments": {
+        "months_on_book": "spline"
+      },
+      "edges": {},
+      "knots": {
+        "months_on_book": [
+          17,
+          34,
+          91.0273381294961
+        ]
+      },
+      "n_knots": 3,
+      "max_bins": 5
+    },
+    "target_column": "default_flag",
+    "label": null,
+    "parent_hash": null,
+    "notes": "",
+    "hash": "08f17de451521747"
+  },
+  "metrics": {
+    "auc_test": 0.8006997866672158,
+    "auc_oot": 0.6703595275013591,
+    "ks_test": 0.45091270095646024,
+    "gini_test": 0.6013995733344315,
+    "log_loss_test": 0.011493872026036436,
+    "brier_test": 0.0017629375855042263,
+    "calibration_error": 0.00015012030722055103,
+    "mcfadden_r2": 0.12142939960118937,
+    "pd_oot_rmse_pp": 0.2295651355814716,
+    "pd_oot_bias_pp": 0.033028959689733926,
+    "pd_oot_coverage": 0.8333333333333334,
+    "n_variables": 3,
+    "n_mevs": 1,
+    "estimator": "logistic",
+    "coefficients": {
+      "intercept": -7.228261491578604,
+      "current_ltv=[89.6, 98.1)": 0.20306325387677465,
+      "current_ltv=>= 98.1": 0.30804328099094896,
+      "months_on_book_basis1": -0.15337963635493837,
+      "months_on_book_basis2": -1.4865260460536032,
+      "months_on_book_basis3": -0.12554298418239163,
+      "months_on_book_basis4": 0.2111484247660839,
+      "months_on_book_basis5": 0.18301747350995287,
+      "fico_orig=[692, 706)": -0.027761998489477004,
+      "fico_orig=[706, 736)": -0.12338739926523622,
+      "fico_orig=[736, 768)": -0.25266048454517515,
+      "fico_orig=>= 768": -0.4797373512870957,
+      "mev:unemployment_rate": 0.3262195707615927
+    },
+    "lgd_bias": -0.003907374627782623,
+    "lgd_rmse": 0.1794630439912955,
+    "lgd_mae": 0.14082926852035654,
+    "lgd_deviance_r2": 0.04705895528978121,
+    "lgd_spearman": 0.345464644191083,
+    "lgd_mean_predicted": 0.1428080801356584,
+    "lgd_mean_actual": 0.14671545476344103,
+    "lgd_n": 565,
+    "lgd_basis": "out of time",
+    "lgd_basis_note": "defaults from 2022-01-01",
+    "n_lgd_drivers": 3,
+    "lgd_hash": "84aa7c3736f9",
+    "pd_hash": "54668300eb09"
+  },
+  "ecl": {
+    "ecl_baseline": 28107633.719119016,
+    "ecl_severely_adverse": 177582110.4507287,
+    "ecl_bps_baseline": 65.22121674533851,
+    "ecl_bps_severely_adverse": 412.06319363423955,
+    "weighted_ecl": 65476252.90202144
+  },
+  "status": "challenger",
+  "starred": false,
+  "tags": [],
+  "notes": "",
+  "parent_hash": null,
+  "replaced_hash": null,
+  "author": "CreditIQ",
+  "data_fingerprint": "f49a9203f48e",
+  "schema_version": 2
+}

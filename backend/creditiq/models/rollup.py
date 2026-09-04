@@ -32,33 +32,14 @@ from .spec import LgdSpec, MevSpec, ModelSpec, VariableSpec
 FALLBACK_SPECS: dict[str, tuple[list[str], list[str]]] = {
     "consumer": (["fico_orig", "revolving_utilization", "dti", "prior_delinq_count"],
                  ["unemployment_rate", "real_disp_income_growth"]),
-    # NOTE the absence of hpi_yoy. Current LTV is computed FROM the house-price
-    # path, so including a separate HPI growth term alongside it is double
-    # counting: the residual term picks up a vintage confound and fits with the
-    # wrong sign (+0.399 against a negative prior). The platform flags that as a
-    # sign flip, and the fix is to drop the redundant term, not to constrain it —
-    # the house-price channel still reaches PD through current LTV, which the
-    # projection re-computes on the scenario's own HPI path.
-    # Unemployment ALONE, deliberately. Two macro terms were tried and both had
-    # to go:
-    #
-    #   hpi_yoy fits +0.39 alongside current LTV and +0.12 without it. The second
-    #   one is the interesting number: it is not simple double counting. House
-    #   price growth peaked in 2021-22 at the same moment the book filled with
-    #   young, high-LTV originations climbing the seasoning ramp, so the MARGINAL
-    #   association between price growth and default is positive even though the
-    #   causal effect is negative. That is a composition confound, and the honest
-    #   answer is to let the house-price channel reach PD through current LTV —
-    #   which the projection re-computes on the scenario's own HPI path — rather
-    #   than to force a sign on a term that is measuring something else.
-    #
-    #   mortgage_rate fits -0.14 and drags unemployment to -0.01 with it. In the
-    #   generating process it moves prepayment, not default, so there is nothing
-    #   for it to find.
-    #
-    # With unemployment alone the coefficient is +0.045, the sign economics
-    # predicts, and mortgage ECL still triples under severely adverse through the
-    # LTV channel.
+    # HISTORY: an earlier projection re-computed current LTV along the
+    # scenario's house-price path, so these specs leaned on that hidden
+    # channel and carried no HPI term. The transmission contract now says
+    # macro terms ONLY — internal variables are frozen at the reporting date
+    # — so a spec that should respond to house prices must carry an HPI term
+    # explicitly. These fallback specs are no longer user-reachable (an
+    # uncovered book prompts instead of defaulting) and serve the calibration
+    # harness only.
     "mortgage": (["current_ltv", "fico_orig", "dti", "occupancy"],
                  ["unemployment_rate"]),
     # NOTE the absence of bbb_yield, for the same reason hpi_yoy is absent from

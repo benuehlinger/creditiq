@@ -96,29 +96,19 @@ def project(spec: ModelSpec, fit_result, df: pd.DataFrame, mev_path: pd.DataFram
         book["remaining_term"].to_numpy()[rep] - tgrid, 0)
     proj["current_balance"] = ead_path.reshape(-1)
 
-    # dynamic drivers follow the scenario's own macro path
+    # THE TRANSMISSION CONTRACT: the scenario reaches the model through its
+    # MACRO TERMS ONLY. Internal variables are frozen at the reporting date.
+    #
+    # An earlier version re-computed current LTV along the scenario's
+    # house-price path and DSCR along the commercial property index, so a
+    # model with no macro term still moved under stress — through a channel
+    # no screen disclosed. That is economically arguable, but it made the
+    # stress transmission unauditable: the macro-paths panel claimed to show
+    # everything the projection consumes and did not. Removed on the model
+    # owner's instruction. A model that should respond to house prices says
+    # so in its specification, with an HPI term, where the response is
+    # visible, attributable and priced by a coefficient the analyst fitted.
     idx = pd.DatetimeIndex(proj["performance_date"])
-    if "current_ltv" in proj.columns and "hpi" in mev_path.columns:
-        hpi_now = mev_path["hpi"].reindex(idx).to_numpy(float)
-        hpi_ref = float(mev_path["hpi"].reindex([as_of]).iloc[0])
-        # value moves with the scenario HPI; balance moves on the amortization path
-        val = (book["current_balance"].to_numpy()[rep]
-               / np.maximum(book["current_ltv"].to_numpy()[rep], 1e-6) * 100.0)
-        proj["current_ltv"] = np.clip(
-            100.0 * proj["current_balance"].to_numpy()
-            / np.maximum(val * (hpi_now / hpi_ref), 1.0), 1.0, 300.0)
-        if "cltv" in proj.columns:
-            proj["cltv"] = proj["current_ltv"] + (
-                book["cltv"].to_numpy()[rep] - book["current_ltv"].to_numpy()[rep])
-    if "dscr_reported" in proj.columns and "cre_price_index" in mev_path.columns:
-        ix = mev_path["cre_price_index"].reindex(idx).to_numpy(float)
-        ref = float(mev_path["cre_price_index"].reindex([as_of]).iloc[0])
-        proj["dscr_reported"] = np.clip(
-            book["dscr_reported"].to_numpy()[rep] * (ix / ref) ** 0.8, 0.05, 6.0)
-        if "current_ltv" in proj.columns:
-            proj["current_ltv"] = np.clip(
-                book["current_ltv"].to_numpy()[rep] * (ref / np.maximum(ix, 1e-6)),
-                1.0, 300.0)
 
     # conditional PD from the fitted hazard, on the SCENARIO macro path
     des = D.build(proj, spec, woe_maps=fit_result.woe_maps, means=fit_result.means,

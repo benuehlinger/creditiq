@@ -2637,3 +2637,26 @@ The proof is measured, not asserted: after one warm loop, a second full
 circuit of all six stages issues zero API calls. Switching tabs, models,
 pages — lookups only. Computation happens when a specification changes
 and the user says fit.
+
+## Stress runs through macro terms only — the hidden collateral channel is gone
+
+The projection used to re-compute current LTV along the scenario's
+house-price path and DSCR along the commercial property index, so a model
+with NO macro term still moved under stress — through a channel no screen
+disclosed. The macro-paths panel claimed to show everything the projection
+consumes and did not; the attribution bridge showed a PD contribution the
+specification could not explain; and the channel was a large share of the
+sensitivity that kept reading as excessive. Removed on the model owner's
+instruction. The transmission contract is now one sentence: THE SCENARIO
+REACHES THE MODEL THROUGH ITS MACRO TERMS ONLY; internal variables are
+frozen at the reporting date. A model that should respond to house prices
+says so in its specification, with an HPI term, where the response is
+visible, attributable and priced by a fitted coefficient.
+
+Verified with a controlled pair: mortgage with current LTV and no macro
+term now shows a bridge PD step of exactly zero; adding one unemployment
+term moves it through that term alone. One test updated with the change:
+the never-below-baseline check now tests the CONDITIONAL hazard, because
+marginal PD is hazard times survival and a harsher scenario depletes the
+pool faster — a late-month marginal dip through attrition arithmetic is
+not a wrong-signed response.

@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api, type PortfolioKey, type Treatment } from '../lib/api'
 import { Card, CardHead, Skeleton, StatusPill, Notice } from '../components/ui'
@@ -11,7 +12,7 @@ import TreatmentControl from '../components/TreatmentControl'
 import { useUi } from '../lib/store'
 import { isDiscretised } from '../lib/api'
 import { num, pct } from '../lib/format'
-import { diverging, mode } from '../design/tokens'
+import { diverging, mode, sequential } from '../design/tokens'
 
 /**
  * One variable, in full: its leakage check, its binning or treatment, its
@@ -66,6 +67,11 @@ export default function VariableDetail({ portfolio, column }: {
     queryFn: () => api.binning(portfolio, column, edges, maxBins, nKnots),
     placeholderData: (prev) => prev,
   })
+  // Which bin is being read closely. Clicking a bar in the chart highlights
+  // its row in the bin detail and scrolls it into view; clicking a row lights
+  // its bar. Pure view state — it names a bin, never a decision.
+  const [selBin, setSelBin] = useState<string | null>(null)
+  useEffect(() => { setSelBin(null) }, [column])
   // How many bins are ON SCREEN. Everything that reports a bin count reads
   // this, so the header, the stepper and the chart cannot disagree.
   const shownBins = binning.data?.achieved_bins
@@ -91,9 +97,10 @@ export default function VariableDetail({ portfolio, column }: {
             subtitle={isDiscretised(treatment)
               ? `${shownBins} bins · ${num(binning.data.n_total)} account-months · ${num(binning.data.n_events)} events`
               : `${num(binning.data.n_total)} account-months · ${num(binning.data.n_events)} events`}
-            caption={isDiscretised(treatment)
-              ? "Bin height is the event rate; fill is the weight of evidence, blue for safer and magenta for riskier. The grey footer band is each bin's share of the population."
-              : undefined}
+            caption={!isDiscretised(treatment) ? undefined
+              : binning.data.kind === 'numeric'
+              ? "Bin height is the default rate; fill is the weight of evidence, blue for safer and magenta for riskier. The grey footer band is each bin's share of the population."
+              : 'Levels with similar risk share a bin. Each bin shows its default rate against the book average, and its log odds distance from the book as weight of evidence.'}
             right={
               <div className="flex items-center gap-3">
                 {/* The natural place to commit: look at the shape, then
@@ -173,11 +180,29 @@ export default function VariableDetail({ portfolio, column }: {
             <>
               {binning.data.kind === 'numeric' && binning.data.domain ? (
                 <BinningEditor result={binning.data} pending={binning.isFetching}
-                               onEdgesChange={(e) => setEdges(e)} />
+                               onEdgesChange={(e) => setEdges(e)}
+                               selected={selBin} onSelect={setSelBin} />
               ) : (
-                <CategoricalNote b={binning.data} />
+                <>
+                  <CardinalityWarning b={binning.data} />
+                  <CategoricalBins b={binning.data} selected={selBin} onSelect={setSelBin} />
+                </>
               )}
               <MonotonicityRow b={binning.data} />
+              {/* The bin table lives WITH the chart it details, and the two
+                  are paired by click: a bar selects its row, a row its bar.
+                  As a separate card at the foot of the page it was a scroll
+                  away from the thing it explained. */}
+              <div className="border-t border-hairline">
+                <div className="flex flex-wrap items-baseline justify-between gap-2 px-4 pb-1 pt-2.5">
+                  <span className="text-xs font-medium text-ink">Bin detail</span>
+                  <span className="text-micro text-ink-muted">
+                    Click a bin above or a row here to pair them.
+                    Bins under 2% of the population produce unstable weights.
+                  </span>
+                </div>
+                <BinTable b={binning.data} selected={selBin} onSelect={setSelBin} />
+              </div>
             </>
           ) : (
             <p className="px-4 pb-2.5 text-micro text-ink-muted">
@@ -205,14 +230,6 @@ export default function VariableDetail({ portfolio, column }: {
                         edges={binning.data.edges ?? undefined} />
         )}
 
-        {isDiscretised(treatment) && (
-        <Card>
-          <CardHead title="Bin detail"
-            subtitle="Weight of evidence and information value contribution per bin"
-            caption="Weight of evidence and its contribution to information value, per bin. Bins holding under 2% of the population produce unstable weights." />
-          <BinTable b={binning.data} />
-        </Card>
-        )}
       </>
     )}
     </div>
@@ -239,20 +256,13 @@ function LeakageBanner({ risk, reason, lift, bin }: {
  *  handful of loans a weight of its own, and the information value comes out
  *  nearly ten times its honest value. The app collapses the tail and shrinks thin
  *  cells automatically, then says so — the analyst should not have to know to
- *  ask. */
-function CategoricalNote({ b }: { b: any }) {
+ *  ask. Renders nothing when neither step applied. */
+function CardinalityWarning({ b }: { b: any }) {
   const collapsed = b.n_levels_raw > b.bins.length
   const shrunk = (b.shrinkage ?? 0) > 0
-  if (!collapsed && !shrunk) {
-    return (
-      <p className="px-4 py-6 text-center text-xs text-ink-muted">
-        Categorical with {b.n_levels_raw} levels, grouped rather than cut, so there
-        are no edges to drag. The grouping is in the table below.
-      </p>
-    )
-  }
+  if (!collapsed && !shrunk) return null
   return (
-    <div className="space-y-2 px-4 py-4">
+    <div className="space-y-2 px-4 py-3">
       <div className="flex flex-wrap items-center gap-2">
         <StatusPill severity="warning">High cardinality</StatusPill>
         <span className="text-xs text-ink">
@@ -267,6 +277,79 @@ function CategoricalNote({ b }: { b: any }) {
         because most of the apparent signal in a wide categorical is the tail
         carrying weights it has not earned. Compare the value above against the
         null floor before selecting this variable.
+      </p>
+    </div>
+  )
+}
+
+/** A categorical variable, read the way a numeric one is: default rate and
+ *  log odds per bin. There are no edges to drag — levels are grouped, not
+ *  cut — so the view is a ranked read-out rather than an editor. Sorted by
+ *  default rate, riskiest first; special bins (missing) sit at the bottom. */
+function CategoricalBins({ b, selected, onSelect }: {
+  b: any; selected: string | null; onSelect: (label: string | null) => void
+}) {
+  const m = mode()
+  const bins = [...b.bins].sort((x: any, y: any) =>
+    (x.is_special ? 1 : 0) - (y.is_special ? 1 : 0)
+    || (y.event_rate || 0) - (x.event_rate || 0))
+  const maxRate = Math.max(...bins.map((x: any) => x.event_rate || 0), 1e-9)
+  const maxWoe = Math.max(...bins.map((x: any) => Math.abs(x.woe) || 0), 1e-9)
+  const bookRate = b.n_total ? b.n_events / b.n_total : 0
+  const grid = 'grid grid-cols-[minmax(0,1.1fr)_56px_minmax(0,1fr)_minmax(0,1fr)] items-center gap-3'
+  return (
+    <div className="px-4 pb-3 pt-1">
+      <div className={`${grid} border-b border-hairline pb-1 text-micro text-ink-muted`}>
+        <span>Bin · grouped levels</span>
+        <span className="text-right">Share</span>
+        <span>Default rate · book average {pct(bookRate * 100, 2)} marked</span>
+        <span>Log odds vs book (weight of evidence)</span>
+      </div>
+      {bins.map((x: any) => (
+        <button key={x.label}
+          onClick={() => onSelect(selected === x.label ? null : x.label)}
+          title={x.levels?.length ? x.levels.join(', ') : x.label}
+          className={`${grid} w-full rounded px-0 py-1.5 text-left ${
+            selected === x.label ? 'bg-accent-soft' : 'hover:bg-sunken'}`}>
+          <span className="truncate font-mono text-tiny text-ink">
+            {x.label}
+            {x.is_special && <span className="ml-1 text-micro text-ink-muted">special</span>}
+          </span>
+          <span className="text-right tnum text-tiny text-ink-muted">
+            {(x.pct_of_total * 100).toFixed(1)}%
+          </span>
+          <span className="flex items-center gap-2">
+            <span className="relative h-2.5 flex-1 rounded-sm bg-sunken">
+              <span className="absolute inset-y-0 left-0 rounded-sm"
+                style={{ width: `${((x.event_rate || 0) / maxRate) * 100}%`,
+                         background: sequential(0.6, m) }} />
+              {/* the book average, so a bin reads as above or below it at a glance */}
+              <span className="absolute inset-y-0 w-px bg-ink-muted"
+                style={{ left: `${Math.min((bookRate / maxRate) * 100, 100)}%` }} />
+            </span>
+            <span className="w-14 text-right tnum text-tiny text-ink-secondary">
+              {pct((x.event_rate || 0) * 100, 2)}
+            </span>
+          </span>
+          <span className="flex items-center gap-2">
+            <span className="relative h-2.5 flex-1 rounded-sm bg-sunken">
+              <span className="absolute inset-y-0 rounded-sm"
+                style={{
+                  left: x.woe < 0 ? `${50 - Math.min(Math.abs(x.woe) / maxWoe, 1) * 50}%` : '50%',
+                  width: `${Math.min(Math.abs(x.woe) / maxWoe, 1) * 50}%`,
+                  background: diverging((x.woe || 0) / maxWoe, m),
+                }} />
+              <span className="absolute inset-y-0 left-1/2 w-px bg-axis" />
+            </span>
+            <span className="w-14 text-right tnum text-tiny text-ink-secondary">
+              {(x.woe || 0).toFixed(3)}
+            </span>
+          </span>
+        </button>
+      ))}
+      <p className="pt-1.5 text-micro text-ink-muted">
+        Weight of evidence is the distance of a bin's log odds from the book
+        average: blue safer than the book, magenta riskier.
       </p>
     </div>
   )
@@ -297,9 +380,17 @@ function MonotonicityRow({ b }: { b: NonNullable<ReturnType<typeof useQuery>['da
   )
 }
 
-function BinTable({ b }: { b: any }) {
+function BinTable({ b, selected, onSelect }: {
+  b: any; selected: string | null; onSelect: (label: string | null) => void
+}) {
   const m = mode()
   const maxWoe = Math.max(...b.bins.map((x: any) => Math.abs(x.woe) || 0), 1e-9)
+  // A bar clicked in the chart selects a row that may be below the fold of
+  // this scroller; bring it into view so the pairing is visible, not implied.
+  const selRef = useRef<HTMLTableRowElement | null>(null)
+  useEffect(() => {
+    selRef.current?.scrollIntoView({ block: 'nearest' })
+  }, [selected])
   return (
     <div className="thin-scroll max-h-[280px] overflow-auto">
       <table className="w-full text-left text-xs">
@@ -308,15 +399,19 @@ function BinTable({ b }: { b: any }) {
             <th className="px-3 py-1.5 font-medium">Bin</th>
             <th className="px-3 py-1.5 text-right font-medium">Rows</th>
             <th className="px-3 py-1.5 text-right font-medium">%</th>
-            <th className="px-3 py-1.5 text-right font-medium">Events</th>
-            <th className="px-3 py-1.5 text-right font-medium">Event rate</th>
+            <th className="px-3 py-1.5 text-right font-medium">Defaults</th>
+            <th className="px-3 py-1.5 text-right font-medium">Default rate</th>
             <th className="px-3 py-1.5 text-right font-medium">WoE</th>
             <th className="px-3 py-1.5 font-medium">IV contribution</th>
           </tr>
         </thead>
         <tbody>
           {b.bins.map((x: any) => (
-            <tr key={x.label} className="border-b border-hairline">
+            <tr key={x.label}
+                ref={x.label === selected ? selRef : undefined}
+                onClick={() => onSelect(selected === x.label ? null : x.label)}
+                className={`cursor-pointer border-b border-hairline ${
+                  selected === x.label ? 'bg-accent-soft' : 'hover:bg-sunken'}`}>
               <td className="px-3 py-1 font-mono text-tiny text-ink">
                 {x.label}
                 {x.is_special && <span className="ml-1 text-micro text-ink-muted">special</span>}

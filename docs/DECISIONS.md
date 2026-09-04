@@ -2760,3 +2760,21 @@ listener reloads every other open tab so none of them writes the old
 state back. Local drafts only; saved versions live on the server and are
 managed on the Versions surface. Walled off by an e2e test that runs the
 command and asserts the state stays cleared past several poll ticks.
+
+## The categorical read-out, and bins paired by click
+
+A categorical variable used to show a sentence where the numeric editor
+shows a chart. It now gets the same read a numeric variable gets: one
+row per bin (grouped levels), default rate as a bar against a marked
+book average, and log odds distance from the book as a diverging weight
+of evidence bar — sorted riskiest first, specials last. There is still
+nothing to drag, because levels are grouped rather than cut, so the view
+is a ranked read-out rather than an editor.
+
+The bin detail table moved INTO the binning card, beneath the chart it
+details — as a separate card at the foot of the page it was a scroll
+away from the thing it explained. Chart and table are paired by click:
+a bar selects its row (scrolled into view), a row its bar. Selection is
+view state and names a bin, never a decision. "Event rate" became
+"default rate" throughout the PD binning views: the target is
+default_flag, and that is its name in the room.

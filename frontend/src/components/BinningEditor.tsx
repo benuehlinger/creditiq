@@ -62,38 +62,45 @@ export interface EditableBinning {
 
 /** The PD binning, adapted. */
 export default function BinningEditor({
-  result, onEdgesChange, pending,
+  result, onEdgesChange, pending, selected, onSelect,
 }: {
   result: BinningResult
   onEdgesChange: (edges: number[]) => void
   pending: boolean
+  selected?: string | null
+  onSelect?: (label: string | null) => void
 }) {
   const view: EditableBinning = useMemo(() => ({
     column: result.column,
     edges: result.edges,
     domain: result.domain,
     histogram: result.histogram,
-    valueLabel: 'Event rate',
+    valueLabel: 'Default rate',
     formatValue: (v) => pct(v * 100, 2),
     toneLabel: 'Weight of evidence',
     bins: result.bins.filter((b) => !b.is_special).map((b) => ({
       label: b.label, value: b.event_rate || 0, tone: b.woe || 0,
       share: b.pct_of_total, n: b.count,
       detail: [
-        `Event rate ${pct((b.event_rate || 0) * 100, 3)}`,
+        `Default rate ${pct((b.event_rate || 0) * 100, 3)}`,
         `WoE ${b.woe.toFixed(4)}   IV contribution ${b.iv_contribution.toFixed(4)}`,
       ],
     })),
   }), [result])
-  return <Editor view={view} onEdgesChange={onEdgesChange} pending={pending} />
+  return <Editor view={view} onEdgesChange={onEdgesChange} pending={pending}
+                 selected={selected} onSelect={onSelect} />
 }
 
 export function Editor({
-  view, onEdgesChange, pending,
+  view, onEdgesChange, pending, selected, onSelect,
 }: {
   view: EditableBinning
   onEdgesChange: (edges: number[]) => void
   pending: boolean
+  /** Click-to-pair with the bin table: the selected bin is outlined here and
+   *  highlighted there. Selection is view state, owned by the caller. */
+  selected?: string | null
+  onSelect?: (label: string | null) => void
 }) {
   const result = view
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -219,17 +226,25 @@ export function Editor({
           const sh = Math.max((g.bin.share / maxShare) * SHARE_H, 1)
           return (
             <g key={i} onPointerEnter={() => setHover(i)} onPointerLeave={() => setHover(null)}
-               onDoubleClick={() => splitBin(g.v0, g.v1)} style={{ cursor: 'zoom-in' }}>
+               onDoubleClick={() => splitBin(g.v0, g.v1)}
+               // A double-click fires two clicks first; the toggle undoes
+               // itself across the pair, so a split never strands a selection.
+               onClick={() => onSelect?.(selected === g.bin.label ? null : g.bin.label)}
+               style={{ cursor: 'zoom-in' }}>
               <rect x={g.x0} y={BAR_TOP} width={w} height={BAR_H + SHARE_H + 4} fill="transparent" />
               <rect x={g.x0} y={BAR_TOP + BAR_H - h} width={w} height={h} rx={3}
                     fill={diverging((g.bin.tone || 0) / maxWoe, m)}
-                    opacity={hover === i ? 1 : 0.9} />
+                    stroke={selected === g.bin.label ? 'var(--accent)' : 'none'}
+                    strokeWidth={1.5}
+                    opacity={hover === i || selected === g.bin.label ? 1 : 0.9} />
               <rect x={g.x0} y={BAR_TOP + BAR_H + 4} width={w} height={sh} rx={1.5}
                     fill="var(--deemphasis)" opacity={0.55} />
               <title>
                 {[`${g.bin.label}`,
                   `${num(g.bin.n)} rows (${(g.bin.share * 100).toFixed(1)}% of book)`,
-                  ...g.bin.detail, '', 'Double-click to split this bin in two',
+                  ...g.bin.detail, '',
+                  ...(onSelect ? ['Click to pair with its row in the bin detail below'] : []),
+                  'Double-click to split this bin in two',
                  ].join('\n')}
               </title>
             </g>

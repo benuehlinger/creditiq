@@ -12,7 +12,7 @@ import TreatmentControl from '../components/TreatmentControl'
 import { useUi } from '../lib/store'
 import { isDiscretised } from '../lib/api'
 import { num, pct } from '../lib/format'
-import { diverging, mode, sequential } from '../design/tokens'
+import { diverging, mode } from '../design/tokens'
 
 /**
  * One variable, in full: its leakage check, its binning or treatment, its
@@ -100,7 +100,7 @@ export default function VariableDetail({ portfolio, column }: {
             caption={!isDiscretised(treatment) ? undefined
               : binning.data.kind === 'numeric'
               ? "Bin height is the default rate; fill is the weight of evidence, blue for safer and magenta for riskier. The grey footer band is each bin's share of the population."
-              : 'Levels with similar risk share a bin. Each bin shows its default rate against the book average, and its log odds distance from the book as weight of evidence.'}
+              : 'Levels with similar risk share a bin. The bins are in the detail below, sorted by default rate, riskiest first.'}
             right={
               <div className="flex items-center gap-3">
                 {/* The natural place to commit: look at the shape, then
@@ -183,25 +183,24 @@ export default function VariableDetail({ portfolio, column }: {
                                onEdgesChange={(e) => setEdges(e)}
                                selected={selBin} onSelect={setSelBin} />
               ) : (
-                <>
-                  <CardinalityWarning b={binning.data} />
-                  <CategoricalBins b={binning.data} selected={selBin} onSelect={setSelBin} />
-                </>
+                <CardinalityWarning b={binning.data} />
               )}
               <MonotonicityRow b={binning.data} />
-              {/* The bin table lives WITH the chart it details, and the two
-                  are paired by click: a bar selects its row, a row its bar.
-                  As a separate card at the foot of the page it was a scroll
-                  away from the thing it explained. */}
+              {/* The bin table lives WITH the chart it details. For a numeric
+                  variable the two are paired by click: a bar selects its row,
+                  a row its bar. A categorical has no chart — the table IS the
+                  view — so its rows are not click targets for anything. */}
               <div className="border-t border-hairline">
                 <div className="flex flex-wrap items-baseline justify-between gap-2 px-4 pb-1 pt-2.5">
                   <span className="text-xs font-medium text-ink">Bin detail</span>
                   <span className="text-micro text-ink-muted">
-                    Click a bin above or a row here to pair them.
+                    {binning.data.kind === 'numeric' && 'Click a bin above or a row here to pair them. '}
                     Bins under 2% of the population produce unstable weights.
                   </span>
                 </div>
-                <BinTable b={binning.data} selected={selBin} onSelect={setSelBin} />
+                <BinTable b={binning.data}
+                  selected={binning.data.kind === 'numeric' ? selBin : null}
+                  onSelect={binning.data.kind === 'numeric' ? setSelBin : undefined} />
               </div>
             </>
           ) : (
@@ -282,77 +281,13 @@ function CardinalityWarning({ b }: { b: any }) {
   )
 }
 
-/** A categorical variable, read the way a numeric one is: default rate and
- *  log odds per bin. There are no edges to drag — levels are grouped, not
- *  cut — so the view is a ranked read-out rather than an editor. Sorted by
- *  default rate, riskiest first; special bins (missing) sit at the bottom. */
-function CategoricalBins({ b, selected, onSelect }: {
-  b: any; selected: string | null; onSelect: (label: string | null) => void
-}) {
-  const m = mode()
-  const bins = [...b.bins].sort((x: any, y: any) =>
-    (x.is_special ? 1 : 0) - (y.is_special ? 1 : 0)
-    || (y.event_rate || 0) - (x.event_rate || 0))
-  const maxRate = Math.max(...bins.map((x: any) => x.event_rate || 0), 1e-9)
-  const maxWoe = Math.max(...bins.map((x: any) => Math.abs(x.woe) || 0), 1e-9)
-  const bookRate = b.n_total ? b.n_events / b.n_total : 0
-  const grid = 'grid grid-cols-[minmax(0,1.1fr)_56px_minmax(0,1fr)_minmax(0,1fr)] items-center gap-3'
-  return (
-    <div className="px-4 pb-3 pt-1">
-      <div className={`${grid} border-b border-hairline pb-1 text-micro text-ink-muted`}>
-        <span>Bin · grouped levels</span>
-        <span className="text-right">Share</span>
-        <span>Default rate · book average {pct(bookRate * 100, 2)} marked</span>
-        <span>Log odds vs book (weight of evidence)</span>
-      </div>
-      {bins.map((x: any) => (
-        <button key={x.label}
-          onClick={() => onSelect(selected === x.label ? null : x.label)}
-          title={x.levels?.length ? x.levels.join(', ') : x.label}
-          className={`${grid} w-full rounded px-0 py-1.5 text-left ${
-            selected === x.label ? 'bg-accent-soft' : 'hover:bg-sunken'}`}>
-          <span className="truncate font-mono text-tiny text-ink">
-            {x.label}
-            {x.is_special && <span className="ml-1 text-micro text-ink-muted">special</span>}
-          </span>
-          <span className="text-right tnum text-tiny text-ink-muted">
-            {(x.pct_of_total * 100).toFixed(1)}%
-          </span>
-          <span className="flex items-center gap-2">
-            <span className="relative h-2.5 flex-1 rounded-sm bg-sunken">
-              <span className="absolute inset-y-0 left-0 rounded-sm"
-                style={{ width: `${((x.event_rate || 0) / maxRate) * 100}%`,
-                         background: sequential(0.6, m) }} />
-              {/* the book average, so a bin reads as above or below it at a glance */}
-              <span className="absolute inset-y-0 w-px bg-ink-muted"
-                style={{ left: `${Math.min((bookRate / maxRate) * 100, 100)}%` }} />
-            </span>
-            <span className="w-14 text-right tnum text-tiny text-ink-secondary">
-              {pct((x.event_rate || 0) * 100, 2)}
-            </span>
-          </span>
-          <span className="flex items-center gap-2">
-            <span className="relative h-2.5 flex-1 rounded-sm bg-sunken">
-              <span className="absolute inset-y-0 rounded-sm"
-                style={{
-                  left: x.woe < 0 ? `${50 - Math.min(Math.abs(x.woe) / maxWoe, 1) * 50}%` : '50%',
-                  width: `${Math.min(Math.abs(x.woe) / maxWoe, 1) * 50}%`,
-                  background: diverging((x.woe || 0) / maxWoe, m),
-                }} />
-              <span className="absolute inset-y-0 left-1/2 w-px bg-axis" />
-            </span>
-            <span className="w-14 text-right tnum text-tiny text-ink-secondary">
-              {(x.woe || 0).toFixed(3)}
-            </span>
-          </span>
-        </button>
-      ))}
-      <p className="pt-1.5 text-micro text-ink-muted">
-        Weight of evidence is the distance of a bin's log odds from the book
-        average: blue safer than the book, magenta riskier.
-      </p>
-    </div>
-  )
+/** A level name a table can be trusted with. The synthetic tapes carry the
+ *  mess real tapes carry — ' direct ' beside 'direct' — and collapsing the
+ *  whitespace on display made the two rows read as an inexplicable
+ *  duplicate. A label whose trimmed self differs is shown quoted, so the
+ *  padding is visible instead of invisible. */
+function visibleLabel(label: string): string {
+  return label !== label.trim() ? `'${label}'` : label
 }
 
 function MonotonicityRow({ b }: { b: NonNullable<ReturnType<typeof useQuery>['data']> & any }) {
@@ -381,10 +316,18 @@ function MonotonicityRow({ b }: { b: NonNullable<ReturnType<typeof useQuery>['da
 }
 
 function BinTable({ b, selected, onSelect }: {
-  b: any; selected: string | null; onSelect: (label: string | null) => void
+  b: any; selected: string | null; onSelect?: (label: string | null) => void
 }) {
   const m = mode()
   const maxWoe = Math.max(...b.bins.map((x: any) => Math.abs(x.woe) || 0), 1e-9)
+  // Numeric bins keep their interval order — the ranges only make sense in
+  // sequence. Categorical bins have no sequence, so they rank by default
+  // rate, riskiest first, with special bins (missing, unseen) at the bottom.
+  const rows = b.kind === 'categorical'
+    ? [...b.bins].sort((x: any, y: any) =>
+        (x.is_special ? 1 : 0) - (y.is_special ? 1 : 0)
+        || (y.event_rate || 0) - (x.event_rate || 0))
+    : b.bins
   // A bar clicked in the chart selects a row that may be below the fold of
   // this scroller; bring it into view so the pairing is visible, not implied.
   const selRef = useRef<HTMLTableRowElement | null>(null)
@@ -406,14 +349,15 @@ function BinTable({ b, selected, onSelect }: {
           </tr>
         </thead>
         <tbody>
-          {b.bins.map((x: any) => (
+          {rows.map((x: any) => (
             <tr key={x.label}
                 ref={x.label === selected ? selRef : undefined}
-                onClick={() => onSelect(selected === x.label ? null : x.label)}
-                className={`cursor-pointer border-b border-hairline ${
-                  selected === x.label ? 'bg-accent-soft' : 'hover:bg-sunken'}`}>
-              <td className="px-3 py-1 font-mono text-tiny text-ink">
-                {x.label}
+                onClick={onSelect && (() => onSelect(selected === x.label ? null : x.label))}
+                className={`border-b border-hairline ${onSelect ? 'cursor-pointer' : ''} ${
+                  selected === x.label ? 'bg-accent-soft' : onSelect ? 'hover:bg-sunken' : ''}`}>
+              <td className="whitespace-pre px-3 py-1 font-mono text-tiny text-ink"
+                  title={x.levels?.length ? x.levels.map(visibleLabel).join(' · ') : undefined}>
+                {visibleLabel(x.label)}
                 {x.is_special && <span className="ml-1 text-micro text-ink-muted">special</span>}
               </td>
               <td className="px-3 py-1 text-right tnum text-ink-secondary">{num(x.count)}</td>

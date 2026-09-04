@@ -437,8 +437,12 @@ function CategoricalShape({ data }: { data: CurveResult }) {
       <div className="space-y-1">
         {pts.map((p) => (
           <div key={p.level} className="grid grid-cols-[150px_minmax(0,1fr)_92px] items-center gap-2">
-            <span className="truncate font-mono text-tiny text-ink-secondary" title={p.level}>
-              {p.level}
+            {/* A level whose trimmed self differs is shown quoted: the tapes
+                carry ' direct ' beside 'direct', and collapsing the padding
+                on display made them read as an inexplicable duplicate. */}
+            <span className="truncate whitespace-pre font-mono text-tiny text-ink-secondary"
+                  title={p.level}>
+              {p.level !== p.level.trim() ? `'${p.level}'` : p.level}
             </span>
             <div className="relative h-4">
               {/* the base rate, so every level is read against the book */}

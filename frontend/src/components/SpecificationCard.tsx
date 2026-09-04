@@ -207,33 +207,13 @@ export default function SpecificationCard({ r, onOpenVariable }: {
         </div>
       </Card>
 
-      <Card>
-        <CardHead title="Scorecard"
-          subtitle={`Base ${r.scorecard.base_score} at ${r.scorecard.base_odds}:1 odds · PDO ${r.scorecard.pdo}`}
-          caption="A linear rescaling of the log-odds: the odds of being good double every 20 points. It is a monotone transformation of the fitted probability and carries the same information." />
-        <div className="thin-scroll max-h-[320px] overflow-auto">
-          <table className="w-full text-left text-xs">
-            <thead className="sticky top-0 bg-surface">
-              <tr className="border-b border-hairline text-tiny text-ink-muted">
-                <th className="px-3 py-1.5 font-medium">Variable</th>
-                <th className="px-3 py-1.5 font-medium">Bin</th>
-                <th className="px-3 py-1.5 text-right font-medium">WoE</th>
-                <th className="px-3 py-1.5 text-right font-medium">Points</th>
-              </tr>
-            </thead>
-            <tbody>
-              {r.scorecard.points.map((p, i) => (
-                <tr key={i} className="border-b border-hairline">
-                  <td className="px-3 py-1 font-mono text-tiny text-ink-secondary">{p.variable}</td>
-                  <td className="px-3 py-1 font-mono text-tiny text-ink">{p.bin}</td>
-                  <td className="px-3 py-1 text-right tnum text-ink-secondary">{p.woe.toFixed(4)}</td>
-                  <td className="px-3 py-1 text-right tnum font-medium text-ink">{p.points}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Card>
+      {/* A scorecard card lived here — base 600, PDO 20, points per bin. It
+          was removed: the caption itself admitted the table "carries the same
+          information" as the fitted probability, and its points column was
+          printing one number for every bin, which made it decoration wearing
+          the costume of measurement. The coefficients table above IS the
+          model; a real scorecard deliverable belongs in an export, not on a
+          diagnostic surface. */}
     </div>
   )
 }

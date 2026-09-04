@@ -2660,3 +2660,14 @@ the never-below-baseline check now tests the CONDITIONAL hazard, because
 marginal PD is hazard times survival and a harsher scenario depletes the
 pool faster — a late-month marginal dip through attrition arithmetic is
 not a wrong-signed response.
+
+## The scorecard card is gone
+
+Its own caption admitted the defect: "a monotone transformation of the
+fitted probability, carries the same information" — a table that says it
+adds nothing should not be on screen. Worse, its points column printed one
+identical number for every bin, so what looked like measurement was
+decoration. The coefficients table is the model. If a points-based
+scorecard is ever wanted as a client deliverable, it belongs in an export,
+computed properly (points varying per bin as WoE times coefficient times
+the PDO factor), not on a diagnostic surface.

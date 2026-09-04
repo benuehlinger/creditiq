@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { api, type CurvePoint, type CurveResult, type LevelPoint, type Treatment } from '../lib/api'
 import { Card, CardHead, Skeleton, StatusPill } from './ui'
-import { chrome, deemphasis, ink, mode, sequential, series } from '../design/tokens'
-import { num, pct, ratio } from '../lib/format'
+import { chrome, deemphasis, diverging, ink, mode, sequential, series } from '../design/tokens'
+import { num, pct, ratio, visibleLevel } from '../lib/format'
 
 /** Ticks read as quantities, not as raw floats: 1.835 for a driver that only
  *  takes whole numbers is noise, and 0.0000123 needs a different treatment from
@@ -405,73 +405,127 @@ function NumericShape({ data, scale, treatment, knots, custom, onKnots,
   )
 }
 
+/** One bar per level: the y axis is log-odds of default, the bar runs from
+ *  the book base rate to the level, so above the line is riskier than the
+ *  book and below is safer, on the same diverging ramp every WoE display
+ *  uses. The 95% interval is the whisker; the grey footer band is the
+ *  level's share of the book — the same frequency grammar as the binning
+ *  editor, in the same plot. */
 function CategoricalShape({ data }: { data: CurveResult }) {
   const m = mode()
-  const pts = data.points as LevelPoint[]
-  const maxN = Math.max(...pts.map((p) => p.n), 1)
-  const lo = Math.min(...pts.map((p) => p.lo95))
-  const hi = Math.max(...pts.map((p) => p.hi95))
-  const span = hi - lo || 1
-  const at = (v: number) => ((v - lo) / span) * 100
-  const ticks = [0, 0.25, 0.5, 0.75, 1].map((t) => lo + t * span)
+  const wrap = useRef<HTMLDivElement>(null)
+  const [W, setW] = useState(760)
+  useEffect(() => {
+    if (!wrap.current) return
+    const ro = new ResizeObserver(([e]) => setW(Math.max(360, e.contentRect.width)))
+    ro.observe(wrap.current)
+    return () => ro.disconnect()
+  }, [])
+
+  // Safest on the left, riskiest on the right, so the read matches the
+  // rising curve a numeric shape draws.
+  const pts = [...(data.points as LevelPoint[])].sort((a, b) => a.log_odds - b.log_odds)
+  const total = pts.reduce((s, p) => s + p.n, 0) || 1
+  const maxShare = Math.max(...pts.map((p) => p.n / total), 1e-9)
+  const base = data.base_log_odds
+  const baseRate = 1 / (1 + Math.exp(-base))
+  const lo = Math.min(...pts.map((p) => p.lo95), base)
+  const hi = Math.max(...pts.map((p) => p.hi95), base)
+  const padV = (hi - lo || 1) * 0.08
+  const y0 = lo - padV, y1 = hi + padV
+  const PADL = 52, PADR = 10, TOP = 16, PLOT = 150, SHARE = 14, LBL = 18
+  const H = TOP + PLOT + 6 + SHARE + LBL + 6
+  const plotW = W - PADL - PADR
+  const nBars = pts.length
+  const gap = Math.min(16, (plotW / Math.max(nBars, 1)) * 0.25)
+  const bw = (plotW - gap * (nBars - 1)) / Math.max(nBars, 1)
+  const yAt = (v: number) => TOP + (1 - (v - y0) / (y1 - y0)) * PLOT
+  const maxAbs = Math.max(...pts.map((p) => Math.abs(p.log_odds - base)), 1e-9)
+  const ticks = [0, 1 / 3, 2 / 3, 1].map((t) => y0 + t * (y1 - y0))
+  // ~6.2px per character of the mono face at this size; truncate to the bar
+  const chars = Math.max(3, Math.floor(bw / 6.2))
   return (
-    <div className="px-4 pb-3 pt-2">
-      {/* the scale the dots sit on, stated rather than implied */}
-      <div className="mb-1 grid grid-cols-[150px_minmax(0,1fr)_92px] items-end gap-2">
-        <span />
-        <div className="relative h-6">
-          {ticks.map((t, i) => (
-            <span key={i} className="absolute bottom-0 text-micro tabular-nums text-ink-muted"
-                  style={{ left: `${at(t)}%`,
-                           transform: i === 0 ? 'none'
-                             : i === ticks.length - 1 ? 'translateX(-100%)' : 'translateX(-50%)' }}>
-              {t.toFixed(1)}
-            </span>
-          ))}
-          <span className="absolute bottom-3 left-1/2 -translate-x-1/2 text-micro text-ink-secondary">
-            Log-odds of default
-          </span>
-        </div>
-        <span className="text-right text-micro text-ink-secondary">Accounts · rate</span>
-      </div>
-      <div className="space-y-1">
-        {pts.map((p) => (
-          <div key={p.level} className="grid grid-cols-[150px_minmax(0,1fr)_92px] items-center gap-2">
-            {/* A level whose trimmed self differs is shown quoted: the tapes
-                carry ' direct ' beside 'direct', and collapsing the padding
-                on display made them read as an inexplicable duplicate. */}
-            <span className="truncate whitespace-pre font-mono text-tiny text-ink-secondary"
-                  title={p.level}>
-              {p.level !== p.level.trim() ? `'${p.level}'` : p.level}
-            </span>
-            <div className="relative h-4">
-              {/* the base rate, so every level is read against the book */}
-              <div className="absolute top-0 h-4 w-px bg-hairline"
-                   style={{ left: `${at(data.base_log_odds)}%` }} />
-              <div className="absolute top-[7px] h-0.5 rounded"
-                   style={{ left: `${at(p.lo95)}%`, width: `${at(p.hi95) - at(p.lo95)}%`,
-                            background: 'var(--chrome-axis)' }} />
-              <div className="absolute top-1 h-2 w-2 rounded-full"
-                   style={{ left: `calc(${at(p.log_odds)}% - 4px)`,
-                            background: p.thin ? deemphasis(m) : sequential(0.55, m) }}
-                   title={`log-odds ${p.log_odds.toFixed(2)} · rate ${pct(p.rate * 100, 2)}`} />
-            </div>
-            <div className="flex items-center justify-end gap-1.5">
-              <div className="h-2 rounded-sm" title={`${num(p.n)} account-months`}
-                   style={{ width: `${Math.max(2, (p.n / maxN) * 44)}px`,
-                            background: deemphasis(m) }} />
-              <span className="w-11 text-right text-micro tabular-nums text-ink-muted">
-                {pct(p.rate * 100, 2)}
-              </span>
-            </div>
-          </div>
+    <div ref={wrap} className="px-4 pb-2 pt-2">
+      <svg width={W} height={H} className="select-none">
+        {ticks.map((t, i) => (
+          <g key={i}>
+            <line x1={PADL} y1={yAt(t)} x2={W - PADR} y2={yAt(t)}
+                  stroke="var(--chrome-grid)" strokeWidth={1} />
+            <text x={PADL - 6} y={yAt(t) + 3} textAnchor="end" fontSize={9}
+                  fill="var(--ink-muted)" className="tabular-nums">
+              {t.toFixed(2)}
+            </text>
+          </g>
         ))}
-      </div>
-      <p className="max-w-[88ch] pt-2 text-micro text-ink-muted">
-        The dot is the log-odds for the level, the rule behind it the 95% interval,
-        and the hairline the book base rate. Grey dots carry fewer than 20 defaults,
-        so their position is estimated imprecisely. Empirical-Bayes shrinkage on the
-        weight of evidence reduces the influence of those levels in the fit.
+        <text x={PADL} y={9} fontSize={9} fill="var(--ink-muted)">Log-odds of default</text>
+        <text x={W - PADR} y={9} textAnchor="end" fontSize={9} fill="var(--ink-muted)">
+          Share of book · full band {pct(maxShare * 100, 1)}
+        </text>
+
+        {pts.map((p, i) => {
+          const x = PADL + i * (bw + gap)
+          const yBase = yAt(base), yVal = yAt(p.log_odds)
+          const yTop = Math.min(yBase, yVal)
+          const h = Math.max(Math.abs(yVal - yBase), 1.5)
+          const cx = x + bw / 2
+          const share = p.n / total
+          const label = visibleLevel(p.level)
+          return (
+            <g key={p.level}>
+              <rect x={x} y={yTop} width={bw} height={h} rx={2}
+                    fill={p.thin ? deemphasis(m) : diverging((p.log_odds - base) / maxAbs, m)}
+                    opacity={0.9} />
+              {/* the 95% interval */}
+              <line x1={cx} y1={yAt(p.hi95)} x2={cx} y2={yAt(p.lo95)}
+                    stroke="var(--ink-muted)" strokeWidth={1} opacity={0.8} />
+              <line x1={cx - 3} y1={yAt(p.hi95)} x2={cx + 3} y2={yAt(p.hi95)}
+                    stroke="var(--ink-muted)" strokeWidth={1} opacity={0.8} />
+              <line x1={cx - 3} y1={yAt(p.lo95)} x2={cx + 3} y2={yAt(p.lo95)}
+                    stroke="var(--ink-muted)" strokeWidth={1} opacity={0.8} />
+              {/* the observed rate, in the units the room thinks in */}
+              {nBars <= 9 && (
+                <text x={cx} y={yAt(p.hi95) - 4} textAnchor="middle" fontSize={9}
+                      fill="var(--ink-secondary)" className="tabular-nums">
+                  {pct(p.rate * 100, 2)}
+                </text>
+              )}
+              {/* frequency: the same grey share band the binning editor uses */}
+              <rect x={x} y={TOP + PLOT + 6 + (SHARE - Math.max((share / maxShare) * SHARE, 1))}
+                    width={bw} height={Math.max((share / maxShare) * SHARE, 1)} rx={1.5}
+                    fill={deemphasis(m)} opacity={0.7} />
+              <text x={cx} y={TOP + PLOT + 6 + SHARE + 13} textAnchor="middle" fontSize={9}
+                    fill="var(--ink-secondary)" fontFamily="var(--font-mono, monospace)"
+                    style={{ whiteSpace: 'pre' }}>
+                {label.length > chars ? `${label.slice(0, chars - 1)}…` : label}
+              </text>
+              <rect x={x} y={TOP} width={bw} height={PLOT + 6 + SHARE + LBL} fill="transparent">
+                <title>
+                  {[`${label}`,
+                    `${num(p.n)} account-months (${pct(share * 100, 1)} of book) · ${num(p.events)} defaults`,
+                    `default rate ${pct(p.rate * 100, 2)} · log-odds ${p.log_odds.toFixed(2)} [${p.lo95.toFixed(2)}, ${p.hi95.toFixed(2)}]`,
+                    ...(p.thin ? ['Fewer than 20 defaults: the position is estimated imprecisely.'] : []),
+                   ].join('\n')}
+                </title>
+              </rect>
+            </g>
+          )
+        })}
+
+        {/* the book base rate, drawn over the bars so it stays legible. The
+            label sits at the left, above the line: bars sort safest-first, so
+            that corner is the one the riskiest (tallest) bar never occupies. */}
+        <line x1={PADL} y1={yAt(base)} x2={W - PADR} y2={yAt(base)}
+              stroke="var(--chrome-axis)" strokeWidth={1} strokeDasharray="4 3" />
+        <text x={PADL + 4} y={yAt(base) - 4} fontSize={9} fill="var(--ink-muted)">
+          book base rate {pct(baseRate * 100, 2)}
+        </text>
+      </svg>
+      <p className="max-w-[88ch] pt-1 text-micro text-ink-muted">
+        Bars run from the book base rate to each level's log-odds: above the
+        dashed line is riskier than the book, below is safer, blue to magenta.
+        The whisker is the 95% interval; grey bars carry fewer than 20 defaults,
+        and empirical-Bayes shrinkage on the weight of evidence reduces their
+        influence in the fit. The footer band is each level's share of the book.
       </p>
     </div>
   )

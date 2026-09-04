@@ -77,3 +77,12 @@ export function byUnit(v: number | null | undefined, unit: string): string {
     default: return Math.abs(v) >= 1000 ? num(v) : v.toFixed(2)
   }
 }
+
+/** A categorical level a display can be trusted with. The synthetic tapes
+ *  carry the mess real tapes carry — ' direct ' beside 'direct' — and
+ *  collapsing the whitespace on display makes the two read as an
+ *  inexplicable duplicate. A level whose trimmed self differs is shown
+ *  quoted, so the padding is visible instead of invisible. */
+export function visibleLevel(s: string): string {
+  return s !== s.trim() ? `'${s}'` : s
+}

@@ -6,7 +6,7 @@ import EChart from '../charts/EChart'
 import Legend from '../charts/Legend'
 import { baseOption, crosshairTooltip, lineSeries, markLineAt, xName, yName, gridFor } from '../charts/base'
 import { ink, mode, ordinal, status } from '../design/tokens'
-import { month } from '../lib/format'
+import { month, visibleLevel } from '../lib/format'
 import { useUi } from '../lib/store'
 
 /**
@@ -43,7 +43,7 @@ export default function BinStability({ portfolio, column, edges }: {
     const series = present.map((b, i) => {
       const pts = biv.data!.points.filter((p) => p.bin === b)
         .map((p) => [p.period, p.rate] as [string, number])
-      return lineSeries({ name: b, data: pts, color: ordinal(i, present.length) })
+      return lineSeries({ name: visibleLevel(b), data: pts, color: ordinal(i, present.length) })
     })
     return {
       option: {
@@ -59,7 +59,7 @@ export default function BinStability({ portfolio, column, edges }: {
         series: series.map((s, i) =>
           i === 0 ? { ...s, markLine: markLineAt('2020-03-01', '', status.serious) } : s),
       },
-      legend: present.map((b, i) => ({ name: b, color: ordinal(i, present.length) })),
+      legend: present.map((b, i) => ({ name: visibleLevel(b), color: ordinal(i, present.length) })),
       table: {
         columns: ['Period', 'Bin', 'Rows', 'Annualized rate (%)'],
         rows: biv.data.points.map((p) => [p.period, p.bin, p.n, Number(p.rate.toFixed(3))]),

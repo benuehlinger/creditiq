@@ -11,7 +11,7 @@ import BinStability from '../components/BinStability'
 import TreatmentControl from '../components/TreatmentControl'
 import { useUi } from '../lib/store'
 import { isDiscretised } from '../lib/api'
-import { num, pct } from '../lib/format'
+import { num, pct, visibleLevel } from '../lib/format'
 import { diverging, mode } from '../design/tokens'
 
 /**
@@ -281,14 +281,6 @@ function CardinalityWarning({ b }: { b: any }) {
   )
 }
 
-/** A level name a table can be trusted with. The synthetic tapes carry the
- *  mess real tapes carry — ' direct ' beside 'direct' — and collapsing the
- *  whitespace on display made the two rows read as an inexplicable
- *  duplicate. A label whose trimmed self differs is shown quoted, so the
- *  padding is visible instead of invisible. */
-function visibleLabel(label: string): string {
-  return label !== label.trim() ? `'${label}'` : label
-}
 
 function MonotonicityRow({ b }: { b: NonNullable<ReturnType<typeof useQuery>['data']> & any }) {
   const signMismatch = b.expected_sign != null && b.observed_sign != null
@@ -356,8 +348,8 @@ function BinTable({ b, selected, onSelect }: {
                 className={`border-b border-hairline ${onSelect ? 'cursor-pointer' : ''} ${
                   selected === x.label ? 'bg-accent-soft' : onSelect ? 'hover:bg-sunken' : ''}`}>
               <td className="whitespace-pre px-3 py-1 font-mono text-tiny text-ink"
-                  title={x.levels?.length ? x.levels.map(visibleLabel).join(' · ') : undefined}>
-                {visibleLabel(x.label)}
+                  title={x.levels?.length ? x.levels.map(visibleLevel).join(' · ') : undefined}>
+                {visibleLevel(x.label)}
                 {x.is_special && <span className="ml-1 text-micro text-ink-muted">special</span>}
               </td>
               <td className="px-3 py-1 text-right tnum text-ink-secondary">{num(x.count)}</td>

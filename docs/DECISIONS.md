@@ -2580,3 +2580,22 @@ named axes, a dashed reference at 1.0× labelled as the book average, and
 a tooltip carrying the decile's raw counts. The one-hue ramp across the
 bars went: it encoded the decile index a second time, and an unexplained
 gradient reads as a hidden variable.
+
+## Statistics vocabulary, and a PSI axis that cannot print garbage
+
+"Slice" was this codebase's internal word and it had leaked onto the
+screen; every card now says "test data", "out-of-time data" or "training
+data". The Kolmogorov–Smirnov caption stopped saying "the widest gap
+between the cumulative good and bad distributions, and the score where it
+happens" and now states the statistic: cumulative distributions of the
+predicted score for defaulters and non-defaulters, KS the maximum vertical
+distance between the two curves.
+
+The score-stability chart is hardened: its y-axis ceiling used to be
+whatever raw value the data handed it — one pathological point printed
+its own magnitude verbatim as the top axis label — and is now a rounded
+ceiling clamped at 3 (PSI above ~1 already means the population is
+unrecognisable). Non-finite PSI points break the line instead of bending
+the axis. The threshold labels use the industry convention (0.10 moderate
+shift, 0.25 significant shift) and both sit at the right edge, one above
+its line and one below, where they can collide with nothing.

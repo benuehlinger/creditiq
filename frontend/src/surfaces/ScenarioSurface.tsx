@@ -71,7 +71,10 @@ export default function ScenarioSurface() {
     }),
     enabled: !!fitted && lgdReady,
     staleTime: Infinity,
-    gcTime: 30 * 60_000,
+    // Aligned with the app-wide hour: this query's shorter 30-minute
+    // override was the one remaining way a projection could be evicted and
+    // silently recomputed on a later tab visit.
+    gcTime: 60 * 60_000,
     retry: 1,
   })
   const res = run.data ?? null

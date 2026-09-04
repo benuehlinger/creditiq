@@ -195,10 +195,14 @@ export default function SpecificationCard({ r, onOpenVariable }: {
                     seasoning spline
                   </td>
                   <td colSpan={7} className="px-3 py-1.5 text-tiny text-ink-muted">
-                    {seasoning.length} orthogonalized basis functions on months on book.
-                    The basis is QR-orthogonalized, so variance inflation is 1.00 and the
-                    individual weights carry no separate meaning. The fitted curve is the
-                    quantity of interest, and it is plotted under Fit diagnostics.
+                    The baseline hazard of the discrete-time frame, not a selected
+                    variable: default risk varies with account age, and without this
+                    term every selected variable correlated with age would absorb the
+                    seasoning ramp instead. Fitted as {seasoning.length} orthogonalized
+                    basis functions on months on book; the basis is QR-orthogonalized,
+                    so variance inflation is 1.00 and the individual weights carry no
+                    separate meaning. The fitted curve is plotted under Fit
+                    diagnostics. Selecting months_on_book as a variable replaces it.
                   </td>
                 </tr>
               )}

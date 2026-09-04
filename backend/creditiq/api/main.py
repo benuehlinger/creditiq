@@ -808,6 +808,12 @@ def _run_payload(r) -> dict:
     spec = PORTFOLIOS[r.spec.portfolio]
     return {
         "hash": r.hash, "name": r.name, "created_at": r.created_at,
+        # The pair hash above identifies the MODEL (PD with the severity spec
+        # embedded at fit time); this one identifies the PD half alone, and is
+        # what the band's PD cell shows. Without it the PD cell displayed the
+        # pair hash — the same string as the model cell — which made the two
+        # halves look like one identity.
+        "pd_hash": r.spec.pd_hash(),
         "portfolio": r.spec.portfolio,
         "spec": r.spec.to_dict(),
         "converged": r.fit.converged, "iterations": r.fit.iterations,
@@ -1618,6 +1624,23 @@ def list_versions(portfolio: str | None = None):
     return _jsonable([_version_payload(v) for v in vstore.list_all(portfolio)])
 
 
+# The static paths MUST register before the parameterised one: FastAPI
+# matches in registration order, so /versions/{hash_} placed first swallowed
+# "compare" and "lineage" as hashes and 404ed both — silently, since the
+# frontend treated the errors as empty panels and retried on every mount.
+@app.get("/api/versions/compare")
+def compare_versions(hashes: str = Query(...)):
+    hs = [h.strip() for h in hashes.split(",") if h.strip()][:4]
+    if len(hs) < 2:
+        raise HTTPException(400, "select at least two versions to compare")
+    return _jsonable(vstore.compare(hs))
+
+
+@app.get("/api/versions/lineage")
+def version_lineage(portfolio: str = Query(...)):
+    return _jsonable(vstore.lineage(portfolio))
+
+
 @app.get("/api/versions/{hash_}")
 def get_version(hash_: str):
     """One saved model, whole, so the app can be put back into it.
@@ -1632,19 +1655,6 @@ def get_version(hash_: str):
     if v is None:
         raise HTTPException(404, "unknown version")
     return _jsonable(_version_payload(v))
-
-
-@app.get("/api/versions/compare")
-def compare_versions(hashes: str = Query(...)):
-    hs = [h.strip() for h in hashes.split(",") if h.strip()][:4]
-    if len(hs) < 2:
-        raise HTTPException(400, "select at least two versions to compare")
-    return _jsonable(vstore.compare(hs))
-
-
-@app.get("/api/versions/lineage")
-def version_lineage(portfolio: str = Query(...)):
-    return _jsonable(vstore.lineage(portfolio))
 
 
 @app.patch("/api/versions/{hash_}")

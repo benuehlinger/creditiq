@@ -50,6 +50,7 @@ export function useLoadVersion(portfolio: string, opts: { stay?: boolean } = {})
           lgd: spec.lgd ?? null, parent_hash: v.hash,
         },
         hash: v.hash, name: v.name, fittedAt: v.created_at,
+        pdHash: (v.metrics?.pd_hash as string | undefined),
         variablesAtFit: (spec.variables ?? []).map((x: any) => x.column),
       })
       // hash is left empty: the specification is known, the fit has not run yet.

@@ -143,7 +143,7 @@ export default function ModelPane({ portfolio, onOpenVariable }: {
       setResult(r)
       setTab('spec')
       setFitted(pk, {
-        request, hash: r.hash, name: r.name,
+        request, hash: r.hash, name: r.name, pdHash: r.pd_hash,
         fittedAt: new Date().toISOString(), variablesAtFit: picked,
       })
     },

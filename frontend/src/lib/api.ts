@@ -318,6 +318,8 @@ export interface Cohort {
 
 export interface FitResponse {
   hash: string; name: string; created_at: string; portfolio: string
+  /** Identity of the PD half alone; `hash` is the pair. */
+  pd_hash?: string
   spec: Record<string, unknown>
   converged: boolean; iterations: number; separation_warning: string | null
   n_train: number; n_events_train: number

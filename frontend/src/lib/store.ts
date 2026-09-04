@@ -12,6 +12,8 @@ type Theme = 'dark' | 'light'
  *  and a projection both refer to the specification that was fitted rather than
  *  to one rebuilt from the current state of the variable tray. */
 export interface FittedModel {
+  /** The PD specification's own hash — `hash` is the pair identity. */
+  pdHash?: string
   request: FitRequest
   hash: string
   name: string

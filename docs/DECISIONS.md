@@ -2611,3 +2611,29 @@ specification its candidate list edits and passes it down, and the pane
 fits exactly what the list shows. The same lesson as every state bug this
 application has had: two copies of one fact will disagree, and the fix is
 one fact, not a better sync.
+
+## The dedicated state pass: a contract, three fixes, and a proof
+
+docs/STATE.md now states the contract this application runs on: results
+are pure functions of specification hashes (given the data fingerprint);
+specifications live in the store with no component copies; results live
+only in identity-keyed caches; computation fires on exactly three
+user-visible triggers (an explicit fit, opening a saved version, arriving
+at a projection page with a complete model); prompts fire on fork,
+save-overwrite, missing prerequisites and drift.
+
+The audit against that contract found three defects. The band's PD cell
+displayed the pair hash — the same string as the model cell — because the
+fit response never exposed the PD half's own identity; it now carries
+pd_hash and the two halves are visibly different things. The versions
+router registered /versions/{hash} before /versions/compare and
+/versions/lineage, so FastAPI matched both static paths as hashes and
+404ed them — comparison had been silently broken, and the lineage panel
+refetched its error on every mount. And the audit re-confirmed the
+one-copy rule after the LGD pane fix: no component holds a specification
+or a result in useState anywhere.
+
+The proof is measured, not asserted: after one warm loop, a second full
+circuit of all six stages issues zero API calls. Switching tabs, models,
+pages — lookups only. Computation happens when a specification changes
+and the user says fit.

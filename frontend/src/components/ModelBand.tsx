@@ -179,7 +179,7 @@ export default function ModelBand({ portfolio }: { portfolio: string }) {
           {fitted ? (
             <>
               <div className="mt-1 flex items-baseline gap-2">
-                <span className="font-mono text-base text-ink">{fitted.hash}</span>
+                <span className="font-mono text-base text-ink">{fitted.pdHash ?? fitted.hash}</span>
                 {progress.pdStale
                   ? <StatusPill severity="warning">out of date</StatusPill>
                   : pdSev && <StatusPill severity={pdSev}>{pdWord}</StatusPill>}

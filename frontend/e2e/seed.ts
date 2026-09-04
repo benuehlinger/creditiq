@@ -29,11 +29,10 @@ export async function fitViaApi() {
   return { fit, lgd }
 }
 
-/** Plant the fitted state before the app boots, the way a returning user's
- *  persisted store would carry it. */
-export async function seedFittedConsumer(page: Page) {
-  const { fit, lgd } = await fitViaApi()
-  const state = {
+/** The persisted-store payload for a fitted consumer model, exactly as a
+ *  returning user's browser would carry it. */
+export function storeStateFor(fit: any, lgd: any) {
+  return {
     state: {
       theme: 'light',
       fitted: { consumer: {
@@ -64,9 +63,16 @@ export async function seedFittedConsumer(page: Page) {
     },
     version: 4,
   }
+}
+
+/** Plant the fitted state before the app boots. NOTE: the init script re-runs
+ *  on EVERY document load in this page, so a test that expects state to STAY
+ *  cleared after a reload must plant by hand instead (see the reset test). */
+export async function seedFittedConsumer(page: Page) {
+  const { fit, lgd } = await fitViaApi()
   await page.addInitScript((s) => {
     localStorage.setItem('creditiq-ui', JSON.stringify(s))
-  }, state)
+  }, storeStateFor(fit, lgd))
   return { fit, lgd }
 }
 

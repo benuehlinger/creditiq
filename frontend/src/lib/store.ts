@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
+import { createJSONStorage, persist } from 'zustand/middleware'
 import type { FitRequest, LgdSpecPayload, PortfolioKey } from './api'
 import { type PdSpec, emptyPdSpecs } from './spec'
 
@@ -162,6 +162,27 @@ interface UiState {
 export const NONE: readonly string[] = Object.freeze([])
 export const NO_MAP: Readonly<Record<string, never>> = Object.freeze({})
 
+/** Start from scratch, done properly. Deleting the key from a console while
+ *  the app runs is a race: the store writes its full state back to
+ *  localStorage on every set(), so a poll tick between the delete and the
+ *  reload resurrects everything — which is exactly what happened the one time
+ *  it was tried. The reset closes the valve first, then deletes, then
+ *  reloads; nothing can write in between. */
+let resetting = false
+const guardedStorage = {
+  getItem: (name: string) => localStorage.getItem(name),
+  setItem: (name: string, value: string) => {
+    if (!resetting) localStorage.setItem(name, value)
+  },
+  removeItem: (name: string) => localStorage.removeItem(name),
+}
+
+export function resetWorkspace() {
+  resetting = true
+  localStorage.removeItem('creditiq-ui')
+  window.location.replace('/')
+}
+
 export const useUi = create<UiState>()(
   persist(
     (set, get) => ({
@@ -265,7 +286,9 @@ export const useUi = create<UiState>()(
           }
         }),
     }),
-    { name: 'creditiq-ui', partialize: (s) => ({ theme: s.theme,
+    { name: 'creditiq-ui',
+      storage: createJSONStorage(() => guardedStorage),
+      partialize: (s) => ({ theme: s.theme,
                             fitted: s.fitted, fittedLgd: s.fittedLgd, loaded: s.loaded,
                                                         macroShortlist: s.macroShortlist,
                             pdSpec: s.pdSpec, projected: s.projected, draft: s.draft,

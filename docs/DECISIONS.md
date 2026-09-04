@@ -2747,3 +2747,16 @@ whatever the last human left behind. A test that skips itself when the
 state is absent guards nothing. The one test that saves a version
 deletes it in a finally block: suite runs must not leave models in the
 analyst's version list.
+
+## Start from scratch is a command, not a console incantation
+
+Deleting `creditiq-ui` from a devtools console while the app runs is a
+race: the store writes its full state back to localStorage on every
+set(), so any poll tick between the delete and the reload resurrects
+everything — observed in use, on the first attempt. The reset is now in
+the command palette ("Start from scratch"): it closes a write valve in
+the persistence layer first, then deletes, then reloads, and a storage
+listener reloads every other open tab so none of them writes the old
+state back. Local drafts only; saved versions live on the server and are
+managed on the Versions surface. Walled off by an e2e test that runs the
+command and asserts the state stays cleared past several poll ticks.

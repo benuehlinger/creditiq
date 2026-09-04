@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
-import { useUi } from '../lib/store'
+import { resetWorkspace, useUi } from '../lib/store'
 
 interface Cmd { id: string; label: string; hint: string; run: () => void }
 
@@ -22,6 +22,16 @@ export default function CommandPalette() {
       { id: 'theme', label: 'Toggle light / dark mode', hint: 'Appearance', run: toggleTheme },
       { id: 'brand', label: 'Brand assets', hint: 'Logos, export for a deck',
         run: () => nav('/brand') },
+      // Demo insurance of a different kind: walk into the room with a clean
+      // workspace. Local drafts only — saved versions live on the server and
+      // are managed on the Versions surface, never cleared from here.
+      { id: 'reset', label: 'Start from scratch',
+        hint: 'Clears every unsaved draft in this browser',
+        run: () => {
+          if (window.confirm(
+            'Clear every unsaved draft and fitted marker in this browser? '
+            + 'Saved versions on the server are kept.')) resetWorkspace()
+        } },
     ]
     for (const p of portfolios ?? []) {
       for (const [s, l] of [['data', 'Data'],

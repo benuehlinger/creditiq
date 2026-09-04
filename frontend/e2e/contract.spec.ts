@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
-import { seedFittedConsumer, seedSavedConsumer } from './seed'
+import { fitViaApi, seedFittedConsumer, seedSavedConsumer, storeStateFor } from './seed'
 
 /** The state contract, executed.
  *
@@ -131,6 +131,36 @@ test('a null statistic renders an em dash, never a white screen', async ({ page 
   }
   await expect(page.locator('main')).not.toBeEmpty()
   await expect(page.getByText('This view hit an error')).toHaveCount(0)
+})
+
+test('start from scratch clears every draft, and it STAYS cleared', async ({ page }) => {
+  // The bug this walls off: deleting the storage key while the app runs is a
+  // race — the store writes itself back on the next state change, and the
+  // "cleared" workspace resurrects on reload. The in-app reset must close
+  // that valve. State is planted by hand (not addInitScript, which re-runs
+  // on every load and would replant it after the reset).
+  const { fit, lgd } = await fitViaApi()
+  await page.goto('/consumer/data')
+  await page.evaluate(
+    (s) => localStorage.setItem('creditiq-ui', JSON.stringify(s)),
+    storeStateFor(fit, lgd))
+  await page.goto('/consumer/pd')
+  await page.getByText('Fitted specification').waitFor({ timeout: 90_000 })
+  page.on('dialog', (d) => d.accept())
+  await page.getByRole('button', { name: /Jump to/ }).click()
+  await page.getByPlaceholder(/Jump to/).fill('scratch')
+  await page.keyboard.press('Enter')
+  // sit past several poll ticks — the exact window the race lived in
+  await page.waitForTimeout(4000)
+  const state = await page.evaluate(() => {
+    const raw = localStorage.getItem('creditiq-ui')
+    return raw ? JSON.parse(raw).state : null
+  })
+  expect(state?.fitted?.consumer ?? null).toBeNull()
+  expect(state?.fittedLgd?.consumer ?? null).toBeNull()
+  // and the surface agrees: nothing fitted anywhere on this book
+  await page.goto('/consumer/pd')
+  await expect(page.getByText('Fitted specification')).toHaveCount(0)
 })
 
 test('the roll-up covers only reported books and never shows a default spec', async ({ page }) => {

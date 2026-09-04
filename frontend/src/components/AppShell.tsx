@@ -102,6 +102,19 @@ export default function AppShell() {
     if (portfolio) api.prepare(portfolio).catch(() => {})
   }, [portfolio])
 
+  // A workspace reset in one tab must reach every other tab showing the app.
+  // Each tab holds the full store in memory and writes it back on any state
+  // change, so a surviving tab would quietly resurrect what the reset just
+  // cleared. The storage event fires in every OTHER tab when the key is
+  // removed; reloading there boots that tab fresh from the now-empty store.
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'creditiq-ui' && e.newValue === null) window.location.reload()
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
+
   // Keyboard navigation throughout — live-demo insurance.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

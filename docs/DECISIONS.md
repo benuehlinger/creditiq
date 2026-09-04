@@ -2778,3 +2778,17 @@ a bar selects its row (scrolled into view), a row its bar. Selection is
 view state and names a bin, never a decision. "Event rate" became
 "default rate" throughout the PD binning views: the target is
 default_flag, and that is its name in the room.
+
+## The account-age baseline is the analyst's switch
+
+Supersedes the always-on seasoning basis (§ "The seasoning basis is
+included"). The curve on months on book was structural and permanent; it
+showed up in every fitted specification as a term nobody had selected,
+which read as machinery applied over the analyst's head — exactly the
+class of silent default this app forbids. It is now a checkbox on the
+fit controls beside the estimator ("Account-age baseline", on by
+default and visible), it travels in the request and the hash, so on and
+off are two different models, and the fitted-table row explains it in
+plain words. The vocabulary changed with it: "account-age baseline"
+everywhere, not "seasoning spline", and the orthogonalization mechanics
+left the UI copy for this log — where they were already recorded.

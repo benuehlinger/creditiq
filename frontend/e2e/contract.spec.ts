@@ -168,7 +168,10 @@ test('the roll-up covers only reported books and never shows a default spec', as
   await settle(page, 5000)
   await expect(page.getByText(/documented default|default spec/i)).toHaveCount(0)
   const uncovered = await page.getByText('no model promoted').count()
-  if (uncovered > 0) {
+  // Two honest states. With NOTHING promoted anywhere there are no totals to
+  // be excluded from, and the page says so in its empty state instead.
+  const nothingPromoted = await page.getByText('No book has a promoted model yet').count()
+  if (uncovered > 0 && nothingPromoted === 0) {
     await expect(page.getByText(/not included in the totals?/).first()).toBeVisible()
   }
 })

@@ -226,6 +226,17 @@ export default function ModelPane({ portfolio, onOpenVariable }: {
               className="ml-2 rounded-ctl border border-hairline bg-sunken px-2 py-1 text-xs text-ink" />
           </label>
 
+          {/* The account-age baseline is the analyst's call, made here where
+              the other fit choices are made — never applied silently. */}
+          <label className="flex cursor-pointer items-center gap-2 text-tiny"
+            title="A curve on months on book capturing how default risk varies with loan age. With it off, selected variables that correlate with age absorb the age pattern. Selecting months_on_book as a variable replaces it either way.">
+            <input type="checkbox" checked={spec.seasoningSpline ?? true}
+              onChange={(e) => editPd(pk,
+                (x) => ({ ...x, seasoningSpline: e.target.checked }),
+                `the account-age baseline ${e.target.checked ? 'on' : 'off'}`)} />
+            <span className="text-ink-muted">Account-age baseline</span>
+          </label>
+
           {stale && (
             <span className="ml-auto flex items-center gap-1.5 text-tiny"
                   style={{ color: 'var(--status-warning)' }}

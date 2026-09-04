@@ -192,17 +192,15 @@ export default function SpecificationCard({ r, onOpenVariable }: {
               {seasoning.length > 0 && (
                 <tr className="border-b border-hairline bg-sunken/40">
                   <td className="px-3 py-1.5 font-mono text-tiny text-ink-secondary">
-                    seasoning spline
+                    account-age baseline
                   </td>
                   <td colSpan={7} className="px-3 py-1.5 text-tiny text-ink-muted">
-                    The baseline hazard of the discrete-time frame, not a selected
-                    variable: default risk varies with account age, and without this
-                    term every selected variable correlated with age would absorb the
-                    seasoning ramp instead. Fitted as {seasoning.length} orthogonalized
-                    basis functions on months on book; the basis is QR-orthogonalized,
-                    so variance inflation is 1.00 and the individual weights carry no
-                    separate meaning. The fitted curve is plotted under Fit
-                    diagnostics. Selecting months_on_book as a variable replaces it.
+                    The account-age baseline, switched on in the fit controls above:
+                    a curve on months on book capturing how default risk varies with
+                    loan age, so the selected variables do not absorb that pattern.
+                    Fitted as {seasoning.length} combined columns; only the whole
+                    curve is meaningful, and it is plotted under Fit diagnostics.
+                    Selecting months_on_book as a variable replaces it.
                   </td>
                 </tr>
               )}

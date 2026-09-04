@@ -2569,3 +2569,14 @@ single-class and the exercise answers nothing — they left the dropdown.
 And the floor: an application-level error boundary now catches any render
 error, keeps the chrome alive, names the error for reporting, and offers
 "try again" and "reload" — a broken cell may cost a view, never the app.
+
+## The decile chart states its definition
+
+"Lift by decile" leaned on the reader knowing scorecard slang. The card
+now defines itself in measurement terms: accounts ranked by predicted
+probability into ten equal groups, each bar the decile's realised default
+rate divided by the whole book's, on the named slice. It gained a legend,
+named axes, a dashed reference at 1.0× labelled as the book average, and
+a tooltip carrying the decile's raw counts. The one-hue ramp across the
+bars went: it encoded the decile index a second time, and an unexplained
+gradient reads as a hidden variable.

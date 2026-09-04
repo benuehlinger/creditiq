@@ -3,8 +3,8 @@ import type { FitResponse } from '../lib/api'
 import { Card, CardHead, StatusPill } from './ui'
 import EChart from '../charts/EChart'
 import Legend from '../charts/Legend'
-import { baseOption, crosshairTooltip, barSeries, lineSeries, markTooltip, escapeHtml } from '../charts/base'
-import { accent, deemphasis, ink, mode, ordinal, series } from '../design/tokens'
+import { baseOption, crosshairTooltip, barSeries, lineSeries, markTooltip, escapeHtml, xName, yName } from '../charts/base'
+import { accent, deemphasis, ink, mode, series } from '../design/tokens'
 import { useUi } from '../lib/store'
 import { num, pct, ratio } from '../lib/format'
 
@@ -76,22 +76,37 @@ export default function FitDiagnostics({ r }: { r: FitResponse }) {
     const g = r.diagnostics.gains
     return {
       ...baseOption(),
-      grid: { left: 40, right: 16, top: 12, bottom: 30 },
-      tooltip: markTooltip((p: any) =>
-        `<div style="font-size:11px;color:${k.muted}">Decile ${escapeHtml(p.name)}</div>` +
-        `<div style="font-weight:600">${p.value.toFixed(2)}x lift</div>`),
+      grid: { left: 48, right: 16, top: 12, bottom: 44 },
+      tooltip: markTooltip((p: any) => {
+        const row = g[p.dataIndex]
+        return `<div style="font-size:11px;color:${k.muted}">Decile ${escapeHtml(p.name)}</div>` +
+          `<div style="font-weight:600">${p.value.toFixed(2)}× the book's default rate</div>` +
+          `<div style="font-size:11px;color:${k.muted}">${num(row.events)} defaults in ${num(row.n)} rows · ` +
+          `${row.event_rate_annual.toFixed(2)}%/yr realised</div>`
+      }),
       xAxis: { ...(baseOption().xAxis as object), type: 'category' as const,
                data: g.map((x) => String(x.decile)),
+               ...xName('Decile of predicted probability (1 = highest predicted risk)', 28),
                axisLabel: { color: k.muted, fontSize: 10 } },
       yAxis: { ...(baseOption().yAxis as object), type: 'value' as const,
-               axisLabel: { color: k.muted, fontSize: 10, formatter: (v: number) => `${v}x` } },
-      series: [barSeries({
-        name: 'Lift', maxWidth: 22,
-        // Deciles are ORDERED, so a one-hue ramp — not ten categorical colours.
-        data: g.map((x, i) => ({ value: x.lift, name: String(x.decile),
-                                 itemStyle: { color: ordinal(g.length - 1 - i, g.length, m) } })) as any,
-        color: accent(),
-      })],
+               ...yName('Realised rate ÷ book rate', 34),
+               axisLabel: { color: k.muted, fontSize: 10, formatter: (v: number) => `${v}×` } },
+      // One series, one colour. The old one-hue ramp across the bars encoded
+      // the decile index a second time — the x axis already carries it — and
+      // an unexplained colour gradient reads as a hidden variable.
+      series: [{
+        ...barSeries({
+          name: 'Realised ÷ book rate', maxWidth: 22, color: accent(),
+          data: g.map((x) => x.lift),
+        }),
+        markLine: {
+          symbol: 'none', silent: true,
+          lineStyle: { color: deemphasis(m), width: 1, type: 'dashed' as const },
+          label: { show: true, position: 'insideEndTop' as const, fontSize: 9,
+                   color: k.muted, formatter: 'book rate (1.0×)' },
+          data: [{ yAxis: 1 }],
+        },
+      }],
     }
   }, [r, theme])
 
@@ -122,9 +137,13 @@ export default function FitDiagnostics({ r }: { r: FitResponse }) {
         </Card>
 
         <Card>
-          <CardHead title="Lift by decile" subtitle="Deciles of predicted risk, worst first"
-            caption="How much more concentrated defaults are in each decile than in the book as a whole." />
-          <EChart option={gains} height={210} ariaLabel="Lift by decile"
+          <CardHead title="Decile lift" subtitle={`${ref} slice · accounts ranked by predicted probability, split into ten equal groups`}
+            caption="Each bar is one decile's realised default rate divided by the whole book's, on the same slice. A value of 1.0× is the book average; a well-ranking model concentrates defaults in the first deciles and depletes the last." />
+          <Legend kind="rect" items={[
+            { name: 'Realised rate ÷ book rate', color: accent() },
+            { name: 'Book average (1.0×)', color: deemphasis(m) },
+          ]} />
+          <EChart option={gains} height={210} ariaLabel="Decile lift" externalLegend
             table={{ columns: ['Decile', 'Rows', 'Events', 'Event rate (%/yr)', 'Lift', 'Cumulative capture (%)'],
                      rows: r.diagnostics.gains.map((g) => [g.decile, g.n, g.events,
                        Number(g.event_rate_annual.toFixed(3)), Number(g.lift.toFixed(3)),

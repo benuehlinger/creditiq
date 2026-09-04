@@ -2671,3 +2671,26 @@ decoration. The coefficients table is the model. If a points-based
 scorecard is ever wanted as a client deliverable, it belongs in an export,
 computed properly (points varying per bin as WoE times coefficient times
 the PDO factor), not on a diagnostic surface.
+
+## A clone is a pristine app
+
+The repository shipped one machine's artifacts to every other: sample
+CSVs and dictionaries force-tracked past the gitignore, the build report
+and the generative-truth document tracked by default, and the saved-model
+JSONs — the user's own work product — committed alongside the code. The
+generator is deterministic per machine but not byte-identical across
+numpy versions, so on any second machine `make data` immediately dirtied
+the tree and blocked every `git pull`; stale version IDs from another
+machine's browser 404-retried forever.
+
+Three fixes. Nothing generated and nothing user-made is tracked: a clone
+is code plus the committed FRED cache and supervisory scenario files, the
+first boot offers the generate button, and the tree stays clean through
+any number of rebuilds (verified on a virgin clone: zero files after
+simulating every generated output). Panels and the build report write
+atomically via temp-file-and-replace, so a server reading mid-rebuild
+sees the old complete file or the new one, never a truncated parquet —
+and the report, written last, is a true build-complete marker for the
+store's freshness stamp. And a browser carrying a loaded-version marker
+for a version that no longer exists drops it the moment the book's
+version list is known, instead of retrying a ghost.

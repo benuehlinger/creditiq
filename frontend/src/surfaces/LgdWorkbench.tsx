@@ -118,7 +118,7 @@ export default function LgdWorkbench() {
         ) : view === 'target' ? (
           <LgdTarget portfolio={portfolio} />
         ) : (
-          <LgdModelPane portfolio={portfolio} onOpenVariable={(c) => setView('variable', c)} />
+          <LgdModelPane portfolio={portfolio} spec={spec} onOpenVariable={(c) => setView('variable', c)} />
         )}
       </div>
       </div>

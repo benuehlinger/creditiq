@@ -2599,3 +2599,15 @@ unrecognisable). Non-finite PSI points break the line instead of bending
 the axis. The threshold labels use the industry convention (0.10 moderate
 shift, 0.25 significant shift) and both sit at the right edge, one above
 its line and one below, where they can collide with nothing.
+
+## "Select at least one driver" with five selected: the pane's copy died
+
+The LGD pane kept its own copy of the specification, synced from the
+store by an effect whose dependencies watched the hash and the treatments
+but not the drivers — so the candidate list could say "5 drivers in the
+specification" while the pane fitted an empty copy and errored "select at
+least one driver". The copy is deleted: the workbench owns the one
+specification its candidate list edits and passes it down, and the pane
+fits exactly what the list shows. The same lesson as every state bug this
+application has had: two copies of one fact will disagree, and the fix is
+one fact, not a better sync.

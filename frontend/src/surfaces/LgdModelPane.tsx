@@ -24,8 +24,14 @@ import { macroTermLabel } from './LgdVariableDetail'
 /** The fitted severity model: controls, verdict figures, coefficients,
  *  diagnostics and backtest. The right pane of the LGD workbench when no
  *  driver is open. The candidate list belongs to the workbench. */
-export default function LgdModelPane({ portfolio, onOpenVariable }: {
+export default function LgdModelPane({ portfolio, spec, onOpenVariable }: {
   portfolio: string
+  /** THE specification — the same object the workbench's candidate list edits.
+   *  This pane used to keep its own copy, synced by an effect whose
+   *  dependencies missed driver changes; the list would say "5 drivers in the
+   *  specification" while the pane fitted an empty one and errored "select at
+   *  least one driver". One spec, owned by the parent, no copy to go stale. */
+  spec: LgdSpecPayload
   onOpenVariable?: (column: string) => void
 }) {
   const pk = portfolio as PortfolioKey
@@ -33,15 +39,6 @@ export default function LgdModelPane({ portfolio, onOpenVariable }: {
   const setFittedLgd = useUi((s) => s.setFittedLgd)
 
   const cand = useQuery({ queryKey: ['lgdcand', portfolio], queryFn: () => api.lgdCandidates(portfolio) })
-  const [spec, setSpec] = useState<LgdSpecPayload>({ drivers: [], categoricals: [] })
-
-  useEffect(() => {
-    if (fittedLgd) { setSpec(fittedLgd.spec); return }
-    if (cand.data) setSpec({ drivers: [...cand.data.default_spec.drivers],
-                             categoricals: [...cand.data.default_spec.categoricals] })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cand.data, portfolio, fittedLgd?.hash,
-      JSON.stringify(asMap(fittedLgd?.spec.treatments))])
 
 
 

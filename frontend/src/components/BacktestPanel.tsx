@@ -247,20 +247,32 @@ export default function BacktestPanel({ r, portfolio, request }: {
              ...xName(periodAxis, 28),
              axisLabel: { color: k.muted, fontSize: 10, formatter: '{yyyy}' } },
     yAxis: { ...(baseOption().yAxis as object), type: 'value' as const, min: 0,
-             max: (v: { max: number }) => Math.max(0.3, v.max * 1.15),
+             // A rounded ceiling, clamped: a single pathological value used to
+             // set the axis to its own raw magnitude and print it verbatim as
+             // the top label. PSI above ~1 already means the population is
+             // unrecognisable; nothing above 3 is worth scaling for.
+             max: (v: { max: number }) =>
+               Math.ceil(Math.max(0.3, Math.min(v.max, 3) * 1.15) * 10) / 10,
              ...yName('PSI', 38),
              axisLabel: { color: k.muted, fontSize: 10 } },
     series: [{
       ...lineSeries({ name: 'Score PSI', color: accent(),
-        data: bt.score_psi.map((x) => [x.period, x.psi] as [string, number]) }),
+        // A non-finite PSI (an empty comparison bin) breaks the line rather
+        // than bending the axis.
+        data: bt.score_psi.map((x) =>
+          [x.period, Number.isFinite(x.psi) ? x.psi : null] as [string, number | null]) }),
       markLine: {
         silent: true, symbol: 'none',
         lineStyle: { color: k.muted, width: 1, type: [3, 3] as number[] },
         label: { color: k.muted, fontSize: 9 },
+        // Industry PSI convention: under 0.10 insignificant, 0.10-0.25 a
+        // moderate shift, above 0.25 significant. Both labels sit at the
+        // right edge, one above its line and one below, so neither collides
+        // with the axis or with the other.
         data: [{ yAxis: 0.10,
-                 label: { formatter: '0.10 some shift', position: 'insideStartTop' as const } },
+                 label: { formatter: '0.10 moderate shift', position: 'insideEndBottom' as const } },
                { yAxis: 0.25,
-                 label: { formatter: '0.25 unstable', position: 'insideEndTop' as const } }],
+                 label: { formatter: '0.25 significant shift', position: 'insideEndTop' as const } }],
       },
     }],
   }), [bt, theme])

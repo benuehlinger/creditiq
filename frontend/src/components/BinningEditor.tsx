@@ -206,7 +206,7 @@ export function Editor({
                        height={h} fill={sequential(0.2, m)} opacity={0.55} rx={1} />
         })}
         <text x={PAD.l} y={PAD.t + 9} fontSize={9} fill="var(--ink-muted)">
-          Accounts per slice · peak {num(maxCount)}
+          Accounts per interval · peak {num(maxCount)}
         </text>
         <line x1={PAD.l} y1={PAD.t + HIST_H} x2={W - PAD.r} y2={PAD.t + HIST_H}
               stroke="var(--chrome-grid)" strokeWidth={1} />

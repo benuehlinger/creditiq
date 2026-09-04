@@ -64,7 +64,7 @@ export default function Verdict({ r, screen }: { r: FitResponse; screen?: Screen
     : (drop ?? 0) > 0.10 ? 'critical'
     : (drop ?? 0) > 0.05 || aucO < 0.70 ? 'warning'
     : 'good'
-  const discText = aucO == null ? `AUC ${ratio(aucT)} on test; no out-of-time slice`
+  const discText = aucO == null ? `AUC ${ratio(aucT)} on test data; no out-of-time data`
     : `AUC ${ratio(aucT)} on test, ${ratio(aucO)} out of time`
       + (drop != null ? ` (${drop >= 0 ? '−' : '+'}${Math.abs(drop).toFixed(3)})` : '')
 

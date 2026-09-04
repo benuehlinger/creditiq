@@ -12,7 +12,12 @@ export default function FitDiagnostics({ r }: { r: FitResponse }) {
   const theme = useUi((s) => s.theme)
   const m = mode()
   const k = ink(m)
-  const ref = r.diagnostics.reference_slice
+  // Standard statistics vocabulary on screen: "test data", "out-of-time
+  // data" — never "slice", which is this codebase's internal word.
+  const REF_LABEL: Record<string, string> = {
+    test: 'test data', oot: 'out-of-time data', train: 'training data',
+  }
+  const ref = REF_LABEL[r.diagnostics.reference_slice] ?? r.diagnostics.reference_slice
 
   const roc = useMemo(() => ({
     ...baseOption(),
@@ -116,8 +121,8 @@ export default function FitDiagnostics({ r }: { r: FitResponse }) {
     <div className="space-y-3">
       <div className="grid gap-3 lg:grid-cols-3">
         <Card>
-          <CardHead title="ROC curve" subtitle={`${ref} slice`}
-            caption="True positive rate against false positive rate across all thresholds. The diagonal represents no discrimination." />
+          <CardHead title="ROC curve" subtitle={ref}
+            caption="True positive rate against false positive rate across all classification thresholds. The diagonal is the expected curve of a model with no discriminatory power." />
           <Legend items={[{ name: 'Model', color: accent() },
                           { name: 'No skill', color: deemphasis(m) }]} />
           <EChart option={roc} height={210} ariaLabel="ROC curve"
@@ -126,8 +131,8 @@ export default function FitDiagnostics({ r }: { r: FitResponse }) {
         </Card>
 
         <Card>
-          <CardHead title="Kolmogorov-Smirnov" subtitle={`Maximum separation ${ratio(r.diagnostics[ref as 'test']?.ks)}`}
-            caption="The widest gap between the cumulative good and bad distributions, and the score where it happens." />
+          <CardHead title="Kolmogorov–Smirnov statistic" subtitle={`Maximum separation ${ratio(r.diagnostics[r.diagnostics.reference_slice as 'test']?.ks)} · ${ref}`}
+            caption="Cumulative distributions of the predicted score for defaulters and non-defaulters. The KS statistic is the maximum vertical distance between the two curves." />
           <Legend items={[{ name: 'Cumulative bad', color: series(2, m) },
                           { name: 'Cumulative good', color: series(0, m) }]} />
           <EChart option={ksOpt} height={210} ariaLabel="KS separation curve"
@@ -137,8 +142,8 @@ export default function FitDiagnostics({ r }: { r: FitResponse }) {
         </Card>
 
         <Card>
-          <CardHead title="Decile lift" subtitle={`${ref} slice · accounts ranked by predicted probability, split into ten equal groups`}
-            caption="Each bar is one decile's realised default rate divided by the whole book's, on the same slice. A value of 1.0× is the book average; a well-ranking model concentrates defaults in the first deciles and depletes the last." />
+          <CardHead title="Decile lift" subtitle={`${ref} · accounts ranked by predicted probability, split into ten equal groups`}
+            caption="Each bar is one decile's realised default rate divided by the whole book's, on the same data. A value of 1.0× is the book average; a well-ranking model concentrates defaults in the first deciles and depletes the last." />
           <Legend kind="rect" items={[
             { name: 'Realised rate ÷ book rate', color: accent() },
             { name: 'Book average (1.0×)', color: deemphasis(m) },

@@ -2694,3 +2694,15 @@ and the report, written last, is a true build-complete marker for the
 store's freshness stamp. And a browser carrying a loaded-version marker
 for a version that no longer exists drops it the moment the book's
 version list is known, instead of retrying a ghost.
+
+## The copy stops arguing with its own history
+
+"Not in the totals · nothing is substituted in its place", "nothing
+stands in for a model you have not built", "nothing is fitted until you
+say so" — every one of those sentences was this project's design debate
+leaking onto the screen. A user who never knew substitution was ever
+possible reads "nothing is substituted" as unexplained noise. The rule,
+now applied across the roll-up, the scenario empty state, the LGD
+proposal and the welcome: state what is and the action that changes it;
+never defend against an alternative that exists only in the decision log.
+That is what the decision log is for.

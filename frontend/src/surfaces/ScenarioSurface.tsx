@@ -161,10 +161,8 @@ export default function ScenarioSurface() {
               className="mt-2 rounded-ctl bg-accent px-4 py-1.5 text-xs font-semibold text-white">
               Fit the LGD model
             </button>}>
-            A projection is PD times LGD times exposure, so it needs both halves
-            of the model. Nothing is substituted in its place: a loss number
-            produced by a severity model you never fitted would not be your
-            model's number.
+            A projection is PD times LGD times exposure, so it needs both
+            halves of the model. Fit the LGD model on this book to project it.
           </EmptyState>
         </Card>
       )}

@@ -256,9 +256,9 @@ export default function LgdModelPane({ portfolio, spec, onOpenVariable }: {
                 className="mt-2 rounded-ctl bg-accent px-4 py-1.5 text-xs font-semibold text-white disabled:opacity-60">
                 {busy ? 'Fitting…' : 'Fit the LGD model'}
               </button>}>
-              A starting set of drivers is pre-selected in the list as a proposal —
-              nothing is fitted until you say so. Click a driver first to see its
-              relationship with realised severity, adjust the selection, then fit.
+              A starting set of drivers is pre-selected in the list as a
+              proposal. Click a driver to see its relationship with realised
+              severity, adjust the selection, then fit.
             </EmptyState>
           </Card>
         ) : (

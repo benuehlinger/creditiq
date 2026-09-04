@@ -225,7 +225,7 @@ export default function RollUpSurface() {
       <div className="space-y-3 p-4">
         <Card>
           <CardHead title="Portfolio roll-up"
-            caption="No book has a promoted model yet, so there is no loss position to report — nothing is substituted in its place. Promote a champion on a book's Versions page, or report a book on a saved version below, and the roll-up assembles from what you choose." />
+            caption="No book has a promoted model yet. Promote a champion on a book's Versions page, or report a book on a saved version below, and the roll-up assembles from your choices." />
           <div className="grid gap-px border-t border-hairline bg-hairline sm:grid-cols-3">
             {uncovered.map((u) => {
               const options = data.available[u.portfolio] ?? []
@@ -316,9 +316,8 @@ export default function RollUpSurface() {
               ? 'One or more books are reported on a model that is not their champion. This is a comparison, not the position the firm holds.'
               : uncovered.length
               ? `${uncovered.map((u) => u.label).join(' and ')} ${uncovered.length === 1 ? 'has' : 'have'}`
-                + ' no promoted model and contribute nothing here — nothing is'
-                + ' substituted in their place. Fit and promote a model to bring'
-                + ' each into the total.'
+                + ' no promoted model and ' + (uncovered.length === 1 ? 'is' : 'are')
+                + ' not included. Fit and promote a model on each book to include it.'
               : 'Each book is reported on its promoted champion.'}
           </span>
           {delta != null && (
@@ -460,7 +459,7 @@ export default function RollUpSurface() {
                 </div>
                 <div className="mt-3 text-2xl font-semibold tracking-tight text-ink-muted">—</div>
                 <div className="mt-0.5 text-tiny text-ink-muted">
-                  not in the totals · nothing is substituted in its place
+                  not included in the totals
                 </div>
                 <dl className="mb-3 mt-3 space-y-1 text-tiny">
                   <Row k="Exposure" v={usd(u.exposure)} />
@@ -754,7 +753,6 @@ function Welcome() {
 
       <p className="mt-10 border-t border-hairline pt-4 text-xs text-ink-muted">
         This page becomes the portfolio roll-up as books gain promoted models.
-        Nothing stands in for a model you have not built.
       </p>
     </div>
   )

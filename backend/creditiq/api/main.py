@@ -1748,8 +1748,8 @@ def rollup(tornado: bool = True, select: str = Query("")):
         "not_covered": r.not_covered,
         "champions": {k: (v.to_dict() if v else None) for k, v in champs.items()},
         "note": ("Each book is projected with its promoted champion, or with the "
-                 "saved version selected for it. A book with neither contributes "
-                 "nothing; no default stands in."),
+                 "saved version selected for it. Books with neither are not "
+                 "included."),
     })
 
 

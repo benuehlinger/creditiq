@@ -94,6 +94,12 @@ export default function AppShell() {
     const el = document.documentElement
     if (portfolio) el.setAttribute('data-portfolio', portfolio)
     else el.removeAttribute('data-portfolio')
+    // Entering a book's workspace warms that book's frame server-side, in the
+    // background. A human spends half a minute reading candidates before the
+    // first fit; the server spends that half minute loading the panel, so the
+    // fit click pays for the estimation only. Fire-and-forget: failure just
+    // means the old cold-start price.
+    if (portfolio) api.prepare(portfolio).catch(() => {})
   }, [portfolio])
 
   // Keyboard navigation throughout — live-demo insurance.

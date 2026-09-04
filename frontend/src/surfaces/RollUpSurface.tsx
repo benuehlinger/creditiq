@@ -64,9 +64,13 @@ export default function RollUpSurface() {
   })
   // The adopted position, always available for comparison. Cached server-side,
   // so this costs nothing once it has been run.
+  // Only when a hand-picked selection exists: the comparison against the
+  // adopted position is the delta chip's data and nothing else's, and running
+  // it unconditionally doubled the cold roll-up cost for a chip that was not
+  // even rendered.
   const adopted = useQuery({
     queryKey: ['rollup', ''], queryFn: () => api.rollup({}), staleTime: Infinity,
-    enabled: ready,
+    enabled: ready && selKey !== '',
   })
 
   // Keep the progress card for a moment after the response, so the bar is

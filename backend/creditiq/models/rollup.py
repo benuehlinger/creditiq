@@ -24,6 +24,7 @@ from . import ead as EAD
 from . import ecl as ECL
 from . import scenario_service as SS
 from . import service as modelsvc
+from . import runcache
 from . import versions as vstore
 from .spec import LgdSpec, MevSpec, ModelSpec, VariableSpec
 
@@ -252,7 +253,17 @@ def run(scenarios: list[str] | None = None, with_tornado: bool = True,
         timings[portfolio] = round(time.perf_counter() - ts, 2)
 
         if with_tornado:
-            tornado += _tornado_for(spec, sr, portfolio)
+            # Per MODEL, not per selection combination: the tornado is several
+            # full projections per book, and keying it only on the roll-up's
+            # selection recomputed the same model's shocks every time the
+            # picker combination changed. The disk layer carries it across
+            # restarts like every other derived result.
+            tkey = spec.hash()
+            shocks = runcache.load(portfolio, "tornado", tkey)
+            if shocks is None:
+                shocks = _tornado_for(spec, sr, portfolio)
+                runcache.save(portfolio, "tornado", tkey, shocks)
+            tornado += shocks
 
     totals = {}
     for k in scenarios:

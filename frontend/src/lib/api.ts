@@ -830,6 +830,8 @@ export const api = {
   /** Whether the synthetic panels exist, and generation progress if running. */
   dataStatus: () => get<DataInitStatus>('/data/status'),
   dataGenerate: () => post<{ state: string; total?: number }>('/data/generate', {}),
+  /** Fire-and-forget: warm one book's frame server-side while the user reads. */
+  prepare: (k: string) => post<{ status: string }>(`/portfolios/${k}/prepare`, {}),
   portfolios: () => get<PortfolioInfo[]>('/portfolios'),
   dataHealth: (k: string) => get<DataHealth>(`/portfolios/${k}/health`),
   timeseries: (k: string, by?: string) => get<TimeseriesPoint[]>(`/portfolios/${k}/timeseries`, { by }),

@@ -2706,3 +2706,18 @@ now applied across the roll-up, the scenario empty state, the LGD
 proposal and the welcome: state what is and the action that changes it;
 never defend against an alternative that exists only in the decision log.
 That is what the decision log is for.
+
+## Cold-state costs move off the user's click
+
+Three fixes for the fresh-clone experience. Entering a book's workspace
+now fires a background prepare that loads that book's frame server-side —
+per book, demand-driven, not the 9 GB all-books warm-up — so the first
+fit's click pays for estimation, not for a parquet load. The roll-up's
+sensitivity tornado is cached per MODEL rather than per selection
+combination: it is several full projections per book, and keying it on
+the picker combination recomputed the same model's shocks on every
+switch; measured, switching selections on a cold server went from a full
+recompute to zero seconds. And the adopted-position comparison — a second
+complete roll-up — now runs only when a hand-picked selection exists,
+since it feeds a delta chip that is not otherwise rendered; it used to
+double the cold roll-up cost unconditionally.

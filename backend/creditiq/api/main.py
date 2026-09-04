@@ -598,6 +598,31 @@ _GEN = {"state": "idle", "step": 0, "total": 0, "label": "", "started_at": 0.0,
 _GEN_LOCK = _threading.Lock()
 
 
+@app.post("/api/portfolios/{key}/prepare")
+def prepare_portfolio(key: str):
+    """Warm ONE book's frame and screening, in the background.
+
+    The first fit on a cold server paid the panel load and the design build
+    inside the user's click — thirty seconds of which twenty were loading a
+    parquet the server could have loaded while the user was still choosing
+    variables. The frontend fires this when a book's workspace opens; by the
+    time a human has read the candidate list, the frame is hot. This is
+    per-book and demand-driven — not the all-books warm-up, which costs ~9 GB
+    and stays opt-in."""
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+
+    def run() -> None:
+        try:
+            store.analysis_frame(key)
+            _screen_all(key)
+        except Exception:                                               # noqa: BLE001
+            pass
+
+    _threading.Thread(target=run, daemon=True).start()
+    return {"status": "warming", "portfolio": key}
+
+
 @app.get("/api/data/status")
 def data_status():
     ready = len(store.available()) == len(PORTFOLIOS)

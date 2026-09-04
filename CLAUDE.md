@@ -13,7 +13,9 @@ make dev       # backend :8000 (--reload), frontend :5173
 First boot on a machine with no data shows a "Generate the synthetic data"
 button (~20s–3min depending on hardware). `make data` does the same from
 the CLI. `make demo` pre-warms caches (~9 GB RAM). `make test` runs the
-backend suite (~5 min); `cd frontend && npx vitest run` the frontend's.
+backend suite (~5 min); `cd frontend && npx vitest run` the frontend's;
+`make e2e` (with `make dev` running) executes the browser contract suite
+that fails if navigation ever triggers computation.
 
 ## Contracts — do not violate these
 

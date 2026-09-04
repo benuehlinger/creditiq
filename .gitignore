@@ -26,3 +26,8 @@ versions/
 data/cache/
 # superseded saved versions, archived out of the app
 versions/archive-*/
+
+# playwright artifacts
+frontend/test-results/
+frontend/playwright-report/
+frontend/tsconfig.tsbuildinfo

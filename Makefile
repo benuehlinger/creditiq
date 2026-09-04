@@ -6,7 +6,7 @@ DEPS := fastapi>=0.115 "uvicorn[standard]>=0.32" "pandas>=2.2,<3" numpy>=1.26 \
         scipy>=1.13 statsmodels>=0.14 scikit-learn>=1.5 pyarrow>=17 \
         python-multipart httpx optbinning>=0.19 pytest ruff
 
-.PHONY: help setup data fred test lint dev backend frontend reset clean
+.PHONY: help setup data fred test e2e lint dev backend frontend reset clean
 
 help:  ## show this help
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -27,6 +27,9 @@ data:  ## regenerate every synthetic panel, deterministically
 
 test:  ## backend test suite
 	cd backend && .venv/bin/python -m pytest tests -q
+
+e2e:  ## browser contract tests (needs `make dev` running in another terminal)
+	cd frontend && npx playwright test e2e/contract.spec.ts
 
 lint:
 	cd backend && .venv/bin/ruff check creditiq tests || true

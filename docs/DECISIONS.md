@@ -2721,3 +2721,29 @@ recompute to zero seconds. And the adopted-position comparison — a second
 complete roll-up — now runs only when a hand-picked selection exists,
 since it feeds a delta chip that is not otherwise rendered; it used to
 double the cold roll-up cost unconditionally.
+
+## The browser contract suite, and what it may not do
+
+`frontend/e2e/contract.spec.ts` (run with `make e2e` against a running
+`make dev`) drives the real app in a real browser and asserts the state
+contract directly: it counts network requests to the compute endpoints
+across a warm navigation lap and fails on any. This is the layer the
+backend suite (math) and the vitest suite (state-machine logic) both
+miss — every recomputation-on-navigation bug found in use lived here.
+
+Two rules its own development taught, kept so nobody relearns them:
+
+**Navigate by clicking, never by `page.goto`.** A `goto` is a full
+browser reload — a brand-new app with an empty in-memory query cache — so
+a lap of gotos refetches legitimately and blames the app for the test's
+navigation style. The suite lost half a day to three "leaked" compute
+calls that were exactly the one LGD visit and two scenario visits of its
+own goto lap. Users click; the test clicks.
+
+**Seed, don't inherit; clean up, don't accumulate.** Every test builds
+its state through `e2e/seed.ts` — a known specification fitted via the
+API and planted in localStorage before boot — instead of running against
+whatever the last human left behind. A test that skips itself when the
+state is absent guards nothing. The one test that saves a version
+deletes it in a finally block: suite runs must not leave models in the
+analyst's version list.

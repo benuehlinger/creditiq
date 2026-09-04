@@ -337,9 +337,9 @@ export default function BacktestPanel({ r, portfolio, request }: {
         </Card>
 
         <Card>
-          <CardHead title="Score stability"
-            subtitle="PSI of the model's own output, against the first 12 months"
-            caption="Whether the population the model scores has drifted away from the one it was fitted on." />
+          <CardHead title="Score distribution stability"
+            subtitle="Population stability index per period, against the panel's first 12 months"
+            caption="Compares each period's distribution of predicted scores with the reference window's — not individual scores, which move as accounts age; the question is whether the MIX of risk being scored still resembles the book the model was fitted on. A fitted model is evidence only on populations like its development sample, and a distribution shift is visible immediately, months before outcomes are. Anchoring to the panel's start means some drift is expected late in a growing book: read the level against the thresholds, and the jumps against events." />
           <EChart option={psi} height={200} ariaLabel="Score population stability index"
             table={{ columns: ['Period', 'PSI', 'Rows'],
                      rows: bt.score_psi.map((p) => [p.period, Number((p.psi ?? 0).toFixed(4)), p.n]) }} />

@@ -435,3 +435,56 @@ breaks a reference, because nothing references the name.
 
 Export, fresh import and refit reproduces every metric to 1e-12 — asserted in the
 test suite.
+
+## 17. Automated variable selection
+
+Two stages, mirroring how these models are defended in review.
+
+**Stage 1 — internal cores.** Forward stepwise then backward elimination over
+the candidate borrower and loan variables, with the TERM as the unit of entry
+and exit: a spline basis or a dummy block enters and leaves whole, tested by a
+likelihood-ratio test with the term's degrees of freedom. The default decision
+rule is BIC with the penalty on the event count (the rare-event convention,
+consistent with the curve recommendation in section 13); a p-value rule is
+available. Three cores can be produced: the stepwise core, a smaller core of
+the strongest drivers ranked by likelihood-ratio drop on removal, and a
+verbatim expert core. Cyclical drivers (current LTV, utilization, delinquency)
+are warned, not filtered: they can absorb the macro signal and weaken or flip
+the scenario terms.
+
+**Stage 2 — macro terms, exhaustively.** Every stationary transform-and-lag
+variant of each selected macro family is screened one at a time against each
+core; a variant survives if its fitted coefficient matches the economic prior
+and clears a loose p cutoff (default 0.10). The strongest few variants per
+family (default two) enumerate in every combination of one to three, under
+three constraints: at most one variant per underlying series, never the same
+series at two lags, and no pair whose correlation exceeds the cap (default
+0.7). Each core-plus-combination is refitted jointly — all coefficients
+re-estimated — and core coefficients that flip sign or shift beyond the
+configured percentage are flagged. Identical variable sets from different
+cores share a specification hash and merge into one row carrying both
+lineages.
+
+**Every emitted model carries one to three macro terms.** A model without one
+cannot be stressed, so it is not a candidate by definition.
+
+**Stress behaviour without a projection run.** The scenario reaches a model
+only through its macro terms (the transmission contract), so each row's
+stressed shift in log-odds is the sum of its macro coefficients times the
+change in their standardised series along the published scenario path. The
+stressed PD path applies that shift to the recent book's anchor rate. The
+board reports whether peak PD orders by scenario severity, the severe peak,
+and the smoothness of the severe path (largest absolute second difference).
+
+**Composite rank.** A stated-weight score over lean statistics available for
+every row: out-of-time AUC rescaled over the board (0.40), all coefficients
+significant (0.15), stress monotone (0.15), no core shift (0.10), inverse
+worst term VIF (0.10), and the in-sample-to-out-of-time AUC gap (0.10). It
+orders the board; it decides nothing. Finalists (top N, default 10) receive
+the full fit, backtest and error decomposition; the composite is not
+re-scored on those, so every row's score means the same thing.
+
+**Review.** The reviewer's rank is kept beside the automated rank and never
+overwrites it. A rejection, or a rank away from the automated order, requires
+a written justification. Every action is appended to an audit trail
+(reviewer, timestamp, field, before, after) exportable as CSV.

@@ -2805,3 +2805,50 @@ promoted, run forced past the roll-up cache, and the cache cleared on
 the way out so nothing computed against the temporary directory serves
 a later caller. Same lesson as the e2e fork test: user state is not a
 fixture, and a test that skips itself guards nothing.
+
+## The automated search fits lean, on the screening frame
+
+The selection pipeline (models/selection.py) runs hundreds of candidate
+fits, so it does not use service.run. Search fits go design-build plus
+IRLS on the screening frame's in-time rows: no full-panel scoring, no
+backtest artifacts, no scorecard, nothing pickled per candidate. The
+entry rule is BIC on the event count, the same rare-event convention
+analysis/curve.py documents. Out-of-time AUC on a leaderboard row is
+measured on the screening frame's months past the boundary, which the
+candidate was never fitted on. Finalists alone get service.run, capped
+at twelve, under the run cache's own bound.
+
+Stage 2 does not even rebuild the design: the core's matrix is built
+once, and each variant or combination appends only its standardised
+macro column through a per-frame bank (MevBank). 179ms per candidate
+against ~2s for a full rebuild; the search's whole feasibility lives in
+that gap. The appended column is standardised on the fit frame and the
+full-frame copy reuses those statistics, exactly as design.build does
+with train maps.
+
+## Stress behaviour on the board comes from coefficients alone
+
+Contract 3 says a scenario reaches a model only through its macro
+terms. So a row's stressed log-odds shift is sum(beta_mev x change in
+the standardised series along the published path), applied to the
+recent book's anchor rate — no design build, no account-level
+projection, computed for every row. Monotonicity means peak PD orders
+by scenario severity across the PUBLISHED ladder (this cycle publishes
+baseline and severely adverse only). A counter-economic sign can still
+be monotone — the severe scenario also has the deeper recovery leg, so
+a peak exists either way — which is why the sign check is its own
+column and not folded into the stress read.
+
+## Selection results are derived; the review record is user-made
+
+Search results live in the run cache under kind "selection", keyed by
+the configuration hash, with the data fingerprint recorded in the
+payload; a rebuild orphans them and the board says "superseded panel"
+rather than silently rendering review state against nothing. The
+review record (user rank, status, reason, justification, audit) is the
+reviewer's work product and lives in versions/selection/ — gitignored,
+restart-surviving, cleared by make reset with everything else
+user-made. The automated rank is never stored there and the user rank
+never overwrites it: two rankings side by side is the design, and the
+audit trail (who, when, before, after) exports as CSV for the
+validation binder.

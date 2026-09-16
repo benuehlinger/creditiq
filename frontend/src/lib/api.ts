@@ -372,7 +372,6 @@ export interface FitResponse {
   /** Reference level per dummy-encoded variable — the bin with no indicator
    *  column, which every coefficient of that term is measured against. */
   references?: Record<string, string>
-  performance_note: string
 }
 
 export interface BacktestErrors {

@@ -858,14 +858,6 @@ def _run_payload(r) -> dict:
         "references": _references(r),
         "woe_maps": {k: {kk: vv for kk, vv in v.items() if kk != "map"}
                      for k, v in r.fit.woe_maps.items()},
-        "performance_note": (
-            f"Fitted and backtested in {r.timings.get('total', 0):.1f} seconds on "
-            f"{r.n_full:,} account-months."
-            + (f" The FIT sample was thinned to {r.spec.sample.downsample_rows:,} rows "
-               f"(every default kept, non-events thinned, intercept prior-corrected); "
-               f"scoring, diagnostics and backtesting still use every row."
-               if r.downsampled else
-               " No downsampling — every account-month was used for the fit.")),
     }
 
 

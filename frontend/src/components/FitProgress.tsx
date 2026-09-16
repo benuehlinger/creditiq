@@ -4,12 +4,13 @@ import { useEffect, useRef, useState } from 'react'
 /**
  * The fit, while it runs.
  *
- * A fit is one request and the server does not stream progress, so what this
- * shows is an ESTIMATE paced by the previous fit's timings: the six phases the
- * server reports, each sized by how long it took last time, with defaults
- * before there is a last time. The bar eases toward the end and holds there
- * until the response arrives, then completes. It is labelled as an estimate
- * where it states a time.
+ * A fit is one request and the server does not stream progress, so the bar is
+ * PACED internally by the previous fit's timings: the six phases the server
+ * reports, each sized by how long it took last time, with defaults before
+ * there is a last time. The bar eases toward the end and holds there until
+ * the response arrives, then completes. What it SHOWS the user is the phase
+ * that is running and the elapsed clock — never a predicted total, which was
+ * a guess dressed as a number.
  *
  * Why bother: a fit on three million account-months takes five to ten
  * seconds, and a static shimmer for ten seconds reads as a hang. Naming the
@@ -101,7 +102,7 @@ export default function FitProgress({ phases, done = false, doneLabel = 'Fitted'
           {!done && <span className="ml-1 inline-block w-4 text-left text-ink-muted animate-[dots_1.2s_steps(4,end)_infinite]" />}
         </div>
         <div className="tnum text-tiny text-ink-muted">
-          {elapsed.toFixed(1)}s{!done && <> · about {Math.ceil(total)}s, estimated from the last fit</>}
+          {elapsed.toFixed(1)}s
         </div>
       </div>
 

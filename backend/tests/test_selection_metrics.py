@@ -1,0 +1,144 @@
+"""Ranking and stress behaviour: the numbers a reviewer sorts by.
+
+The composite is checked against a hand-computed example, because a ranking
+that cannot be reproduced on paper is a ranking nobody can defend in front of
+model validation.
+"""
+
+import numpy as np
+import pytest
+
+from creditiq.models import selection as S
+
+
+def _row(**kw):
+    base = {"filtered": False, "auc_in": 0.75, "auc_oot": 0.72,
+            "all_significant": True, "core_shifted": False, "max_vif": 1.0,
+            "stress": {"monotone": True}}
+    base.update(kw)
+    return base
+
+
+def test_composite_rank_matches_a_hand_computed_example():
+    r1 = _row(auc_oot=0.75, auc_in=0.76, max_vif=1.0)
+    r2 = _row(auc_oot=0.70, auc_in=0.80, all_significant=False,
+              stress={"monotone": False}, core_shifted=True, max_vif=5.0)
+    r3 = _row(auc_oot=0.72, auc_in=0.73, stress={"monotone": False},
+              max_vif=2.0)
+    rows = [r2, r3, r1]                    # deliberately out of order
+    S.composite_rank(rows)
+
+    # By hand, with span = 0.75 - 0.70 = 0.05:
+    #   r1: .40(1) + .15 + .15 + .10 + .10(1/1) + .10(1 - .01/.10) = 0.99
+    #   r2: .40(0) + 0 + 0 + 0 + .10(1/5) + .10(1 - min(.10/.10,1)) = 0.02
+    #   r3: .40(.4) + .15 + 0 + .10 + .10(1/2) + .10(.9) = 0.55
+    assert r1["score"] == pytest.approx(0.99, abs=1e-9)
+    assert r2["score"] == pytest.approx(0.02, abs=1e-9)
+    assert r3["score"] == pytest.approx(0.55, abs=1e-9)
+    assert (r1["auto_rank"], r3["auto_rank"], r2["auto_rank"]) == (1, 2, 3)
+
+
+def test_filtered_rows_are_never_ranked():
+    rows = [_row(), _row(filtered=True, filter_reason="max_vif")]
+    S.composite_rank(rows)
+    assert rows[0]["auto_rank"] == 1
+    assert rows[1]["auto_rank"] is None
+    assert rows[1]["score"] is None
+
+
+def test_auc_falls_back_to_in_sample_when_oot_is_thin():
+    rows = [_row(auc_oot=None, auc_in=0.80), _row(auc_oot=0.70, auc_in=0.71)]
+    S.composite_rank(rows)
+    assert rows[0]["auto_rank"] == 1
+
+
+# ── stress behaviour ─────────────────────────────────────────────────────────
+def _stress_row(beta: float):
+    """A minimal row carrying one unemployment term with unit scale."""
+    label = S.MevSpec(key="unemployment_rate", transform="yoy").label()
+    col = f"mev:{label}"
+    p = 0.02
+    return {
+        "name": "hand-built", "mevs": [
+            {"key": "unemployment_rate", "transform": "yoy",
+             "lag_months": 0, "label": label}],
+        "coefficients": [{"name": col, "estimate": beta}],
+        "mev_scale": {col: {"mean": 0.0, "std": 1.0}},
+        "anchor_logit": float(np.log(p / (1 - p))),
+    }
+
+
+def test_stress_peaks_order_by_scenario_severity():
+    """Unemployment swings harder under the severe scenario, so with an
+    economically-signed coefficient the severe peak must exceed the baseline
+    peak and the anchor. (A counter-economic sign is caught by the sign-check
+    column, not here: the severe scenario also has the deeper recovery leg, so
+    a peak exists either way.)"""
+    cfg = S.SelectionConfig(portfolio="consumer", candidates=[
+        S.CandidateVar(column="fico_orig")])
+    good = _stress_row(beta=0.5)
+    S.stress_check(cfg, [good])
+    st = good["stress"]
+    assert st["usable"]
+    assert st["monotone"] is True
+    assert st["peak_pd"]["severely_adverse"] > st["peak_pd"]["baseline"]
+    assert st["peak_stressed_pd"] > st["anchor_pd"]
+
+
+def test_stress_response_grows_with_the_coefficient():
+    cfg = S.SelectionConfig(portfolio="consumer", candidates=[
+        S.CandidateVar(column="fico_orig")])
+    small, large = _stress_row(beta=0.05), _stress_row(beta=0.3)
+    S.stress_check(cfg, [small, large])
+    assert large["stress"]["peak_stressed_pd"] > small["stress"]["peak_stressed_pd"]
+
+
+def test_stress_smoothness_is_a_second_difference():
+    cfg = S.SelectionConfig(portfolio="consumer", candidates=[
+        S.CandidateVar(column="fico_orig")])
+    row = _stress_row(beta=0.5)
+    S.stress_check(cfg, [row])
+    s = row["stress"]["smoothness"]
+    assert s is not None and 0.0 <= s < 0.5
+
+
+def test_a_row_with_no_usable_path_says_so():
+    cfg = S.SelectionConfig(portfolio="consumer", candidates=[
+        S.CandidateVar(column="fico_orig")])
+    row = _stress_row(beta=0.5)
+    row["mev_scale"] = {}                  # the scale is gone: not usable
+    S.stress_check(cfg, [row])
+    assert row["stress"]["usable"] is False
+    assert row["stress"]["monotone"] is None
+
+
+# ── the whole search, small ──────────────────────────────────────────────────
+def test_run_search_end_to_end_small():
+    """A tiny but complete run: two candidates, one macro family, one finalist.
+    This is the wall for the payload contract the API and the board rely on."""
+    cfg = S.SelectionConfig(
+        portfolio="consumer",
+        candidates=[S.CandidateVar(column="fico_orig"),
+                    S.CandidateVar(column="dti")],
+        cores=["stepwise"],
+        mev_families=["unemployment_rate"],
+        rules=S.SelectionRules(top_n_full=1))
+    seen = []
+    payload = S.run_search(cfg, progress=lambda *a: seen.append(a))
+
+    assert payload["config_hash"] == cfg.hash()
+    assert payload["data_fingerprint"]
+    assert payload["n_rows"] == len(payload["rows"]) > 0
+    assert all(1 <= r["n_mevs"] <= 3 for r in payload["rows"])
+    ranked = [r for r in payload["rows"] if r["auto_rank"]]
+    assert ranked, "at least one ranked row"
+    finalists = [r for r in payload["rows"] if r["finalist"]]
+    assert len(finalists) == 1
+    f = finalists[0]
+    assert f["auto_rank"] == 1
+    assert f["full"]["errors_oot"] is None or "rmse_pp" in f["full"]["errors_oot"]
+    # progress was verbose: stages present, labels name what is being fitted
+    stages = {s[0] for s in seen}
+    assert stages >= {1, 2, 3, 4}
+    assert any("screening" in s[4] for s in seen)
+    assert any("full fit" in s[4] for s in seen)

@@ -52,6 +52,7 @@ from . import fit as F
 from . import metrics as M
 from .naming import friendly_name
 from .spec import MevSpec, ModelSpec, SampleSpec, VariableSpec
+from .versions import data_fingerprint
 
 # Variables that move with the cycle the macro terms are supposed to carry.
 # A core that includes one still fits — often better in sample — but it drains
@@ -612,6 +613,21 @@ def joint_fit_rows(cfg: SelectionConfig, cores: list[Core],
             else:
                 auc_oot = ks_oot = None
 
+            # What the stress check needs later, without refitting: each macro
+            # column's standardisation, and the log-odds level of the recent
+            # book to anchor the stressed PD path on.
+            mev_scale: dict[str, dict] = {}
+            for m in combo:
+                col = f"mev:{m.label()}"
+                if col in lean.fit.columns:
+                    i = lean.fit.columns.index(col) - 1     # means/stds skip the intercept
+                    mev_scale[col] = {"mean": float(lean.fit.means[i]),
+                                      "std": float(lean.fit.stds[i])}
+            dates_all = pd.DatetimeIndex(des_all.dates)
+            recent = dates_all >= dates_all.max() - pd.DateOffset(months=12)
+            p_recent = float(np.clip(p_all[recent].mean(), 1e-8, 1 - 1e-8))
+            anchor_logit = float(np.log(p_recent / (1.0 - p_recent)))
+
             named = [c for c in lean.fit.coefficients if c.name != "intercept"
                      and c.term != "seasoning"]
             max_p = max((c.p_value for c in named), default=None)
@@ -664,6 +680,8 @@ def joint_fit_rows(cfg: SelectionConfig, cores: list[Core],
                      "std_error": c.std_error, "p_value": c.p_value,
                      "term": c.term, "term_vif": c.term_vif}
                     for c in lean.fit.coefficients],
+                "mev_scale": mev_scale,
+                "anchor_logit": anchor_logit,
                 "filtered": False, "filter_reason": None,
             }
             if rules.p_rule == "filter" and not row["all_significant"]:
@@ -674,3 +692,254 @@ def joint_fit_rows(cfg: SelectionConfig, cores: list[Core],
             by_hash[h] = row
     return [r for r in by_hash.values() if not r["filtered"]] + \
            [r for r in by_hash.values() if r["filtered"]]
+
+
+# ── stress behaviour, without a projection run ───────────────────────────────
+def available_scenarios() -> list[str]:
+    from ..mev import scenarios as scen
+    published, _ = scen.load_all()
+    return [n for n in SEVERITY_ORDER if n in published]
+
+
+def stress_check(cfg: SelectionConfig, rows: list[dict],
+                 progress=None, cancel=None) -> None:
+    """Attach stress behaviour to every row from coefficients alone.
+
+    Contract #3: a scenario reaches a model only through its macro terms, with
+    internal variables frozen at the reporting date. So the stressed shift in
+    log-odds is exactly the sum of the macro coefficients times the change in
+    their standardised series along the scenario path — no design build, no
+    account-level projection. The stressed PD path is that shift applied to
+    the recent book's anchor rate, which is the portfolio-level read a
+    leaderboard needs; the account-level number stays a projection-run affair.
+    """
+    from . import scenario_service as scensvc
+    if not rows:
+        return
+    _, full_df = _frames(cfg)
+    as_of = pd.Timestamp(full_df["performance_date"].max())
+    names = available_scenarios()
+    paths = {n: scensvc.scenario_mev_path(n, as_of) for n in names}
+
+    # each variant's transformed, lagged series along each scenario path,
+    # computed once and shared across every row that carries the variant
+    series: dict[tuple, dict[str, pd.Series]] = {}
+
+    def variant_series(m: dict) -> dict[str, pd.Series]:
+        key = (m["key"], m["transform"], m["lag_months"])
+        if key not in series:
+            per = {}
+            for n in names:
+                base = paths[n].get(m["key"])
+                if base is None:
+                    per[n] = None
+                    continue
+                s = D.apply_mev_transform(base, m["transform"])
+                if m["lag_months"]:
+                    s = s.shift(m["lag_months"])
+                per[n] = s
+            series[key] = per
+        return series[key]
+
+    for i, row in enumerate(rows, 1):
+        if cancel is not None and cancel.is_set():
+            raise Cancelled()
+        if progress:
+            progress(i, len(rows), f"stress behaviour: {row['name']}")
+        beta = {c["name"]: c["estimate"] for c in row["coefficients"]}
+        peak_pd: dict[str, float] = {}
+        severe_path: pd.Series | None = None
+        usable = True
+        for n in names:
+            shift = None
+            for m in row["mevs"]:
+                col = f"mev:{m['label']}"
+                scale = row["mev_scale"].get(col)
+                s = variant_series(m)[n]
+                if scale is None or s is None or col not in beta:
+                    usable = False
+                    break
+                fwd = s.loc[s.index > as_of]
+                x0 = float(s.loc[:as_of].iloc[-1])
+                term = beta[col] * (fwd - x0) / (scale["std"] or 1.0)
+                shift = term if shift is None else shift.add(term, fill_value=0.0)
+            if not usable or shift is None or shift.empty:
+                usable = False
+                break
+            pd_path = 1.0 / (1.0 + np.exp(-(row["anchor_logit"] + shift)))
+            peak_pd[n] = float(pd_path.max())
+            if n == names[-1]:
+                severe_path = pd_path
+        if not usable:
+            row["stress"] = {"usable": False, "monotone": None,
+                             "peak_pd": None, "smoothness": None,
+                             "scenarios": names}
+            continue
+        peaks = [peak_pd[n] for n in names]
+        monotone = all(b >= a - 1e-9 for a, b in zip(peaks, peaks[1:]))
+        smooth = float(np.abs(np.diff(severe_path.to_numpy(), n=2)).max()) \
+            if severe_path is not None and len(severe_path) > 2 else 0.0
+        row["stress"] = {
+            "usable": True, "monotone": bool(monotone),
+            "peak_pd": {n: peak_pd[n] for n in names},
+            "peak_stressed_pd": peaks[-1],
+            "anchor_pd": float(1.0 / (1.0 + np.exp(-row["anchor_logit"]))),
+            "smoothness": smooth, "scenarios": names,
+        }
+
+
+# ── ranking and finalists ────────────────────────────────────────────────────
+# The composite is deliberately simple and stated in full in METHODOLOGY.md:
+# normalised out-of-time discrimination carries the most weight, then the
+# checks a validator applies first. It orders the board; it decides nothing.
+COMPOSITE_WEIGHTS = {
+    "auc_oot": 0.40, "all_significant": 0.15, "stress_monotone": 0.15,
+    "no_core_shift": 0.10, "vif": 0.10, "oot_gap": 0.10,
+}
+
+
+def composite_rank(rows: list[dict]) -> None:
+    """Score and rank every unfiltered row in place. Lean metrics only, so the
+    score means the same thing for every row whether or not it was a finalist."""
+    live = [r for r in rows if not r["filtered"]]
+    if not live:
+        return
+    aucs = [r["auc_oot"] if r["auc_oot"] is not None else r["auc_in"]
+            for r in live]
+    lo, hi = min(aucs), max(aucs)
+    span = (hi - lo) or 1.0
+    for r, a in zip(live, aucs):
+        gap = max(0.0, r["auc_in"] - a)
+        vif = r["max_vif"] or 1.0
+        stress_ok = bool((r.get("stress") or {}).get("monotone"))
+        r["score"] = float(
+            COMPOSITE_WEIGHTS["auc_oot"] * (a - lo) / span
+            + COMPOSITE_WEIGHTS["all_significant"] * float(r["all_significant"])
+            + COMPOSITE_WEIGHTS["stress_monotone"] * float(stress_ok)
+            + COMPOSITE_WEIGHTS["no_core_shift"] * float(not r["core_shifted"])
+            + COMPOSITE_WEIGHTS["vif"] * min(1.0, 1.0 / vif)
+            + COMPOSITE_WEIGHTS["oot_gap"] * max(0.0, 1.0 - gap / 0.10))
+    live.sort(key=lambda r: -r["score"])
+    for i, r in enumerate(live, 1):
+        r["auto_rank"] = i
+    for r in rows:
+        if r["filtered"]:
+            r["score"] = None
+            r["auto_rank"] = None
+
+
+def run_finalists(cfg: SelectionConfig, rows: list[dict],
+                  progress=None, cancel=None) -> None:
+    """The full treatment for the top of the board: a real service.run, whose
+    backtest errors and decile capture the lean path cannot produce. Capped at
+    rules.top_n_full, safely below the run cache's own bound."""
+    from . import service
+    finalists = [r for r in rows if r.get("auto_rank")
+                 and r["auto_rank"] <= cfg.rules.top_n_full]
+    for i, row in enumerate(finalists, 1):
+        if cancel is not None and cancel.is_set():
+            raise Cancelled()
+        if progress:
+            progress(i, len(finalists),
+                     f"full fit and backtest: {row['name']} "
+                     f"(rank {row['auto_rank']})")
+        spec = ModelSpec.from_dict(row["spec"])
+        r = service.run(spec)
+        errors = r.backtest.get("errors") or {}
+        gains = (r.diagnostics or {}).get("gains") or []
+        top = gains[0] if gains else {}
+        row["finalist"] = True
+        row["full"] = {
+            "auc_test": (r.diagnostics.get("test") or {}).get("auc"),
+            "auc_oot": (r.diagnostics.get("oot") or {}).get("auc"),
+            "errors_in_time": errors.get("in_time"),
+            "errors_oot": errors.get("out_of_time"),
+            "top_decile_capture_pct": top.get("capture_pct"),
+            "top_decile_lift": top.get("lift"),
+        }
+    for r in rows:
+        r.setdefault("finalist", False)
+
+
+# ── the whole search ─────────────────────────────────────────────────────────
+N_STAGES = 4
+
+
+def preview(cfg: SelectionConfig) -> dict:
+    """What a run would cost, without fitting anything. The combination count
+    depends on how many variants survive the screen, so it is reported as the
+    screen size plus the formula, and exactly once the screen has run."""
+    n_cand = sum(1 for c in cfg.candidates if c.role == "candidate")
+    variants = mev_variants(cfg)
+    n_cores = len([c for c in cfg.cores if c != "expert" or cfg.expert_core])
+    screen_fits = n_cores * len(variants)
+    # stepwise cost is quadratic in candidates at worst
+    stage1_bound = n_cand * (n_cand + 1)
+    warning = None
+    if screen_fits > 1500:
+        warning = (f"The screen alone is {screen_fits:,} fits. Narrow the "
+                   f"macro families or the candidate list, or expect a run "
+                   f"of ten minutes or more.")
+    return {
+        "n_candidates": n_cand,
+        "n_mev_variants": len(variants),
+        "n_cores": n_cores,
+        "stage1_fit_bound": stage1_bound,
+        "screen_fits": screen_fits,
+        "combos_note": ("Combinations of 1 to 3 are enumerated from the "
+                        "variants that survive the screen; with s survivors "
+                        "that is at most s + s(s-1)/2 + s(s-1)(s-2)/6 "
+                        "per core, and the exact count is reported when "
+                        "screening finishes."),
+        "warning": warning,
+    }
+
+
+def run_search(cfg: SelectionConfig, progress=None, cancel=None,
+               checkpoint=None) -> dict:
+    """The four stages, end to end. `progress(stage_no, n_stages, step, total,
+    label)` fires before every fit; `checkpoint(payload)` is called with the
+    lean board before the finalist stage, so a crash there still leaves a
+    usable result."""
+    def stage(no: int):
+        def cb(step, total, label):
+            if progress:
+                progress(no, N_STAGES, step, total, label)
+        return cb
+
+    cores = build_cores(cfg, progress=stage(1), cancel=cancel)
+    if not cores:
+        raise ValueError(
+            "no core survived the stepwise rules — loosen the entry rule or "
+            "add candidate variables")
+    survivors = screen_mevs(cfg, cores, progress=stage(2), cancel=cancel)
+    combos = enumerate_combos(cfg, survivors)
+    n_combos = sum(len(v) for v in combos.values())
+    if n_combos == 0:
+        raise ValueError(
+            "no macro variant survived the screen on any core — every emitted "
+            "model must carry a macro term, so there is nothing to enumerate. "
+            "Loosen the screen p-value or widen the macro families")
+    rows = joint_fit_rows(cfg, cores, combos, progress=stage(3), cancel=cancel)
+    stress_check(cfg, rows, progress=stage(3), cancel=cancel)
+    composite_rank(rows)
+
+    payload = {
+        "config": cfg.to_dict(),
+        "config_hash": cfg.hash(),
+        "portfolio": cfg.portfolio,
+        "data_fingerprint": data_fingerprint(cfg.portfolio),
+        "generated_at": pd.Timestamp.utcnow().isoformat(timespec="seconds"),
+        "scenarios": available_scenarios(),
+        "cores": [{"name": c.name, "columns": c.columns,
+                   "warnings": c.warnings, "steps": c.steps} for c in cores],
+        "survivors": {k: [m.label() for m in v] for k, v in survivors.items()},
+        "n_combos": n_combos,
+        "n_rows": len(rows),
+        "n_filtered": sum(1 for r in rows if r["filtered"]),
+        "rows": rows,
+    }
+    if checkpoint:
+        checkpoint(payload)
+    run_finalists(cfg, rows, progress=stage(4), cancel=cancel)
+    return payload

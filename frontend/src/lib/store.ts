@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
-import type { FitRequest, LgdSpecPayload, PortfolioKey } from './api'
+import type { FitRequest, LgdSpecPayload, PortfolioKey, SelectionConfigPayload } from './api'
 import { type PdSpec, emptyPdSpecs } from './spec'
 
 type Theme = 'dark' | 'light'
@@ -92,6 +92,20 @@ interface UiState {
    *  has since changed. */
   projected: Record<PortfolioKey, string | null>
   setProjected: (p: PortfolioKey, key: string | null) => void
+  /** The last completed automated search on each book: which configuration it
+   *  ran and how many models it put on the board. The RESULTS live in the
+   *  server's identity-keyed cache; this is only the pointer that lets the
+   *  Selection surface reopen them (and the progress rail say the stage ran)
+   *  without recomputing anything. */
+  selectionRun: Record<PortfolioKey, { configHash: string; finishedAt: string
+                                       nModels: number } | null>
+  setSelectionRun: (p: PortfolioKey,
+                    v: { configHash: string; finishedAt: string
+                         nModels: number } | null) => void
+  /** The setup screen's working configuration, per book, so half-built setups
+   *  survive navigation and reloads the way the PD specification does. */
+  selectionDraft: Record<PortfolioKey, SelectionConfigPayload | null>
+  setSelectionDraft: (p: PortfolioKey, v: SelectionConfigPayload | null) => void
   /** The working draft, put aside when a saved model is opened over it.
    *
    *  Opening a version replaced whatever was being worked on, and there was
@@ -201,6 +215,12 @@ export const useUi = create<UiState>()(
       projected: { consumer: null, mortgage: null, cre: null },
       setProjected: (p, key) =>
         set((s) => ({ projected: { ...s.projected, [p]: key } })),
+      selectionRun: { consumer: null, mortgage: null, cre: null },
+      setSelectionRun: (p, v) =>
+        set((s) => ({ selectionRun: { ...s.selectionRun, [p]: v } })),
+      selectionDraft: { consumer: null, mortgage: null, cre: null },
+      setSelectionDraft: (p, v) =>
+        set((s) => ({ selectionDraft: { ...s.selectionDraft, [p]: v } })),
       brandVariant: 'rule',
       setBrandVariant: (brandVariant) => set({ brandVariant }),
       draft: { consumer: null, mortgage: null, cre: null },
@@ -292,6 +312,8 @@ export const useUi = create<UiState>()(
                             fitted: s.fitted, fittedLgd: s.fittedLgd, loaded: s.loaded,
                                                         macroShortlist: s.macroShortlist,
                             pdSpec: s.pdSpec, projected: s.projected, draft: s.draft,
+                            selectionRun: s.selectionRun,
+                            selectionDraft: s.selectionDraft,
                             brandVariant: s.brandVariant }),
       version: 4,
       // Work in progress must survive the change of shape. The old state held
@@ -318,6 +340,14 @@ export const useUi = create<UiState>()(
         }
         if (!s.draft) {
           s.draft = { consumer: null, mortgage: null, cre: null }
+        }
+        // An absent marker reads as "no search has run", which is correct for
+        // every browser persisted before the Selection surface existed.
+        if (!s.selectionRun) {
+          s.selectionRun = { consumer: null, mortgage: null, cre: null }
+        }
+        if (!s.selectionDraft) {
+          s.selectionDraft = { consumer: null, mortgage: null, cre: null }
         }
         if (from >= 2 || s.pdSpec) return s
         const specs = emptyPdSpecs()

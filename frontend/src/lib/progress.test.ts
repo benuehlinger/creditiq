@@ -408,3 +408,38 @@ describe('scenarios stage', () => {
     expect(s.note).toBe('the specification changed. Refit, then project')
   })
 })
+
+describe('the selection stage', () => {
+  it('is optional and never the next action', () => {
+    const r = computeProgress(EMPTY)
+    const sel = stage(r, 'select')
+    expect(sel.optional).toBe(true)
+    expect(sel.state).toBe('todo')
+    expect(sel.note).toMatch(/optional/)
+    expect(r.next?.to).not.toBe('select')
+  })
+
+  it('reads done once a search has completed, with the model count', () => {
+    const r = computeProgress({ ...EMPTY, selection: { nModels: 42 } })
+    const sel = stage(r, 'select')
+    expect(sel.state).toBe('done')
+    expect(sel.note).toBe('42 models on the leaderboard')
+  })
+
+  it('does not gate completion or saving', () => {
+    // A fully hand-built model is complete with no search ever run.
+    const r = computeProgress({
+      ...EMPTY, picked: ['fico_orig'],
+      fitted: fit('a', 'h1', ['fico_orig']),
+      lgd: lgdOf('L1', ['current_ltv']),
+    })
+    expect(r.complete).toBe(true)
+    expect(stage(r, 'select').state).toBe('todo')
+    expect(r.next?.to).toBe('versions')
+  })
+
+  it('an empty search result does not read as done', () => {
+    const r = computeProgress({ ...EMPTY, selection: { nModels: 0 } })
+    expect(stage(r, 'select').state).toBe('todo')
+  })
+})

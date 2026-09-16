@@ -62,4 +62,17 @@ export const METHODOLOGY: Record<string, Entry> = {
       { kind: 'text', text: 'The seam is drawn on every chart as a vertical rule, with the projected side in a distinct line style. It is annotated, not hidden.' },
     ],
   },
+  'selection-composite': {
+    title: 'The automated search and its composite rank',
+    body: [
+      { kind: 'text', text: 'The search runs in two stages, mirroring how these models are defended in review. Stage one builds internal cores from the borrower and loan candidates by forward stepwise selection then backward elimination, with the whole term as the unit: a spline basis or a set of bin indicators enters and leaves together, tested by a likelihood-ratio test with the term’s own degrees of freedom. The default decision rule is BIC with the penalty on the event count, the rare-event convention; at three hundred thousand rows a p-value calls almost anything significant.' },
+      { kind: 'text', text: 'Stage two screens every stationary transform and lag of each macro variable against each core, one at a time, keeping variants whose fitted sign matches the economic prior at a loose cutoff. The strongest few variants per family then enumerate in every combination of one to three, with at most one variant per underlying series, never one series at two lags, and no pair beyond the correlation cap. Each core plus combination is refitted jointly, and core coefficients that flip sign or shift materially are flagged.' },
+      { kind: 'note', text: 'Every model on the board carries between one and three macro terms. A model with none cannot be stressed, so it is not a candidate by definition; a fourth is indefensible in front of a validator.' },
+      { kind: 'formula', text: 'score = 0.40 x AUC out of time (rescaled over the board)\n      + 0.15 x every coefficient significant\n      + 0.15 x stressed PD orders by scenario severity\n      + 0.10 x no core coefficient shifted\n      + 0.10 x 1 / max term VIF (capped at 1)\n      + 0.10 x (1 - in-sample-to-out-of-time AUC gap / 0.10)' },
+      { kind: 'text', text: 'The composite orders the board; it decides nothing. It is computed from the lean statistics available for every row, so the score means the same thing whether or not a row received the full backtest, and it is reproducible on paper from the leaderboard columns.' },
+      { kind: 'text', text: 'The reviewer’s rank is kept beside the automated rank and never overwrites it. Ranking a model away from its automated position, or rejecting one, requires a written justification; every review action is recorded with reviewer, time, before and after, and the trail exports as CSV.' },
+    ],
+    references: ['Fox and Monette (1992), generalized collinearity diagnostics',
+                 'SR 11-7, Guidance on Model Risk Management: model selection and developmental evidence'],
+  },
 }

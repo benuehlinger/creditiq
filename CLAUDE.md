@@ -40,6 +40,9 @@ that fails if navigation ever triggers computation.
 ## Where things are
 
 - `backend/creditiq/models/` — fit, ECL, scenarios, versioning, caches
+- `backend/creditiq/models/selection.py` — the automated variable search
+  (stepwise cores + 1-3 MEV enumeration); results cached under kind
+  "selection", review state in `versions/selection/`
 - `backend/creditiq/data/` — seeded generator (deterministic per machine)
 - `frontend/src/lib/progress.ts` — THE state machine (spec→fit→projection→save)
 - `frontend/src/lib/store.ts` — persisted UI store (version-gated)

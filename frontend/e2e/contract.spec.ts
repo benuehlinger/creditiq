@@ -10,7 +10,7 @@ import { fitViaApi, seedFittedConsumer, seedSavedConsumer, storeStateFor } from 
  *  render crashes taking down the app.
  */
 
-const COMPUTE = /\/api\/(fit|lgd\/fit|ecl|rollup)$/
+const COMPUTE = /\/api\/(fit|lgd\/fit|ecl|rollup|selection\/[^/]+\/run)$/
 
 function countCompute(page: Page): { calls: string[] } {
   const box = { calls: [] as string[] }
@@ -31,8 +31,8 @@ async function settle(page: Page, ms = 2000) {
  *  app with an empty in-memory query cache — so a lap of gotos would refetch
  *  legitimately and blame the app for the test's own navigation style. */
 const NAV: Record<string, string> = {
-  data: 'Data', macro: 'Macro', pd: 'PD model', lgd: 'LGD model',
-  scenarios: 'Scenarios', versions: 'Versions',
+  data: 'Data', macro: 'Macro', select: 'Selection', pd: 'PD model',
+  lgd: 'LGD model', scenarios: 'Scenarios', versions: 'Versions',
 }
 async function click(page: Page, stage: string) {
   await page.getByRole('link', { name: NAV[stage], exact: true }).click()
@@ -57,7 +57,7 @@ test('switching stages costs zero computation once warm', async ({ page }) => {
   // Measured lap: every identity is now computed and cached. The contract
   // says navigation is lookups only.
   const box = countCompute(page)
-  for (const s of ['data', 'macro', 'pd', 'lgd', 'scenarios', 'versions', 'pd', 'scenarios']) {
+  for (const s of ['data', 'macro', 'select', 'pd', 'lgd', 'scenarios', 'versions', 'pd', 'scenarios']) {
     await click(page, s)
     await settle(page, 2500)
   }
@@ -161,6 +161,91 @@ test('start from scratch clears every draft, and it STAYS cleared', async ({ pag
   // and the surface agrees: nothing fitted anywhere on this book
   await page.goto('/consumer/pd')
   await expect(page.getByText('Fitted specification')).toHaveCount(0)
+})
+
+/** A deliberately tiny search: two candidates, one macro family, one
+ *  finalist. Enough to exercise every stage without a minutes-long run. */
+const TINY_SEARCH = {
+  candidates: [{ column: 'fico_orig' }, { column: 'dti' }],
+  cores: ['stepwise'],
+  mev_families: ['unemployment_rate'],
+  rules: { top_n_full: 1 },
+}
+
+test('an automated search is server state: leaving and returning resumes it', async ({ page }) => {
+  // The job must not belong to the component. Start it, walk away, come
+  // back: the same run is still narrating, nothing restarted.
+  const started = await fetch('http://localhost:8000/api/selection/consumer/run', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ config: TINY_SEARCH }),
+  }).then((r) => r.json())
+  expect(started.state).toBe('running')
+  try {
+    await page.goto('/consumer/select')
+    await expect(page.getByText(/Stage \d of 4/)).toBeVisible({ timeout: 15_000 })
+    await click(page, 'data')
+    await settle(page)
+    await click(page, 'select')
+    // still the SAME run: the status endpoint is the single source of truth
+    const status = await fetch('http://localhost:8000/api/selection/consumer/status')
+      .then((r) => r.json())
+    if (status.state === 'running') {
+      await expect(page.getByText(/Stage \d of 4/)).toBeVisible({ timeout: 10_000 })
+      expect(status.config_hash).toBe(started.config_hash)
+    }
+  } finally {
+    await fetch('http://localhost:8000/api/selection/consumer/cancel', { method: 'POST' })
+    // wait out the cancel so the next test starts from idle
+    for (let i = 0; i < 40; i++) {
+      const s = await fetch('http://localhost:8000/api/selection/consumer/status')
+        .then((r) => r.json())
+      if (s.state !== 'running') break
+      await new Promise((r) => setTimeout(r, 500))
+    }
+  }
+})
+
+test('the leaderboard is a lookup, never a computation', async ({ page }) => {
+  // Run the tiny search to COMPLETION server-side, then open the board and
+  // navigate around it. Zero compute calls: results come from the
+  // identity-keyed cache, and revisits are pure lookups.
+  test.setTimeout(300_000)
+  const started = await fetch('http://localhost:8000/api/selection/consumer/run', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ config: TINY_SEARCH }),
+  }).then((r) => r.json())
+  let state = 'running'
+  for (let i = 0; i < 480 && state === 'running'; i++) {
+    await new Promise((r) => setTimeout(r, 500))
+    state = (await fetch('http://localhost:8000/api/selection/consumer/status')
+      .then((r) => r.json())).state
+  }
+  expect(state).toBe('done')
+
+  // plant the pointer the surface reads, the way a completed in-app run would
+  await page.goto('/consumer/data')
+  await page.evaluate((cfgHash) => {
+    const raw = JSON.parse(localStorage.getItem('creditiq-ui')
+      ?? '{"state":{},"version":4}')
+    raw.state.selectionRun = {
+      ...(raw.state.selectionRun ?? {}),
+      consumer: { configHash: cfgHash, finishedAt: new Date().toISOString(), nModels: 1 },
+    }
+    raw.version = 4
+    localStorage.setItem('creditiq-ui', JSON.stringify(raw))
+  }, started.config_hash)
+  await page.goto('/consumer/select?view=leaderboard')
+  await page.getByText('Leaderboard', { exact: true }).first().waitFor({ timeout: 30_000 })
+  await settle(page, 2000)
+
+  const box = countCompute(page)
+  for (const s of ['data', 'select', 'macro', 'select']) {
+    await click(page, s)
+    await settle(page, 2000)
+  }
+  expect(box.calls, `compute fired: ${box.calls.join(', ')}`).toHaveLength(0)
+  // the board itself is populated, not an empty state
+  await expect(page.getByText(/models from .* fitted combinations/)).toBeVisible()
 })
 
 test('the roll-up covers only reported books and never shows a default spec', async ({ page }) => {

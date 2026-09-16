@@ -21,6 +21,10 @@ def _cfg(**kw):
         rules=rules, **kw)
 
 
+TERMS = ["unemployment_rate@yoy@0", "unemployment_rate@diff@3",
+         "real_gdp_growth@yoy@0", "real_disp_income_growth@yoy@3"]
+
+
 def _mev(key="unemployment_rate", transform="yoy", lag=0):
     return MevSpec(key=key, transform=transform, lag_months=lag)
 
@@ -83,28 +87,49 @@ def test_max_mevs_is_a_hard_ceiling():
     assert sizes == {2, 3}
 
 
-# ── screening ────────────────────────────────────────────────────────────────
-def test_variant_universe_is_stationary_and_family_filtered():
-    cfg = _cfg(mev_families=["unemployment_rate"])
+# ── the term list comes from the Macro surface ───────────────────────────────
+def test_terms_parse_and_deduplicate():
+    """The search takes `key@transform@lag` verbatim, deduplicated; it never
+    sweeps the transformation library on its own."""
+    cfg = _cfg(mev_terms=["unemployment_rate@yoy@0", "unemployment_rate@yoy@0",
+                          "real_gdp_growth", "bbb_yield@diff@6"])
     variants = S.mev_variants(cfg)
-    assert variants, "unemployment variants exist"
-    assert {m.key for m in variants} == {"unemployment_rate"}
+    assert len(variants) == 3
+    plain = next(m for m in variants if m.key == "real_gdp_growth")
+    assert plain.transform == "level" and plain.lag_months == 0
+    lagged = next(m for m in variants if m.key == "bbb_yield")
+    assert lagged.transform == "diff" and lagged.lag_months == 6
 
 
-def test_screen_keeps_only_right_sign_and_loose_p():
-    """On the consumer book the unemployment prior is positive; survivors of
-    the screen must all fit positive and clear the loose cutoff."""
-    cfg = _cfg(mev_families=["unemployment_rate"])
+def test_a_base_and_its_derived_form_are_one_family():
+    assert S.mev_family("hpi_yoy") == "hpi"
+    assert S.mev_family("cre_price_index_yoy") == "cre_price_index"
+    assert S.mev_family("real_gdp_growth") == "real_gdp"
+    a = MevSpec(key="hpi", transform="level", lag_months=0)
+    b = MevSpec(key="hpi_yoy", transform="level", lag_months=0)
+    assert not S._combo_allowed((a, b), {}, cap=0.7)
+
+
+def test_screen_keeps_only_right_sign_and_loose_p_and_reports_removals():
+    """Survivors fit the economic prior at the loose cutoff, and anything
+    removed from the hand-picked list is reported with a reason, never
+    dropped silently."""
+    cfg = _cfg(mev_terms=TERMS)
     cores = S.build_cores(cfg)
-    survivors = S.screen_mevs(cfg, cores[:1], progress=None)
+    survivors, screened_out = S.screen_mevs(cfg, cores[:1], progress=None)
     kept = survivors[cores[0].name]
-    assert kept, "at least one unemployment variant survives on this book"
+    assert kept, "at least one shortlisted term survives on this book"
+    assert len(kept) + len(screened_out) == len(S.mev_variants(cfg))
+    assert all(o["reason"] for o in screened_out)
     fit_df, _ = S._frames(cfg)
+    prior = S._sign_prior(cfg.portfolio)
     for m in kept:
         lean = S._lean_fit(fit_df, S._model_spec(cfg, cores[0].variables, (m,)))
         coef = next(c for c in lean.fit.coefficients
                     if c.name == f"mev:{m.label()}")
-        assert coef.estimate > 0
+        expected = prior(m.key)
+        if expected is not None:
+            assert (1 if coef.estimate > 0 else -1) == expected
         assert coef.p_value < cfg.rules.mev_screen_p
 
 
@@ -112,11 +137,9 @@ def test_screen_keeps_only_right_sign_and_loose_p():
 @pytest.fixture(scope="module")
 def small_run():
     """One tiny end-to-end pass on the consumer book, shared by the row tests."""
-    cfg = _cfg(mev_families=["unemployment_rate", "real_gdp_growth"])
+    cfg = _cfg(mev_terms=TERMS)
     cores = S.build_cores(cfg)
-    survivors = S.screen_mevs(cfg, cores)
-    # keep it small: at most 3 variants per core
-    survivors = {k: v[:3] for k, v in survivors.items()}
+    survivors, _ = S.screen_mevs(cfg, cores)
     combos = S.enumerate_combos(cfg, survivors)
     rows = S.joint_fit_rows(cfg, cores, combos)
     return cfg, cores, rows
@@ -147,13 +170,13 @@ def test_row_metrics_are_present_and_sane(small_run):
 def test_identical_variable_sets_from_two_cores_merge():
     """Two cores with the same variables (different names) plus the same combo
     produce one row with both lineages."""
-    cfg = _cfg(mev_families=["unemployment_rate"])
+    cfg = _cfg(mev_terms=TERMS[:2])
     cores = S.build_cores(cfg)
     core = cores[0]
     twin = S.Core(name="expert", columns=core.columns, variables=core.variables,
                   warnings=[], lean=core.lean, coefficients=core.coefficients,
                   steps=[])
-    m = S.screen_mevs(cfg, [core])[core.name][:1]
+    m = S.screen_mevs(cfg, [core])[0][core.name][:1]
     assert m
     combos = {core.name: [tuple(m)], "expert": [tuple(m)]}
     rows = S.joint_fit_rows(cfg, [core, twin], combos)
@@ -183,16 +206,8 @@ def test_core_shift_flags_a_constructed_flip():
     assert S._core_shift(core, FakeLeanSmall, pct=30.0) == []
 
 
-def test_the_screen_keeps_only_the_strongest_variants_per_family():
-    """The loose screen may pass many transforms of one variable; only the
-    best few (by p) carry into the enumeration, so a family cannot multiply
-    the combination count with near-identical copies of itself."""
-    cfg = _cfg(mev_families=["unemployment_rate", "real_gdp_growth"],
-               rules={"mev_top_per_family": 2})
-    cores = S.build_cores(cfg)
-    survivors = S.screen_mevs(cfg, cores[:1])
-    kept = survivors[cores[0].name]
-    counts = {}
-    for m in kept:
-        counts[m.key] = counts.get(m.key, 0) + 1
-    assert all(n <= 2 for n in counts.values())
+def test_combo_bound_counts_family_constrained_subsets():
+    """Four terms in three families: singles 4, pairs across families
+    2x1 + 2x1 + 1x1 = 5, triples 2x1x1 = 2, so 11 in all."""
+    cfg = _cfg(mev_terms=TERMS)
+    assert S.combo_bound(cfg) == 11

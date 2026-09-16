@@ -21,7 +21,7 @@ client = TestClient(app)
 CFG = {
     "candidates": [{"column": "fico_orig"}, {"column": "dti"}],
     "cores": ["stepwise"],
-    "mev_families": ["unemployment_rate"],
+    "mev_terms": ["unemployment_rate@yoy@0"],
     "rules": {"top_n_full": 1},
 }
 

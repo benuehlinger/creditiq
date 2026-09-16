@@ -168,7 +168,7 @@ test('start from scratch clears every draft, and it STAYS cleared', async ({ pag
 const TINY_SEARCH = {
   candidates: [{ column: 'fico_orig' }, { column: 'dti' }],
   cores: ['stepwise'],
-  mev_families: ['unemployment_rate'],
+  mev_terms: ['unemployment_rate@yoy@0', 'real_gdp_growth@yoy@0'],
   rules: { top_n_full: 1 },
 }
 

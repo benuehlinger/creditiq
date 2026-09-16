@@ -452,18 +452,23 @@ verbatim expert core. Cyclical drivers (current LTV, utilization, delinquency)
 are warned, not filtered: they can absorb the macro signal and weaken or flip
 the scenario terms.
 
-**Stage 2 — macro terms, exhaustively.** Every stationary transform-and-lag
-variant of each selected macro family is screened one at a time against each
-core; a variant survives if its fitted coefficient matches the economic prior
-and clears a loose p cutoff (default 0.10). The strongest few variants per
-family (default two) enumerate in every combination of one to three, under
-three constraints: at most one variant per underlying series, never the same
-series at two lags, and no pair whose correlation exceeds the cap (default
-0.7). Each core-plus-combination is refitted jointly — all coefficients
-re-estimated — and core coefficients that flip sign or shift beyond the
-configured percentage are flagged. Identical variable sets from different
-cores share a specification hash and merge into one row carrying both
-lineages.
+**Stage 2 — macro terms, from the Macro surface's shortlist.** The search
+takes its macro terms verbatim from the shortlist built on the Macro surface,
+where the transformation library (every transform and lag of every
+projectable series) was already swept, filtered for stationarity and sign,
+and narrowed by a person. The search's job is combinations, not rediscovery.
+Each shortlisted term is screened once against each core; it survives if its
+fitted coefficient matches the economic prior and clears a loose p cutoff
+(default 0.10), and a removed term is reported with its reason, never
+dropped silently. Survivors enumerate in every combination of one to three,
+under three constraints: at most one term per underlying economic series —
+a base variable and its derived forms (unemployment and its YoY change, hpi
+and hpi_yoy) are ONE family — never the same series at two lags, and no pair
+whose correlation exceeds the cap (default 0.7). Each core-plus-combination
+is refitted jointly — all coefficients re-estimated — and core coefficients
+that flip sign or shift beyond the configured percentage are flagged.
+Identical variable sets from different cores share a specification hash and
+merge into one row carrying both lineages.
 
 **Every emitted model carries one to three macro terms.** A model without one
 cannot be stressed, so it is not a candidate by definition.

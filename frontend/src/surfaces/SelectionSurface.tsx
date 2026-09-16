@@ -45,6 +45,18 @@ function rememberReviewer(name: string) {
 const fmtP = (p: number | null | undefined) =>
   p == null ? '—' : p < 0.001 ? '<0.001' : p.toFixed(3)
 
+/** `key@transform@lag` in the words the Macro surface uses. */
+const TF_LABEL: Record<string, string> = {
+  level: '', diff: ' 1m chg', yoy: ' YoY', log_diff: ' log-diff',
+  qoq_annualized: ' QoQ ann.', z_score: ' z', four_quarter_change: ' 12m chg',
+  ma3: ' 3m avg', ma6: ' 6m avg', ma12: ' 12m avg',
+  yoy_ma3: ' YoY 3m avg', diff_ma3: ' 1m chg 3m avg',
+}
+function termLabel(t: string): string {
+  const [key, tf, lag] = t.split('@')
+  return `${key}${TF_LABEL[tf ?? 'level'] ?? ` ${tf}`}${Number(lag) ? ` (lag ${lag}m)` : ''}`
+}
+
 export default function SelectionSurface() {
   const { portfolio } = useParams()
   const pk = portfolio as PortfolioKey
@@ -176,6 +188,8 @@ function SetupView({ pk, running, onStarted }: {
 }) {
   const draft = useUi((s) => s.selectionDraft[pk])
   const setDraft = useUi((s) => s.setSelectionDraft)
+  const shortlist = useUi((s) => s.macroShortlist[pk].pd)
+  const nav = useNavigate()
   const defaults = useQuery({ queryKey: ['seldefaults', pk],
                               queryFn: () => api.selectionDefaults(pk),
                               staleTime: Infinity })
@@ -189,24 +203,25 @@ function SetupView({ pk, running, onStarted }: {
   // — but review PLUS an information value no real driver reaches is the
   // planted near-target column, and an automated search must not start with
   // it. Excluded is visible and one click to reverse, never silently dropped.
+  // Numeric candidates default to CONTINUOUS; categoricals to WoE.
+  // The macro terms are the Macro surface's shortlist, verbatim.
   useEffect(() => {
-    if (draft || !d) return
+    if ((draft && draft.mev_terms) || !d) return
     setDraft(pk, {
       candidates: d.candidates.map((c) => ({
         column: c.column,
         role: c.leakage_risk === 'likely'
               || (c.leakage_risk === 'review' && (c.iv ?? 0) > 1.5)
               || c.above_null === false ? 'excluded' : 'candidate',
-        treatment: 'woe',
+        treatment: c.kind === 'categorical' ? 'woe' : 'continuous',
       })),
       cores: ['stepwise', 'strong'],
       expert_core: null,
-      mev_families: d.mev_families.filter((f) => f.default_on)
-        .map((f) => f.key),
+      mev_terms: [...shortlist],
       rules: {},
       oot_from: '2023-01-01',
     })
-  }, [draft, d, pk])
+  }, [draft, d, pk, shortlist])
 
   const preview = useQuery({
     queryKey: ['selpreview', pk, JSON.stringify(draft)],
@@ -235,6 +250,10 @@ function SetupView({ pk, running, onStarted }: {
   const setRule = (k: string, v: unknown) =>
     setDraft(pk, { ...draft, rules: { ...rules, [k]: v } })
   const nCand = draft.candidates.filter((c) => c.role !== 'excluded').length
+  const terms = draft.mev_terms ?? []
+  // The union of the live shortlist and the draft, so a term shortlisted
+  // after the draft was seeded is offered here without a reset.
+  const offered = [...new Set([...shortlist, ...terms])]
 
   return (
     <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_380px]">
@@ -362,14 +381,6 @@ function SetupView({ pk, running, onStarted }: {
                 onChange={(e) => setRule('mev_screen_p', Number(e.target.value))}
                 className="w-full rounded-ctl border border-hairline bg-surface px-2 py-1 text-xs tnum" />
             </Field>
-            <Field label="Variants kept per family"
-                   hint="After the screen, only the strongest few transforms of each macro variable enter the enumeration. More variants means a longer run.">
-              <select value={rules.mev_top_per_family ?? 2}
-                onChange={(e) => setRule('mev_top_per_family', Number(e.target.value))}
-                className="w-full rounded-ctl border border-hairline bg-surface px-2 py-1 text-xs">
-                {[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n}</option>)}
-              </select>
-            </Field>
             <Field label="Macro pair correlation cap"
                    hint="Two macro terms more correlated than this never enter one model together.">
               <input type="number" step="0.05" min="0.1" max="0.95"
@@ -444,26 +455,46 @@ function SetupView({ pk, running, onStarted }: {
             )}
             <div>
               <span className="text-tiny text-ink-muted"
-                    title="Restricted to the Federal Reserve supervisory variables, because those are the only series with published forward paths a scenario can walk.">
-                Macro families in the search
+                    title="The search enumerates combinations of one to three from exactly these terms, one per underlying series. It never sweeps the transformation library; that sweep is the Macro surface's job.">
+                Macro terms in the search, from your Macro shortlist
               </span>
-              <div className="mt-1.5 flex flex-wrap gap-1.5">
-                {d.mev_families.map((f) => {
-                  const on = (draft.mev_families ?? []).includes(f.key)
-                  return (
-                    <button key={f.key}
-                      onClick={() => setDraft(pk, { ...draft,
-                        mev_families: on
-                          ? (draft.mev_families ?? []).filter((k) => k !== f.key)
-                          : [...(draft.mev_families ?? []), f.key] })}
-                      className={`rounded-full border px-2 py-0.5 text-micro ${
-                        on ? 'border-accent bg-accent-soft text-ink'
-                           : 'border-hairline text-ink-muted'}`}>
-                      {f.label}
-                    </button>
-                  )
-                })}
-              </div>
+              {offered.length === 0 ? (
+                <div className="mt-1.5 rounded-ctl bg-sunken px-3 py-2 text-tiny text-ink-secondary">
+                  Nothing is shortlisted for PD on the Macro surface yet.
+                  The search needs at least one term there.
+                  <button onClick={() => nav(`/${pk}/macro`)}
+                    className="ml-2 underline decoration-hairline hover:text-ink">
+                    Open the Macro surface
+                  </button>
+                </div>
+              ) : (
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  {offered.map((t) => {
+                    const on = terms.includes(t)
+                    return (
+                      <button key={t}
+                        title={shortlist.includes(t)
+                          ? 'On the Macro shortlist. Click to leave it out of this search.'
+                          : 'No longer on the Macro shortlist; kept from this setup. Click to drop it.'}
+                        onClick={() => setDraft(pk, { ...draft,
+                          mev_terms: on ? terms.filter((k) => k !== t)
+                                        : [...terms, t] })}
+                        className={`rounded-full border px-2 py-0.5 font-mono text-micro ${
+                          on ? 'border-accent bg-accent-soft text-ink'
+                             : 'border-hairline text-ink-muted'}`}>
+                        {termLabel(t)}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+              <p className="mt-1.5 text-micro text-ink-muted">
+                Shortlist more terms on the
+                {' '}<button onClick={() => nav(`/${pk}/macro`)}
+                  className="underline decoration-hairline hover:text-ink">Macro surface</button>;
+                a base variable and its derived forms count as one family, and
+                at most one term per family enters a model.
+              </p>
             </div>
           </div>
         </Card>
@@ -471,13 +502,14 @@ function SetupView({ pk, running, onStarted }: {
         <Card>
           <CardHead title="Run" />
           <div className="space-y-3 px-4 pb-4">
-            {preview.data && (
+            {preview.data && terms.length > 0 && (
               <div className="rounded-ctl bg-sunken px-3 py-2 text-tiny text-ink-secondary">
-                {num(nCand)} candidates over {preview.data.n_cores} cores.
-                The macro screen is {num(preview.data.screen_fits)} single
-                term fits over {num(preview.data.n_mev_variants)} stationary
-                variants; combinations of 1 to {rules.max_mevs ?? 3} are then
-                enumerated from the survivors.
+                {num(nCand)} candidate variables over {preview.data.n_cores} cores;
+                {' '}{num(preview.data.n_mev_terms)} shortlisted terms in
+                {' '}{num(preview.data.n_families)} families, giving at most
+                {' '}{num(preview.data.combo_bound)} combinations of
+                {' '}{rules.min_mevs ?? 1} to {rules.max_mevs ?? 3} per core
+                before the screen and the correlation rule.
                 {preview.data.warning && (
                   <p className="mt-1" style={{ color: 'var(--status-warning)' }}>
                     {preview.data.warning}
@@ -491,7 +523,10 @@ function SetupView({ pk, running, onStarted }: {
               </p>
             )}
             <div className="flex items-center gap-2">
-              <button disabled={running || !nCand}
+              <button disabled={running || !nCand || terms.length === 0}
+                title={terms.length === 0
+                  ? 'The search needs at least one macro term from the shortlist.'
+                  : undefined}
                 onClick={() => start.mutate()}
                 className="rounded-ctl bg-accent px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
                 {running ? 'A search is running' : 'Run the search'}
@@ -499,7 +534,7 @@ function SetupView({ pk, running, onStarted }: {
               <input value={saveName} onChange={(e) => setSaveName(e.target.value)}
                 placeholder="Save configuration as…"
                 className="w-44 rounded-ctl border border-hairline bg-surface px-2 py-1.5 text-tiny" />
-              <button disabled={running || !nCand || !saveName}
+              <button disabled={running || !nCand || terms.length === 0 || !saveName}
                 onClick={() => saveAndRun.mutate()}
                 title="Store this configuration for reuse, then run it"
                 className="rounded-ctl border border-hairline px-3 py-1.5 text-tiny text-ink-secondary hover:text-ink disabled:opacity-40">
@@ -678,6 +713,15 @@ function Board({ pk, res, review, selected, onSelect }: {
           <p className="px-4 pb-1 text-micro text-ink-muted">
             {num(res.n_filtered)} models were removed by the filter rules and
             are not shown.
+          </p>
+        )}
+        {(res.screened_out?.length ?? 0) > 0 && (
+          <p className="px-4 pb-1 text-micro text-ink-muted"
+             title={res.screened_out.map((o) =>
+               `${o.label} (${o.core} core): ${o.reason}`).join('\n')}>
+            {num(res.screened_out.length)} shortlisted term
+            {res.screened_out.length === 1 ? ' was' : 's were'} screened out
+            beside a core. Hover for each reason.
           </p>
         )}
         <div className="thin-scroll max-h-[620px] overflow-auto">

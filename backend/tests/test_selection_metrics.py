@@ -121,7 +121,8 @@ def test_run_search_end_to_end_small():
         candidates=[S.CandidateVar(column="fico_orig"),
                     S.CandidateVar(column="dti")],
         cores=["stepwise"],
-        mev_families=["unemployment_rate"],
+        mev_terms=["unemployment_rate@yoy@0", "unemployment_rate@diff@3",
+                   "real_gdp_growth@yoy@0"],
         rules=S.SelectionRules(top_n_full=1))
     seen = []
     payload = S.run_search(cfg, progress=lambda *a: seen.append(a))

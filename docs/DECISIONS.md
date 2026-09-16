@@ -2852,3 +2852,21 @@ user-made. The automated rank is never stored there and the user rank
 never overwrites it: two rankings side by side is the design, and the
 audit trail (who, when, before, after) exports as CSV for the
 validation binder.
+
+
+## The search consumes the Macro shortlist; it never sweeps the library
+
+The first build of the selection pipeline enumerated every stationary
+transform and lag of whole macro families, hundreds of screening fits
+per run. That ignored the app's own structure: the Macro surface exists
+to sweep the transformation library and let the analyst shortlist the
+few terms worth using, and a search that re-sweeps everything discards
+that choice and multiplies the run time for nothing. The search now
+takes `key@transform@lag` terms verbatim (the shortlist's own form),
+screens each once per core with removals reported by reason, and
+enumerates 1-to-3 combinations from exactly that list. The family rule
+sees through derived forms: mev_family() strips _yoy/_growth, so
+unemployment and unemployment YoY, or hpi and hpi_yoy, can never enter
+one model together. Candidate variables default to CONTINUOUS
+(categoricals to WoE) per the user's direction. The per-family variant
+trim died with the sweep; a hand-picked list is never trimmed.

@@ -17,14 +17,18 @@ p-value calls almost anything significant, and the effective sample size of a
 rare-event model is set by the rarer outcome. A p-value rule remains available
 because some reviewers ask for one.
 
-**Stage 2 — macro terms, exhaustively.** Each transform-and-lag variant of each
-macro variable is screened one at a time against each core; survivors (right
-sign, loose p) are enumerated in every combination of one to three, under the
-family rules (one variant per underlying series, never the same series at two
-lags, no highly correlated pair), and each core-plus-combination is refitted
-jointly. Every emitted model carries at least one macro term — a model the
-scenario engine cannot reach is not a candidate here by definition — and at
-most three, because a fourth is indefensible in front of a validator.
+**Stage 2 — macro terms, from the Macro surface's shortlist.** The search does
+NOT sweep the transformation library; that sweep is the Macro surface's whole
+job, and re-running it here would ignore the choice the analyst made there.
+The shortlisted terms are screened one at a time against each core (right
+sign, loose p, with removals reported by reason, never silent), and the
+survivors are enumerated in every combination of one to three under the
+family rules: one term per underlying economic series — a base and its
+derived form (unemployment and its YoY change) are one family — never the
+same series at two lags, no highly correlated pair. Each core-plus-combination
+is refitted jointly. Every emitted model carries at least one macro term — a
+model the scenario engine cannot reach is not a candidate here by definition —
+and at most three, because a fourth is indefensible in front of a validator.
 
 Search fits run on the screening frame (`store.screening_frame`, the same
 event-preserving subsample the variable screen uses) through the lean path:
@@ -80,7 +84,7 @@ class CandidateVar:
     """
     column: str
     role: str = "candidate"                # "candidate" | "excluded"
-    treatment: str = "woe"                 # woe | bins | continuous | spline
+    treatment: str = "continuous"          # woe | bins | continuous | spline
     knots: list[float] | None = None
     n_knots: int = 4
     max_bins: int = 8
@@ -96,13 +100,7 @@ class SelectionRules:
     entry_metric: str = "bic"              # "p_value" | "aic" | "bic"
     entry_threshold: float = 0.01          # p-value mode only
     exit_threshold: float = 0.05           # p-value mode only
-    mev_screen_p: float = 0.10             # loose screen for macro variants
-    # After the screen, keep this many variants per family (best p first)
-    # before enumerating. The screen is loose by design, so without a cap a
-    # family can put six near-identical transforms of itself into the
-    # enumeration and the combination count explodes combinatorially. Two per
-    # family keeps a transform rivalry alive without that.
-    mev_top_per_family: int = 2
+    mev_screen_p: float = 0.10             # loose screen for macro terms
     min_mevs: int = 1
     max_mevs: int = 3
     max_predictors: int | None = None      # core terms, macro terms excluded
@@ -131,7 +129,13 @@ class SelectionConfig:
     candidates: list[CandidateVar] = field(default_factory=list)
     cores: list[str] = field(default_factory=lambda: ["stepwise", "strong"])
     expert_core: list[str] | None = None
-    mev_families: list[str] | None = None  # None = every projectable base
+    # The macro terms the search may use, as `key@transform@lag` — the SAME
+    # form the Macro surface's shortlist and the PD specification carry. The
+    # search does not sweep the transformation library; that sweep is the
+    # Macro surface's whole job, and re-running it here would ignore the
+    # choice the analyst just made there. Combinations of one to three are
+    # enumerated from exactly this list.
+    mev_terms: list[str] = field(default_factory=list)
     rules: SelectionRules = field(default_factory=SelectionRules)
     oot_from: str = "2023-01-01"
     test_fraction: float = 0.30
@@ -146,7 +150,7 @@ class SelectionConfig:
                                  key=lambda d: d["column"]),
             "cores": sorted(self.cores),
             "expert_core": sorted(self.expert_core) if self.expert_core else None,
-            "mev_families": sorted(self.mev_families) if self.mev_families else None,
+            "mev_terms": sorted(set(self.mev_terms)),
             "rules": asdict(self.rules),
             "oot_from": self.oot_from,
             "test_fraction": self.test_fraction,
@@ -474,42 +478,60 @@ def _sign_prior(portfolio: str):
     return prior_for
 
 
-def mev_variants(cfg: SelectionConfig) -> list[MevSpec]:
-    """The transform-and-lag universe, from the macro library's own rows.
+def mev_family(key: str) -> str:
+    """The underlying economic series a term belongs to.
 
-    The library is already restricted to variables a scenario can carry
-    forward, and its stationarity filter applies here for the same reason it
-    exists at all: a non-stationary form correlates with anything that drifts.
+    A base variable and its derived forms are ONE family: unemployment and
+    its year-over-year change carry the same claim about the labour market,
+    and hpi against hpi_yoy the same claim about house prices. Two of them in
+    one model is the same variable twice wearing different clothes, so the
+    family rule has to see through the suffix, not just the key.
     """
-    from ..analysis import mev_search
-    rows = mev_search.library(cfg.portfolio)["rows"]
-    families = set(cfg.mev_families) if cfg.mev_families else None
-    out = []
-    for r in rows:
-        if families is not None and r["key"] not in families:
+    for suffix in ("_yoy", "_growth"):
+        if key.endswith(suffix):
+            return key[: -len(suffix)]
+    return key
+
+
+def mev_variants(cfg: SelectionConfig) -> list[MevSpec]:
+    """The macro terms the analyst handed the search, parsed and deduplicated.
+
+    These come from the Macro surface's shortlist (`key@transform@lag`), where
+    the transformation library was already swept, filtered for stationarity
+    and sign, and narrowed by a human. The search's job is combinations, not
+    rediscovery.
+    """
+    out: list[MevSpec] = []
+    seen: set[tuple] = set()
+    for t in cfg.mev_terms:
+        parts = (t.split("@") + ["level", "0"])[:3]
+        key, tf, lag = parts[0], parts[1] or "level", int(parts[2] or 0)
+        k = (key, tf, lag)
+        if k in seen:
             continue
-        if not r.get("stationary", False):
-            continue
-        out.append(MevSpec(key=r["key"], transform=r["transform"],
-                           lag_months=r["lag_months"]))
+        seen.add(k)
+        out.append(MevSpec(key=key, transform=tf, lag_months=lag))
     return out
 
 
-def screen_mevs(cfg: SelectionConfig, cores: list[Core],
-                progress=None, cancel=None) -> dict[str, list[MevSpec]]:
-    """One variant at a time against each core: right sign, loosely significant.
+def screen_mevs(cfg: SelectionConfig, cores: list[Core], progress=None,
+                cancel=None) -> tuple[dict[str, list[MevSpec]], list[dict]]:
+    """Each shortlisted term against each core: right sign, loosely significant.
 
-    The screen is deliberately loose (default p < 0.10) — its job is to cut a
-    few hundred variants to a few dozen, not to pick the model. The sign check
-    is against the fitted coefficient, not the univariate correlation, because
-    the core is present: a variant that flips once the borrower variables are
-    in has already shown what it would do inside a model.
+    The list is small and hand-picked, so nothing is trimmed and nothing is
+    dropped silently: a term the screen removes is reported with its reason,
+    because the analyst chose it and deserves to hear why it did not make the
+    enumeration. The sign check is against the fitted coefficient, not the
+    univariate correlation, because the core is present: a term that flips
+    once the borrower variables are in has already shown what it would do
+    inside a model.
     """
     fit_df, _ = _frames(cfg)
     prior_for = _sign_prior(cfg.portfolio)
     variants = mev_variants(cfg)
     bank = MevBank(fit_df)
     survivors: dict[str, list[MevSpec]] = {}
+    screened_out: list[dict] = []
     total = len(cores) * len(variants)
     step = 0
     for core in cores:
@@ -520,8 +542,8 @@ def screen_mevs(cfg: SelectionConfig, cores: list[Core],
                 raise Cancelled()
             if progress:
                 progress(step, total,
-                         f"screening macro variants against the {core.name} "
-                         f"core: {m.label()}")
+                         f"screening shortlisted terms against the "
+                         f"{core.name} core: {m.label()}")
             spec = _model_spec(cfg, core.variables, (m,))
             des = _augment(core.lean.design, (m,), bank)
             res = F.fit(des, spec)
@@ -530,26 +552,28 @@ def screen_mevs(cfg: SelectionConfig, cores: list[Core],
             col = f"mev:{m.label()}"
             coef = next((c for c in lean.fit.coefficients if c.name == col), None)
             if coef is None:
+                screened_out.append({"core": core.name, "label": m.label(),
+                                     "reason": "the term produced no column "
+                                               "on this frame"})
                 continue
-            expected = prior_for(m.key)
+            expected = prior_for(mev_family(m.key)) or prior_for(m.key)
             observed = 1 if coef.estimate > 0 else -1
             if expected is not None and observed != expected:
+                screened_out.append({
+                    "core": core.name, "label": m.label(),
+                    "reason": f"fitted {'positive' if observed > 0 else 'negative'} "
+                              f"against a {'positive' if expected > 0 else 'negative'} "
+                              f"economic prior, beside this core"})
                 continue
             if coef.p_value >= cfg.rules.mev_screen_p:
+                screened_out.append({
+                    "core": core.name, "label": m.label(),
+                    "reason": f"p = {coef.p_value:.3f} beside this core, over "
+                              f"the {cfg.rules.mev_screen_p:.2f} screen"})
                 continue
-            keep.append((coef.p_value, m))
-        # The strongest few variants per family carry into the enumeration;
-        # the rest of a family's near-identical transforms do not multiply
-        # the combination count.
-        per_family: dict[str, int] = {}
-        trimmed: list[MevSpec] = []
-        for p_, m in sorted(keep, key=lambda t: t[0]):
-            if per_family.get(m.key, 0) >= max(1, cfg.rules.mev_top_per_family):
-                continue
-            per_family[m.key] = per_family.get(m.key, 0) + 1
-            trimmed.append(m)
-        survivors[core.name] = trimmed
-    return survivors
+            keep.append(m)
+        survivors[core.name] = keep
+    return survivors, screened_out
 
 
 def _variant_correlations(variants: list[MevSpec],
@@ -574,11 +598,13 @@ def _variant_correlations(variants: list[MevSpec],
 
 
 def _combo_allowed(combo: tuple[MevSpec, ...], corr: dict, cap: float) -> bool:
-    """The family rules. One variant per underlying series (which also forbids
-    the same series at two lags — kept as its own check so the rule survives a
-    refactor of the family definition), and no highly correlated pair."""
-    keys = [m.key for m in combo]
-    if len(set(keys)) != len(keys):
+    """The family rules. One term per underlying economic series — a base and
+    its derived form (unemployment and unemployment YoY, hpi and hpi_yoy) are
+    the same family — which also forbids the same series at two lags (kept as
+    its own check so the rule survives a refactor of the family definition).
+    And no highly correlated pair."""
+    families = [mev_family(m.key) for m in combo]
+    if len(set(families)) != len(families):
         return False
     for a, b in itertools.combinations(combo, 2):
         if a.key == b.key and a.lag_months != b.lag_months:
@@ -949,32 +975,50 @@ def run_finalists(cfg: SelectionConfig, rows: list[dict],
 N_STAGES = 4
 
 
+def combo_bound(cfg: SelectionConfig) -> int:
+    """The exact combination count for one core, before correlation pruning
+    and before the screen: every 1-to-3 subset of the terms with at most one
+    per family. Cheap enough to compute outright, so the setup screen shows a
+    real number rather than a formula."""
+    variants = mev_variants(cfg)
+    by_family: dict[str, int] = {}
+    for m in variants:
+        f = mev_family(m.key)
+        by_family[f] = by_family.get(f, 0) + 1
+    counts = list(by_family.values())
+    r = cfg.rules
+    total = 0
+    for size in range(r.min_mevs, r.max_mevs + 1):
+        for fams in itertools.combinations(counts, size):
+            prod = 1
+            for c in fams:
+                prod *= c
+            total += prod
+    return total
+
+
 def preview(cfg: SelectionConfig) -> dict:
-    """What a run would cost, without fitting anything. The combination count
-    depends on how many variants survive the screen, so it is reported as the
-    screen size plus the formula, and exactly once the screen has run."""
+    """What a run would cost, without fitting anything."""
     n_cand = sum(1 for c in cfg.candidates if c.role == "candidate")
     variants = mev_variants(cfg)
     n_cores = len([c for c in cfg.cores if c != "expert" or cfg.expert_core])
-    screen_fits = n_cores * len(variants)
+    n_families = len({mev_family(m.key) for m in variants})
+    bound = combo_bound(cfg)
     # stepwise cost is quadratic in candidates at worst
     stage1_bound = n_cand * (n_cand + 1)
     warning = None
-    if screen_fits > 1500:
-        warning = (f"The screen alone is {screen_fits:,} fits. Narrow the "
-                   f"macro families or the candidate list, or expect a run "
-                   f"of ten minutes or more.")
+    if n_cores * bound > 2000:
+        warning = (f"Up to {n_cores * bound:,} combination fits across the "
+                   f"cores. Shorten the macro term list, or expect a run of "
+                   f"ten minutes or more.")
     return {
         "n_candidates": n_cand,
-        "n_mev_variants": len(variants),
+        "n_mev_terms": len(variants),
+        "n_families": n_families,
         "n_cores": n_cores,
         "stage1_fit_bound": stage1_bound,
-        "screen_fits": screen_fits,
-        "combos_note": ("Combinations of 1 to 3 are enumerated from the "
-                        "variants that survive the screen; with s survivors "
-                        "that is at most s + s(s-1)/2 + s(s-1)(s-2)/6 "
-                        "per core, and the exact count is reported when "
-                        "screening finishes."),
+        "screen_fits": n_cores * len(variants),
+        "combo_bound": bound,
         "warning": warning,
     }
 
@@ -991,19 +1035,26 @@ def run_search(cfg: SelectionConfig, progress=None, cancel=None,
                 progress(no, N_STAGES, step, total, label)
         return cb
 
+    if not mev_variants(cfg):
+        raise ValueError(
+            "no macro terms were given to the search. Shortlist terms on the "
+            "Macro surface and include them in the setup; every emitted "
+            "model must carry one")
     cores = build_cores(cfg, progress=stage(1), cancel=cancel)
     if not cores:
         raise ValueError(
             "no core survived the stepwise rules. Loosen the entry rule or "
             "add candidate variables")
-    survivors = screen_mevs(cfg, cores, progress=stage(2), cancel=cancel)
+    survivors, screened_out = screen_mevs(cfg, cores, progress=stage(2),
+                                          cancel=cancel)
     combos = enumerate_combos(cfg, survivors)
     n_combos = sum(len(v) for v in combos.values())
     if n_combos == 0:
         raise ValueError(
-            "no macro variant survived the screen on any core. Every emitted "
-            "model must carry a macro term, so there is nothing to enumerate. "
-            "Loosen the screen p-value or widen the macro families")
+            "no shortlisted term survived the screen on any core. Every "
+            "emitted model must carry a macro term, so there is nothing to "
+            "enumerate. Loosen the screen p-value or revisit the shortlist "
+            "on the Macro surface")
     rows = joint_fit_rows(cfg, cores, combos, progress=stage(3), cancel=cancel)
     stress_check(cfg, rows, progress=stage(3), cancel=cancel)
     composite_rank(rows)
@@ -1018,6 +1069,7 @@ def run_search(cfg: SelectionConfig, progress=None, cancel=None,
         "cores": [{"name": c.name, "columns": c.columns,
                    "warnings": c.warnings, "steps": c.steps} for c in cores],
         "survivors": {k: [m.label() for m in v] for k, v in survivors.items()},
+        "screened_out": screened_out,
         "n_combos": n_combos,
         "n_rows": len(rows),
         "n_filtered": sum(1 for r in rows if r["filtered"]),

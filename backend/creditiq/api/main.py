@@ -1788,22 +1788,24 @@ def _selection_config(key: str, body: SelectionRunRequest) -> sel.SelectionConfi
     if not any(c.role == "candidate" for c in cfg.candidates):
         raise HTTPException(400, "no candidate variables: mark at least one "
                                  "column as a candidate")
+    panel_cols = set(mevpanel.monthly_panel().columns)
+    unknown = sorted({m.key for m in sel.mev_variants(cfg)
+                      if m.key not in panel_cols})
+    if unknown:
+        raise HTTPException(400, "macro terms not in the published panel: "
+                            + ", ".join(unknown))
     return cfg
 
 
 @app.get("/api/selection/{key}/defaults")
 def selection_defaults(key: str):
     """Everything the setup screen needs prefilled: the screened candidate
-    list with its warnings, the macro families a scenario can carry, and the
-    default rules."""
+    list with its warnings and the default rules. The macro terms come from
+    the Macro surface's shortlist, which lives client-side; the search takes
+    them verbatim rather than offering a second picker here."""
     if key not in PORTFOLIOS:
         raise HTTPException(404, f"unknown portfolio {key!r}")
-    from ..models.scenario_service import PROJECTION_MEVS
     screen_rows = _screen_all(key)["rows"]
-    mev_panel_cols = set(mevpanel.monthly_panel().columns)
-    bases = [k for k in PROJECTION_MEVS
-             if not k.endswith("_yoy") and k in mev_panel_cols]
-    meta = by_key(bases)
     spec = PORTFOLIOS[key]
     candidates = []
     for r in screen_rows:
@@ -1822,12 +1824,6 @@ def selection_defaults(key: str):
     return _jsonable({
         "portfolio": key,
         "candidates": candidates,
-        # `default_on` marks the book's own macro allowlist, the same list the
-        # rest of the app offers this portfolio. The others stay selectable.
-        "mev_families": [{"key": k,
-                          "label": meta[k].label if k in meta else k,
-                          "default_on": k in PORTFOLIO_MEVS.get(key, [])}
-                         for k in bases],
         "scenarios": sel.available_scenarios(),
         "rules": {f: getattr(sel.SelectionRules(), f)
                   for f in sel.SelectionRules.__dataclass_fields__},

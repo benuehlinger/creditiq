@@ -1067,7 +1067,6 @@ export interface SelectionRulesPayload {
   entry_threshold?: number
   exit_threshold?: number
   mev_screen_p?: number
-  mev_top_per_family?: number
   min_mevs?: number
   max_mevs?: number
   max_predictors?: number | null
@@ -1085,7 +1084,10 @@ export interface SelectionConfigPayload {
   candidates: SelectionCandidatePayload[]
   cores?: string[]
   expert_core?: string[] | null
-  mev_families?: string[] | null
+  /** Macro terms as `key@transform@lag`, taken from the Macro surface's
+   *  shortlist. The search enumerates combinations of these; it never sweeps
+   *  the transformation library itself. */
+  mev_terms?: string[]
   rules?: SelectionRulesPayload
   oot_from?: string
   test_fraction?: number
@@ -1100,7 +1102,6 @@ export interface SelectionDefaults {
     leakage_risk: string | null; missing_pct: number | null
     expected_sign: number | null; cyclical: boolean
   }[]
-  mev_families: { key: string; label: string; default_on: boolean }[]
   scenarios: string[]
   rules: Required<SelectionRulesPayload>
   reason_codes: string[]
@@ -1108,11 +1109,12 @@ export interface SelectionDefaults {
 
 export interface SelectionPreview {
   n_candidates: number
-  n_mev_variants: number
+  n_mev_terms: number
+  n_families: number
   n_cores: number
   stage1_fit_bound: number
   screen_fits: number
-  combos_note: string
+  combo_bound: number
   warning: string | null
 }
 
@@ -1193,6 +1195,7 @@ export interface SelectionResults {
   cores: { name: string; columns: string[]; warnings: string[]
            steps: Record<string, unknown>[] }[]
   survivors: Record<string, string[]>
+  screened_out: { core: string; label: string; reason: string }[]
   n_combos: number
   n_rows: number
   n_filtered: number

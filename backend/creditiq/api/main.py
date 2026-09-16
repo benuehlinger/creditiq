@@ -1813,6 +1813,7 @@ def selection_defaults(key: str):
         candidates.append({
             "column": col, "kind": r.get("kind"),
             "iv": r.get("iv"), "iv_band": r.get("iv_band"),
+            "above_null": r.get("above_null"),
             "leakage_risk": r.get("leakage_risk"),
             "missing_pct": r.get("missing_pct"),
             "expected_sign": spec.expected_signs.get(col),
@@ -1821,8 +1822,11 @@ def selection_defaults(key: str):
     return _jsonable({
         "portfolio": key,
         "candidates": candidates,
+        # `default_on` marks the book's own macro allowlist, the same list the
+        # rest of the app offers this portfolio. The others stay selectable.
         "mev_families": [{"key": k,
-                          "label": meta[k].label if k in meta else k}
+                          "label": meta[k].label if k in meta else k,
+                          "default_on": k in PORTFOLIO_MEVS.get(key, [])}
                          for k in bases],
         "scenarios": sel.available_scenarios(),
         "rules": {f: getattr(sel.SelectionRules(), f)

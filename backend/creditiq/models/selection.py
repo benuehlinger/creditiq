@@ -97,6 +97,12 @@ class SelectionRules:
     entry_threshold: float = 0.01          # p-value mode only
     exit_threshold: float = 0.05           # p-value mode only
     mev_screen_p: float = 0.10             # loose screen for macro variants
+    # After the screen, keep this many variants per family (best p first)
+    # before enumerating. The screen is loose by design, so without a cap a
+    # family can put six near-identical transforms of itself into the
+    # enumeration and the combination count explodes combinatorially. Two per
+    # family keeps a transform rivalry alive without that.
+    mev_top_per_family: int = 2
     min_mevs: int = 1
     max_mevs: int = 3
     max_predictors: int | None = None      # core terms, macro terms excluded
@@ -395,6 +401,58 @@ def build_cores(cfg: SelectionConfig, progress=None, cancel=None) -> list[Core]:
 
 
 # ── stage 2: macro terms ─────────────────────────────────────────────────────
+class MevBank:
+    """Standardised macro columns for one frame, shared across many fits.
+
+    Stage 2 fits a core plus one macro variant hundreds of times. Rebuilding
+    the whole design for each fit costs a couple of seconds; the core columns
+    never change, so the design is built ONCE per core and each candidate fit
+    appends only its macro column. The bank computes, standardises and caches
+    those columns per frame. `stats` reuses another bank's means and standard
+    deviations, which is how the full-frame scoring design applies the fit
+    frame's standardisation, exactly as `design.build` does with train maps.
+    """
+
+    def __init__(self, df: pd.DataFrame, stats: dict | None = None):
+        self.dates = pd.DatetimeIndex(df["performance_date"])
+        self.stats: dict[tuple, tuple[float, float]] = stats if stats is not None else {}
+        self._own_stats = stats is None
+        self._cols: dict[tuple, np.ndarray] = {}
+
+    def col(self, m: MevSpec) -> np.ndarray:
+        key = (m.key, m.transform, m.lag_months)
+        if key not in self._cols:
+            vals = D.mev_series(m).reindex(self.dates).to_numpy(float)
+            vals = np.nan_to_num(vals, nan=float(np.nanmedian(vals)))
+            if self._own_stats:
+                self.stats[key] = (float(vals.mean()),
+                                   float(vals.std()) or 1.0)
+            mu, sd = self.stats.get(key, (float(vals.mean()),
+                                          float(vals.std()) or 1.0))
+            self._cols[key] = ((vals - mu) / sd).astype(np.float32)
+        return self._cols[key]
+
+
+def _augment(base: D.Design, mevs: tuple[MevSpec, ...], bank: MevBank) -> D.Design:
+    """The base design with the macro columns appended, as one new Design.
+
+    Identical to what `design.build` would produce for the same specification,
+    modulo column order: macro columns standardised on the fit frame, one term
+    each. The base is reused untouched, which is the entire point.
+    """
+    names = [f"mev:{m.label()}" for m in mevs]
+    cols = [bank.col(m)[:, None] for m in mevs]
+    X = np.column_stack([base.X, *cols]).astype(np.float32, copy=False)
+    stats = [bank.stats[(m.key, m.transform, m.lag_months)] for m in mevs]
+    means = np.concatenate([base.means, [s[0] for s in stats]])
+    stds = np.concatenate([base.stds, [s[1] for s in stats]])
+    return D.Design(X=X, columns=[*base.columns, *names], y=base.y,
+                    dates=base.dates, accounts=base.accounts,
+                    woe_maps=base.woe_maps, means=means, stds=stds,
+                    basis_maps=base.basis_maps, terms=[*base.terms, *names])
+
+
+
 def _sign_prior(portfolio: str):
     """The economic prior per macro base, under any spelling the book uses.
 
@@ -450,6 +508,7 @@ def screen_mevs(cfg: SelectionConfig, cores: list[Core],
     fit_df, _ = _frames(cfg)
     prior_for = _sign_prior(cfg.portfolio)
     variants = mev_variants(cfg)
+    bank = MevBank(fit_df)
     survivors: dict[str, list[MevSpec]] = {}
     total = len(cores) * len(variants)
     step = 0
@@ -463,7 +522,11 @@ def screen_mevs(cfg: SelectionConfig, cores: list[Core],
                 progress(step, total,
                          f"screening macro variants against the {core.name} "
                          f"core: {m.label()}")
-            lean = _lean_fit(fit_df, _model_spec(cfg, core.variables, (m,)))
+            spec = _model_spec(cfg, core.variables, (m,))
+            des = _augment(core.lean.design, (m,), bank)
+            res = F.fit(des, spec)
+            lean = Lean(fit=res, ll=res.log_likelihood, k=len(res.columns),
+                        n_events=res.n_events_train, design=des)
             col = f"mev:{m.label()}"
             coef = next((c for c in lean.fit.coefficients if c.name == col), None)
             if coef is None:
@@ -474,8 +537,18 @@ def screen_mevs(cfg: SelectionConfig, cores: list[Core],
                 continue
             if coef.p_value >= cfg.rules.mev_screen_p:
                 continue
-            keep.append(m)
-        survivors[core.name] = keep
+            keep.append((coef.p_value, m))
+        # The strongest few variants per family carry into the enumeration;
+        # the rest of a family's near-identical transforms do not multiply
+        # the combination count.
+        per_family: dict[str, int] = {}
+        trimmed: list[MevSpec] = []
+        for p_, m in sorted(keep, key=lambda t: t[0]):
+            if per_family.get(m.key, 0) >= max(1, cfg.rules.mev_top_per_family):
+                continue
+            per_family[m.key] = per_family.get(m.key, 0) + 1
+            trimmed.append(m)
+        survivors[core.name] = trimmed
     return survivors
 
 
@@ -581,7 +654,17 @@ def joint_fit_rows(cfg: SelectionConfig, cores: list[Core],
     by_hash: dict[str, dict] = {}
     total = sum(len(v) for v in combos.values())
     step = 0
+    bank = MevBank(fit_df)
     for core in cores:
+        # The core's design is fitted; each combination appends only its
+        # macro columns. The full-frame copy is built once per core with the
+        # fit frame's maps, for out-of-time scoring.
+        core_all = D.build(full_df, _model_spec(cfg, core.variables),
+                           woe_maps=core.lean.fit.woe_maps,
+                           means=core.lean.fit.means,
+                           stds=core.lean.fit.stds,
+                           basis_maps=core.lean.fit.basis_maps)
+        bank_all = MevBank(full_df, stats=bank.stats)
         for combo in combos.get(core.name, []):
             step += 1
             if cancel is not None and cancel.is_set():
@@ -596,13 +679,14 @@ def joint_fit_rows(cfg: SelectionConfig, cores: list[Core],
                 by_hash[h]["lineage"].append(
                     {"core": core.name, "method": "stepwise+mev_enum"})
                 continue
-            lean = _lean_fit(fit_df, spec)
+            des = _augment(core.lean.design, combo, bank)
+            res = F.fit(des, spec)
+            lean = Lean(fit=res, ll=res.log_likelihood, k=len(res.columns),
+                        n_events=res.n_events_train, design=des)
 
             # out-of-time discrimination: score the full screening frame with
-            # the train-fitted maps, then read the two partitions
-            des_all = D.build(full_df, spec, woe_maps=lean.fit.woe_maps,
-                              means=lean.fit.means, stds=lean.fit.stds,
-                              basis_maps=lean.fit.basis_maps)
+            # the fit frame's standardisation, then read the two partitions
+            des_all = _augment(core_all, combo, bank_all)
             p_all = F.predict(des_all.X, lean.fit.beta)
             y_all = des_all.y
             in_mask = ~oot.to_numpy()

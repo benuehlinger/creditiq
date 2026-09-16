@@ -181,3 +181,18 @@ def test_core_shift_flags_a_constructed_flip():
             coefficients = [FakeCoef("x_woe", 0.75)]
 
     assert S._core_shift(core, FakeLeanSmall, pct=30.0) == []
+
+
+def test_the_screen_keeps_only_the_strongest_variants_per_family():
+    """The loose screen may pass many transforms of one variable; only the
+    best few (by p) carry into the enumeration, so a family cannot multiply
+    the combination count with near-identical copies of itself."""
+    cfg = _cfg(mev_families=["unemployment_rate", "real_gdp_growth"],
+               rules={"mev_top_per_family": 2})
+    cores = S.build_cores(cfg)
+    survivors = S.screen_mevs(cfg, cores[:1])
+    kept = survivors[cores[0].name]
+    counts = {}
+    for m in kept:
+        counts[m.key] = counts.get(m.key, 0) + 1
+    assert all(n <= 2 for n in counts.values())

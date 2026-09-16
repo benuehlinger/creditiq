@@ -37,6 +37,7 @@ elsewhere; this module never produces a ModelRun.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 from dataclasses import asdict, dataclass, field
 
@@ -48,6 +49,8 @@ from .. import store
 from ..data.portfolios import PORTFOLIOS
 from . import design as D
 from . import fit as F
+from . import metrics as M
+from .naming import friendly_name
 from .spec import MevSpec, ModelSpec, SampleSpec, VariableSpec
 
 # Variables that move with the cycle the macro terms are supposed to carry.
@@ -388,3 +391,286 @@ def build_cores(cfg: SelectionConfig, progress=None, cancel=None) -> list[Core]:
         seen.add(key)
         unique.append(core)
     return unique
+
+
+# ── stage 2: macro terms ─────────────────────────────────────────────────────
+def _sign_prior(portfolio: str):
+    """The economic prior per macro base, under any spelling the book uses.
+
+    Same resolution rule as analysis/mev_search.py: a portfolio declares its
+    prior under the name it fits (`cre_price_index_yoy`), and every transform
+    or lag of the base carries the same claim about direction.
+    """
+    raw = PORTFOLIOS[portfolio].expected_signs
+
+    def prior_for(key: str) -> int | None:
+        if key in raw:
+            return raw[key]
+        for suffix in ("_yoy", "_growth"):
+            if f"{key}{suffix}" in raw:
+                return raw[f"{key}{suffix}"]
+        if key.endswith("_yoy") and key[:-4] in raw:
+            return raw[key[:-4]]
+        return None
+    return prior_for
+
+
+def mev_variants(cfg: SelectionConfig) -> list[MevSpec]:
+    """The transform-and-lag universe, from the macro library's own rows.
+
+    The library is already restricted to variables a scenario can carry
+    forward, and its stationarity filter applies here for the same reason it
+    exists at all: a non-stationary form correlates with anything that drifts.
+    """
+    from ..analysis import mev_search
+    rows = mev_search.library(cfg.portfolio)["rows"]
+    families = set(cfg.mev_families) if cfg.mev_families else None
+    out = []
+    for r in rows:
+        if families is not None and r["key"] not in families:
+            continue
+        if not r.get("stationary", False):
+            continue
+        out.append(MevSpec(key=r["key"], transform=r["transform"],
+                           lag_months=r["lag_months"]))
+    return out
+
+
+def screen_mevs(cfg: SelectionConfig, cores: list[Core],
+                progress=None, cancel=None) -> dict[str, list[MevSpec]]:
+    """One variant at a time against each core: right sign, loosely significant.
+
+    The screen is deliberately loose (default p < 0.10) — its job is to cut a
+    few hundred variants to a few dozen, not to pick the model. The sign check
+    is against the fitted coefficient, not the univariate correlation, because
+    the core is present: a variant that flips once the borrower variables are
+    in has already shown what it would do inside a model.
+    """
+    fit_df, _ = _frames(cfg)
+    prior_for = _sign_prior(cfg.portfolio)
+    variants = mev_variants(cfg)
+    survivors: dict[str, list[MevSpec]] = {}
+    total = len(cores) * len(variants)
+    step = 0
+    for core in cores:
+        keep: list[MevSpec] = []
+        for m in variants:
+            step += 1
+            if cancel is not None and cancel.is_set():
+                raise Cancelled()
+            if progress:
+                progress(step, total,
+                         f"screening macro variants against the {core.name} "
+                         f"core: {m.label()}")
+            lean = _lean_fit(fit_df, _model_spec(cfg, core.variables, (m,)))
+            col = f"mev:{m.label()}"
+            coef = next((c for c in lean.fit.coefficients if c.name == col), None)
+            if coef is None:
+                continue
+            expected = prior_for(m.key)
+            observed = 1 if coef.estimate > 0 else -1
+            if expected is not None and observed != expected:
+                continue
+            if coef.p_value >= cfg.rules.mev_screen_p:
+                continue
+            keep.append(m)
+        survivors[core.name] = keep
+    return survivors
+
+
+def _variant_correlations(variants: list[MevSpec],
+                          lo: pd.Timestamp, hi: pd.Timestamp) -> dict:
+    """Pairwise correlation of the transformed, lagged series over the
+    estimation window, computed once per distinct variant."""
+    series = {}
+    for m in variants:
+        s = D.mev_series(m)
+        series[(m.key, m.transform, m.lag_months)] = \
+            s.loc[(s.index >= lo) & (s.index <= hi)]
+    corr: dict[tuple, float] = {}
+    keys = list(series)
+    for a, b in itertools.combinations(keys, 2):
+        pair = pd.concat([series[a], series[b]], axis=1).dropna()
+        if len(pair) < 12:
+            corr[(a, b)] = 1.0        # too little overlap to defend the pair
+            continue
+        r = float(pair.iloc[:, 0].corr(pair.iloc[:, 1]))
+        corr[(a, b)] = 0.0 if np.isnan(r) else r
+    return corr
+
+
+def _combo_allowed(combo: tuple[MevSpec, ...], corr: dict, cap: float) -> bool:
+    """The family rules. One variant per underlying series (which also forbids
+    the same series at two lags — kept as its own check so the rule survives a
+    refactor of the family definition), and no highly correlated pair."""
+    keys = [m.key for m in combo]
+    if len(set(keys)) != len(keys):
+        return False
+    for a, b in itertools.combinations(combo, 2):
+        if a.key == b.key and a.lag_months != b.lag_months:
+            return False
+        ka = (a.key, a.transform, a.lag_months)
+        kb = (b.key, b.transform, b.lag_months)
+        r = corr.get((ka, kb), corr.get((kb, ka)))
+        if r is not None and abs(r) > cap:
+            return False
+    return True
+
+
+def enumerate_combos(cfg: SelectionConfig,
+                     survivors: dict[str, list[MevSpec]]) -> dict[str, list[tuple[MevSpec, ...]]]:
+    """Every 1-to-3 combination of a core's surviving variants, constrained."""
+    fit_df, _ = _frames(cfg)
+    lo = pd.Timestamp(fit_df["performance_date"].min())
+    hi = pd.Timestamp(fit_df["performance_date"].max())
+    distinct: dict[tuple, MevSpec] = {}
+    for ms in survivors.values():
+        for m in ms:
+            distinct[(m.key, m.transform, m.lag_months)] = m
+    corr = _variant_correlations(list(distinct.values()), lo, hi)
+
+    out: dict[str, list[tuple[MevSpec, ...]]] = {}
+    r = cfg.rules
+    for name, ms in survivors.items():
+        combos: list[tuple[MevSpec, ...]] = []
+        for size in range(r.min_mevs, r.max_mevs + 1):
+            for combo in itertools.combinations(ms, size):
+                if _combo_allowed(combo, corr, r.mev_corr_cap):
+                    combos.append(combo)
+        out[name] = combos
+    return out
+
+
+def _core_shift(core: Core, lean: Lean, pct: float) -> list[dict]:
+    """Core coefficients after the macro terms joined, against the core alone.
+
+    A macro term is supposed to add the cycle, not rewrite the borrower story.
+    A sign flip or a large shift on a core term means the macro variant is
+    fighting a driver for the same effect, and the row says so.
+    """
+    after = {c.name: c.estimate for c in lean.fit.coefficients}
+    flags = []
+    for name, before in core.coefficients.items():
+        now = after.get(name)
+        if now is None:
+            continue
+        flipped = before * now < 0 and abs(before) > 1e-8
+        shift = abs(now - before) / abs(before) * 100.0 if abs(before) > 1e-8 else 0.0
+        if flipped or shift > pct:
+            flags.append({"column": name, "before": float(before),
+                          "after": float(now), "flipped": bool(flipped),
+                          "shift_pct": float(shift)})
+    return flags
+
+
+def joint_fit_rows(cfg: SelectionConfig, cores: list[Core],
+                   combos: dict[str, list[tuple[MevSpec, ...]]],
+                   progress=None, cancel=None) -> list[dict]:
+    """Stage 3: fit every core-plus-combination jointly and emit leaderboard rows.
+
+    All coefficients are re-estimated — the core is a starting point, not a
+    frozen block — and the row records what the re-estimation did to it.
+    Identical variable sets from different cores share a spec hash and merge
+    into one row with both lineages.
+    """
+    fit_df, full_df = _frames(cfg)
+    oot = full_df["performance_date"] >= pd.Timestamp(cfg.oot_from)
+    prior_for = _sign_prior(cfg.portfolio)
+    rules = cfg.rules
+    by_hash: dict[str, dict] = {}
+    total = sum(len(v) for v in combos.values())
+    step = 0
+    for core in cores:
+        for combo in combos.get(core.name, []):
+            step += 1
+            if cancel is not None and cancel.is_set():
+                raise Cancelled()
+            spec = _model_spec(cfg, core.variables, combo)
+            h = spec.hash()
+            label = " + ".join(m.label() for m in combo)
+            if progress:
+                progress(step, total,
+                         f"fitting {core.name} core + {label}")
+            if h in by_hash:
+                by_hash[h]["lineage"].append(
+                    {"core": core.name, "method": "stepwise+mev_enum"})
+                continue
+            lean = _lean_fit(fit_df, spec)
+
+            # out-of-time discrimination: score the full screening frame with
+            # the train-fitted maps, then read the two partitions
+            des_all = D.build(full_df, spec, woe_maps=lean.fit.woe_maps,
+                              means=lean.fit.means, stds=lean.fit.stds,
+                              basis_maps=lean.fit.basis_maps)
+            p_all = F.predict(des_all.X, lean.fit.beta)
+            y_all = des_all.y
+            in_mask = ~oot.to_numpy()
+            auc_in, ks_in, _ = M.auc_and_ks(y_all[in_mask], p_all[in_mask])
+            oot_mask = oot.to_numpy()
+            if y_all[oot_mask].sum() >= 5:
+                auc_oot, ks_oot, _ = M.auc_and_ks(y_all[oot_mask], p_all[oot_mask])
+            else:
+                auc_oot = ks_oot = None
+
+            named = [c for c in lean.fit.coefficients if c.name != "intercept"
+                     and c.term != "seasoning"]
+            max_p = max((c.p_value for c in named), default=None)
+            vif_by_term = {c.term: c.term_vif for c in named if c.term_vif}
+            max_vif = max(vif_by_term.values(), default=None)
+
+            sign_checks = []
+            for m in combo:
+                col = f"mev:{m.label()}"
+                coef = next((c for c in lean.fit.coefficients
+                             if c.name == col), None)
+                expected = prior_for(m.key)
+                observed = (1 if coef.estimate > 0 else -1) if coef else None
+                sign_checks.append({
+                    "mev": m.key, "term": col, "transform": m.transform,
+                    "lag_months": m.lag_months, "expected_sign": expected,
+                    "observed_sign": observed,
+                    "ok": None if expected is None or observed is None
+                    else bool(expected == observed)})
+
+            shifts = _core_shift(core, lean, rules.core_shift_pct)
+
+            row = {
+                "hash": h, "name": friendly_name(h),
+                "spec": spec.to_dict(),
+                "lineage": [{"core": core.name, "method": "stepwise+mev_enum"}],
+                "n_predictors": len(core.variables) + len(combo),
+                "n_core": len(core.variables),
+                "core_columns": list(core.columns),
+                "core_warnings": list(core.warnings),
+                "mevs": [{"key": m.key, "transform": m.transform,
+                          "lag_months": m.lag_months, "label": m.label()}
+                         for m in combo],
+                "n_mevs": len(combo),
+                "sign_checks": sign_checks,
+                "signs_ok": all(s["ok"] is not False for s in sign_checks),
+                "max_p": None if max_p is None else float(max_p),
+                "all_significant": (max_p is not None
+                                    and max_p < rules.p_cutoff),
+                "max_vif": None if max_vif is None else float(max_vif),
+                "core_shifts": shifts,
+                "core_shifted": bool(shifts),
+                "auc_in": float(auc_in), "ks_in": float(ks_in),
+                "auc_oot": None if auc_oot is None else float(auc_oot),
+                "ks_oot": None if ks_oot is None else float(ks_oot),
+                "converged": bool(lean.fit.converged),
+                "separation_warning": lean.fit.separation_warning,
+                "coefficients": [
+                    {"name": c.name, "estimate": c.estimate,
+                     "std_error": c.std_error, "p_value": c.p_value,
+                     "term": c.term, "term_vif": c.term_vif}
+                    for c in lean.fit.coefficients],
+                "filtered": False, "filter_reason": None,
+            }
+            if rules.p_rule == "filter" and not row["all_significant"]:
+                row["filtered"], row["filter_reason"] = True, "p_cutoff"
+            if (rules.vif_rule == "filter" and rules.max_vif
+                    and max_vif is not None and max_vif > rules.max_vif):
+                row["filtered"], row["filter_reason"] = True, "max_vif"
+            by_hash[h] = row
+    return [r for r in by_hash.values() if not r["filtered"]] + \
+           [r for r in by_hash.values() if r["filtered"]]

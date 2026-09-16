@@ -231,22 +231,39 @@ def test_the_rollup_defaults_to_the_adopted_models():
     assert all(p["source"] in ("champion", "default") for p in r.portfolios)
 
 
-def test_selecting_a_different_version_marks_the_result_as_not_adopted():
+def test_selecting_a_different_version_marks_the_result_as_not_adopted(
+        tmp_path, monkeypatch):
     """The roll-up is the executive number. A figure produced by a hand-picked
     combination of versions is a different object from the one produced by the
-    adopted models, and swapping one book here moves the total by 19%."""
+    adopted models. The book state is built here rather than read from the
+    machine: a fresh clone or an in-app reset carries no saved versions at all,
+    and the test must pass there too."""
     from creditiq.models import rollup as R
-    base = R.run(with_tornado=False)
-    options = base.available["cre"]
-    alt = next((v["hash"] for v in options
-                if v["hash"] != base.portfolios[-1]["version_hash"]), None)
-    if alt is None:
-        pytest.skip("only one saved version on this book")
-    r = R.run(with_tornado=False, selection={"cre": alt})
-    assert r.is_adopted is False
-    cre = next(p for p in r.portfolios if p["portfolio"] == "cre")
-    assert cre["source"] == "selected"
-    assert cre["version_hash"] == alt
+    from creditiq.models import versions as V
+    from creditiq.models.spec import LgdSpec, ModelSpec, VariableSpec
+    monkeypatch.setattr(V, "VERSIONS_DIR", tmp_path)
+    champ = V.save(ModelSpec("cre", [VariableSpec("dscr_reported")],
+                             lgd=LgdSpec("cre", drivers=("current_ltv",))), {})
+    other = V.save(ModelSpec("cre", [VariableSpec("risk_rating")],
+                             lgd=LgdSpec("cre", drivers=("current_ltv",))), {})
+    V.promote(champ.hash)
+    try:
+        base = R.run(with_tornado=False, force=True)
+        assert base.is_adopted
+        cre = next(p for p in base.portfolios if p["portfolio"] == "cre")
+        assert cre["source"] == "champion"
+        assert {v["hash"] for v in base.available["cre"]} == {champ.hash,
+                                                              other.hash}
+        r = R.run(with_tornado=False, force=True,
+                  selection={"cre": other.hash})
+        assert r.is_adopted is False
+        cre = next(p for p in r.portfolios if p["portfolio"] == "cre")
+        assert cre["source"] == "selected"
+        assert cre["version_hash"] == other.hash
+    finally:
+        # Results computed against the temporary versions directory must not
+        # serve later callers of run().
+        R._CACHE.clear()
 
 
 def test_an_unknown_or_mismatched_version_falls_back_rather_than_failing():

@@ -2792,3 +2792,16 @@ off are two different models, and the fitted-table row explains it in
 plain words. The vocabulary changed with it: "account-age baseline"
 everywhere, not "seasoning spline", and the orthogonalization mechanics
 left the UI copy for this log — where they were already recorded.
+
+## A backend test never reads the machine's saved versions
+
+The roll-up selection test read whatever versions/ happened to hold and
+skipped when it found fewer than two. After the in-app full reset it
+found zero and crashed on an empty portfolio list — the suite went red
+on exactly the state a fresh clone or a reset produces, which is the
+state the suite most needs to pass in. The test now builds its own
+book: two saved versions on CRE in a temporary versions directory, one
+promoted, run forced past the roll-up cache, and the cache cleared on
+the way out so nothing computed against the temporary directory serves
+a later caller. Same lesson as the e2e fork test: user state is not a
+fixture, and a test that skips itself guards nothing.

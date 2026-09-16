@@ -155,7 +155,7 @@ def update_row(portfolio: str, config_hash: str, model_hash: str,
     just = (merged.get("justification") or "").strip()
     if status == "rejected" and not just:
         raise ReviewError(
-            "justification is required to reject a model — the export has to "
+            "justification is required to reject a model. The export has to "
             "say why")
     user_rank = merged.get("user_rank")
     if (user_rank is not None and auto_rank is not None
@@ -202,7 +202,14 @@ def reorder(portfolio: str, config_hash: str, order: list[str],
     for i, h in enumerate(order, 1):
         row = review["rows"].get(h, {})
         if row.get("user_rank") != i:
-            _audit(review, reviewer, h, "user_rank", row.get("user_rank"), i)
+            # The audit records DEVIATIONS, not the identity ordering: a board
+            # of seven hundred models all confirmed at their automated rank is
+            # one fact, not seven hundred rows. A model moved away from its
+            # automated rank is recorded, and so is one moved back to it.
+            diverges = auto_ranks.get(h) is not None and i != auto_ranks[h]
+            returned = row.get("user_rank") is not None
+            if diverges or returned:
+                _audit(review, reviewer, h, "user_rank", row.get("user_rank"), i)
         if h in justifications and justifications[h].strip() \
                 and row.get("justification") != justifications[h]:
             _audit(review, reviewer, h, "justification",

@@ -700,7 +700,7 @@ function Board({ pk, res, review, selected, onSelect }: {
               </tr>
             </thead>
             <tbody>
-              {ordered.map((r, idx) => {
+              {ordered.slice(0, 150).map((r, idx) => {
                 const rv = rrows[r.hash] ?? {}
                 const active = r.hash === selected
                 const userRank = pendingOrder ? idx + 1 : rv.user_rank
@@ -780,7 +780,12 @@ function Board({ pk, res, review, selected, onSelect }: {
                         style={{ color: r.all_significant ? undefined : 'var(--status-warning)' }}>
                       {fmtP(r.max_p)}
                     </td>
-                    <td className="px-2 py-1.5 text-right tnum text-ink-secondary">
+                    <td className="px-2 py-1.5 text-right tnum"
+                        title={r.max_vif != null && r.max_vif > 5
+                          ? 'The worst term-level VIF exceeds 5: two terms carry much of the same information. Open the model to see which.'
+                          : undefined}
+                        style={{ color: r.max_vif != null && r.max_vif > 5
+                          ? 'var(--status-warning)' : undefined }}>
                       {r.max_vif == null ? '—' : r.max_vif.toFixed(1)}
                     </td>
                     <td className="px-2 py-1.5 text-center">
@@ -820,6 +825,12 @@ function Board({ pk, res, review, selected, onSelect }: {
               })}
             </tbody>
           </table>
+          {ordered.length > 150 && (
+            <p className="px-3 py-2 text-micro text-ink-muted">
+              Showing the top 150 of {num(ordered.length)} by the current sort.
+              Every model is still in the results and the export.
+            </p>
+          )}
         </div>
 
         {pendingOrder && (

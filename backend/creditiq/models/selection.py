@@ -994,14 +994,14 @@ def run_search(cfg: SelectionConfig, progress=None, cancel=None,
     cores = build_cores(cfg, progress=stage(1), cancel=cancel)
     if not cores:
         raise ValueError(
-            "no core survived the stepwise rules — loosen the entry rule or "
+            "no core survived the stepwise rules. Loosen the entry rule or "
             "add candidate variables")
     survivors = screen_mevs(cfg, cores, progress=stage(2), cancel=cancel)
     combos = enumerate_combos(cfg, survivors)
     n_combos = sum(len(v) for v in combos.values())
     if n_combos == 0:
         raise ValueError(
-            "no macro variant survived the screen on any core — every emitted "
+            "no macro variant survived the screen on any core. Every emitted "
             "model must carry a macro term, so there is nothing to enumerate. "
             "Loosen the screen p-value or widen the macro families")
     rows = joint_fit_rows(cfg, cores, combos, progress=stage(3), cancel=cancel)

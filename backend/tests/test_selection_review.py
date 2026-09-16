@@ -149,3 +149,27 @@ def test_partial_updates_do_not_blank_other_fields(board):
                      params={"config": board}).json()["rows"]["aaa111"]
     assert row["status"] == "challenger"
     assert row["justification"] == "Original reason."
+
+
+def test_reorder_audits_deviations_not_the_identity_ordering(board):
+    """Confirming the whole board at its automated order writes no audit rows;
+    only models moved away from (or back to) their automated rank are
+    recorded. A seven-hundred-row board must not produce a seven-hundred-row
+    audit for one drag."""
+    r = client.post('/api/selection/consumer/review/order',
+                    params={'config': board},
+                    json={'reviewer': 'ben',
+                          'order': ['aaa111', 'bbb222', 'ccc333']})
+    assert r.status_code == 200
+    rv = r.json()
+    assert [a for a in rv['audit'] if a['field'] == 'user_rank'] == []
+    # the ordering itself is still recorded on every row
+    assert rv['rows']['ccc333']['user_rank'] == 3
+
+    r = client.post('/api/selection/consumer/review/order',
+                    params={'config': board},
+                    json={'reviewer': 'ben',
+                          'order': ['bbb222', 'aaa111', 'ccc333'],
+                          'justifications': {'bbb222': 'j', 'aaa111': 'j'}})
+    ranks = [a for a in r.json()['audit'] if a['field'] == 'user_rank']
+    assert {a['model_hash'] for a in ranks} == {'aaa111', 'bbb222'}

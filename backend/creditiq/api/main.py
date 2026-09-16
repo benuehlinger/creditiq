@@ -1747,6 +1747,297 @@ def import_version(payload: dict):
     })
 
 
+# ── automated selection ──────────────────────────────────────────────────────
+from fastapi.responses import PlainTextResponse                         # noqa: E402
+
+from ..models import selection as sel                                   # noqa: E402
+from ..models import selection_store as selstore                        # noqa: E402
+
+# One search at a time per portfolio, tracked the same way data generation is:
+# a module dict under a lock, mutated by a daemon thread, read by a polled
+# status endpoint. The progress labels are the product here — a run is minutes
+# long, and the person waiting is owed the step, the count and what exactly is
+# being fitted, not a spinner.
+_SEL: dict[str, dict] = {}
+_SEL_LOCK = _threading.Lock()
+_SEL_CANCEL: dict[str, _threading.Event] = {}
+
+# In-memory memo of finished payloads, cleared with every other derived cache.
+_SEL_RESULTS: dict[tuple[str, str], dict] = {}
+store.register_dependent_cache(_SEL_RESULTS.clear)
+
+
+class SelectionRunRequest(BaseModel):
+    config: dict | None = None
+    config_id: str | None = None
+    save_as: str | None = None      # also store the config for reuse
+
+
+def _selection_config(key: str, body: SelectionRunRequest) -> sel.SelectionConfig:
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+    raw = body.config
+    if body.config_id and raw is None:
+        rec = selstore.load_config(key, body.config_id)
+        if rec is None:
+            raise HTTPException(404, f"no saved configuration {body.config_id!r} "
+                                     f"on the {key} book")
+        raw = rec["config"]
+    if raw is None:
+        raise HTTPException(400, "a configuration is required: pass config or "
+                                 "config_id")
+    try:
+        cfg = sel.SelectionConfig.from_dict({**raw, "portfolio": key})
+    except (TypeError, ValueError) as e:
+        raise HTTPException(400, f"{type(e).__name__}: {e}")
+    _reject_unknown_columns(key, [c.column for c in cfg.candidates],
+                            "candidate variables")
+    _reject_unknown_columns(key, cfg.expert_core or [], "expert core variables")
+    if not any(c.role == "candidate" for c in cfg.candidates):
+        raise HTTPException(400, "no candidate variables: mark at least one "
+                                 "column as a candidate")
+    return cfg
+
+
+@app.get("/api/selection/{key}/defaults")
+def selection_defaults(key: str):
+    """Everything the setup screen needs prefilled: the screened candidate
+    list with its warnings, the macro families a scenario can carry, and the
+    default rules."""
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+    from ..models.scenario_service import PROJECTION_MEVS
+    screen_rows = _screen_all(key)["rows"]
+    mev_panel_cols = set(mevpanel.monthly_panel().columns)
+    bases = [k for k in PROJECTION_MEVS
+             if not k.endswith("_yoy") and k in mev_panel_cols]
+    meta = by_key(bases)
+    spec = PORTFOLIOS[key]
+    candidates = []
+    for r in screen_rows:
+        col = r.get("column")
+        if not col or r.get("error"):
+            continue
+        candidates.append({
+            "column": col, "kind": r.get("kind"),
+            "iv": r.get("iv"), "iv_band": r.get("iv_band"),
+            "leakage_risk": r.get("leakage_risk"),
+            "missing_pct": r.get("missing_pct"),
+            "expected_sign": spec.expected_signs.get(col),
+            "cyclical": any(m in col.lower() for m in sel.CYCLICAL_MARKERS),
+        })
+    return _jsonable({
+        "portfolio": key,
+        "candidates": candidates,
+        "mev_families": [{"key": k,
+                          "label": meta[k].label if k in meta else k}
+                         for k in bases],
+        "scenarios": sel.available_scenarios(),
+        "rules": {f: getattr(sel.SelectionRules(), f)
+                  for f in sel.SelectionRules.__dataclass_fields__},
+        "reason_codes": selstore.REASON_CODES,
+    })
+
+
+@app.post("/api/selection/{key}/preview")
+def selection_preview(key: str, body: SelectionRunRequest):
+    cfg = _selection_config(key, body)
+    return _jsonable(sel.preview(cfg))
+
+
+@app.post("/api/selection/{key}/run")
+def selection_run(key: str, body: SelectionRunRequest):
+    cfg = _selection_config(key, body)
+    with _SEL_LOCK:
+        state = _SEL.get(key, {})
+        if state.get("state") == "running":
+            return {"state": "running", "config_hash": state.get("config_hash")}
+        cancel = _threading.Event()
+        _SEL_CANCEL[key] = cancel
+        _SEL[key] = {"state": "running", "config_hash": cfg.hash(),
+                     "stage_no": 1, "n_stages": sel.N_STAGES,
+                     "step": 0, "total": 0, "label": "Starting",
+                     "n_combos": None, "started_at": _time.time(), "error": ""}
+    if body.save_as:
+        selstore.save_config(cfg, name=body.save_as)
+
+    def progress(stage_no: int, n_stages: int, step: int, total: int,
+                 label: str) -> None:
+        with _SEL_LOCK:
+            _SEL[key].update(stage_no=stage_no, n_stages=n_stages,
+                             step=step, total=total, label=label)
+
+    def checkpoint(payload: dict) -> None:
+        runcache.save(key, "selection", cfg.hash(), payload)
+
+    def run() -> None:
+        try:
+            payload = sel.run_search(cfg, progress=progress, cancel=cancel,
+                                     checkpoint=checkpoint)
+            runcache.save(key, "selection", cfg.hash(), payload)
+            _SEL_RESULTS[(key, cfg.hash())] = payload
+            with _SEL_LOCK:
+                _SEL[key].update(state="done", label="Done",
+                                 n_combos=payload["n_combos"])
+        except sel.Cancelled:
+            with _SEL_LOCK:
+                _SEL[key].update(state="cancelled", label="Cancelled")
+        except Exception as e:                                          # noqa: BLE001
+            with _SEL_LOCK:
+                _SEL[key].update(state="error", error=f"{type(e).__name__}: {e}")
+
+    _threading.Thread(target=run, daemon=True).start()
+    return {"state": "running", "config_hash": cfg.hash()}
+
+
+@app.get("/api/selection/{key}/status")
+def selection_status(key: str):
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+    with _SEL_LOCK:
+        s = dict(_SEL.get(key) or {"state": "idle"})
+    if s.get("state") == "running":
+        s["elapsed_s"] = round(_time.time() - s.pop("started_at", _time.time()), 1)
+    else:
+        s.pop("started_at", None)
+    return _jsonable(s)
+
+
+@app.post("/api/selection/{key}/cancel")
+def selection_cancel(key: str):
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+    ev = _SEL_CANCEL.get(key)
+    if ev is not None:
+        ev.set()
+    return {"state": "cancelling"}
+
+
+def _selection_results(key: str, config_hash: str) -> dict:
+    memo = _SEL_RESULTS.get((key, config_hash))
+    if memo is not None:
+        return memo
+    payload = runcache.load(key, "selection", config_hash)
+    if payload is None:
+        raise HTTPException(
+            404, "no completed search for this configuration on the current "
+                 "data. Run the search.")
+    _SEL_RESULTS[(key, config_hash)] = payload
+    return payload
+
+
+@app.get("/api/selection/{key}/results")
+def selection_results(key: str, config: str = Query(...)):
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+    payload = _selection_results(key, config)
+    from ..models.versions import data_fingerprint
+    return _jsonable({
+        **payload,
+        "current": payload.get("data_fingerprint") == data_fingerprint(key),
+    })
+
+
+# ── selection configurations ─────────────────────────────────────────────────
+@app.get("/api/selection/{key}/configs")
+def selection_configs(key: str):
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+    return _jsonable({"configs": selstore.list_configs(key)})
+
+
+@app.get("/api/selection/{key}/configs/{config_id}")
+def selection_config_get(key: str, config_id: str):
+    rec = selstore.load_config(key, config_id)
+    if rec is None:
+        raise HTTPException(404, f"no saved configuration {config_id!r} on "
+                                 f"the {key} book")
+    return _jsonable(rec)
+
+
+@app.delete("/api/selection/{key}/configs/{config_id}")
+def selection_config_delete(key: str, config_id: str):
+    if not selstore.delete_config(key, config_id):
+        raise HTTPException(404, f"no saved configuration {config_id!r} on "
+                                 f"the {key} book")
+    return {"deleted": config_id}
+
+
+# ── selection review ─────────────────────────────────────────────────────────
+class ReviewRowRequest(BaseModel):
+    reviewer: str
+    status: str | None = None
+    reason_code: str | None = None
+    justification: str | None = None
+    user_rank: int | None = None
+
+
+class ReviewOrderRequest(BaseModel):
+    reviewer: str
+    order: list[str]
+    justifications: dict[str, str] = {}
+
+
+def _auto_ranks(key: str, config_hash: str) -> dict[str, int | None]:
+    payload = _selection_results(key, config_hash)
+    return {r["hash"]: r.get("auto_rank") for r in payload["rows"]}
+
+
+@app.get("/api/selection/{key}/review")
+def selection_review(key: str, config: str = Query(...)):
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+    return _jsonable(selstore.load_review(key, config))
+
+
+# Declared before the {model_hash} route: FastAPI matches in order, and a
+# model hash named "order" does not exist (hashes are hex).
+@app.post("/api/selection/{key}/review/order")
+def selection_review_order(key: str, body: ReviewOrderRequest,
+                           config: str = Query(...)):
+    auto = _auto_ranks(key, config)
+    unknown = [h for h in body.order if h not in auto]
+    if unknown:
+        raise HTTPException(404, "not on this leaderboard: "
+                            + ", ".join(unknown))
+    try:
+        review = selstore.reorder(key, config, body.order,
+                                  reviewer=body.reviewer, auto_ranks=auto,
+                                  justifications=body.justifications)
+    except selstore.ReviewError as e:
+        raise HTTPException(400, str(e))
+    return _jsonable(review)
+
+
+@app.post("/api/selection/{key}/review/{model_hash}")
+def selection_review_row(key: str, model_hash: str, body: ReviewRowRequest,
+                         config: str = Query(...)):
+    auto = _auto_ranks(key, config)
+    if model_hash not in auto:
+        raise HTTPException(404, f"model {model_hash!r} is not on this "
+                                 f"leaderboard")
+    try:
+        review = selstore.update_row(
+            key, config, model_hash,
+            # only the fields the client actually sent — a partial update must
+            # not blank the ones it left out
+            body.model_dump(exclude={"reviewer"}, exclude_unset=True),
+            reviewer=body.reviewer, auto_rank=auto[model_hash])
+    except selstore.ReviewError as e:
+        raise HTTPException(400, str(e))
+    return _jsonable(review)
+
+
+@app.get("/api/selection/{key}/review/export")
+def selection_review_export(key: str, config: str = Query(...)):
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+    csv_text = selstore.export_csv(key, config)
+    return PlainTextResponse(csv_text, media_type="text/csv", headers={
+        "Content-Disposition":
+            f"attachment; filename=selection-review-{key}-{config}.csv"})
+
+
 # ── roll-up ──────────────────────────────────────────────────────────────────
 
 

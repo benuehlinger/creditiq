@@ -5,6 +5,7 @@ import DataSurface from './surfaces/DataSurface'
 import PdWorkbench from './surfaces/PdWorkbench'
 import LgdWorkbench from './surfaces/LgdWorkbench'
 import MacroSurface from './surfaces/MacroSurface'
+import SelectionSurface from './surfaces/SelectionSurface'
 import ScenarioSurface from './surfaces/ScenarioSurface'
 import VersionsSurface from './surfaces/VersionsSurface'
 import RollUpSurface from './surfaces/RollUpSurface'
@@ -32,6 +33,7 @@ export default function App() {
         <Route path="/:portfolio" element={<KnownPortfolio />}>
           <Route path="data" element={<DataSurface />} />
           <Route path="macro" element={<MacroSurface />} />
+          <Route path="select" element={<SelectionSurface />} />
           {/* One workbench per model. The old Explore and Fit stages are kept
               as redirects so a saved link still lands somewhere. */}
           <Route path="pd" element={<PdWorkbench />} />

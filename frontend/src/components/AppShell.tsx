@@ -13,7 +13,7 @@ import ModelBar from './ModelBar'
 import InitSurface from '../surfaces/InitSurface'
 import ErrorBoundary from './ErrorBoundary'
 
-/** Five destinations. Two of them have stages, which appear in the row below
+/** Seven destinations. Two of them have stages, which appear in the row below
  *  rather than inline here — nesting them in one row put seven links, two group
  *  labels, three portfolio pills and two status chips in a single 44px strip. */
 interface Surface { to: string; label: string; key: string; stages?: { to: string; label: string }[] }
@@ -21,10 +21,11 @@ interface Surface { to: string; label: string; key: string; stages?: { to: strin
 const SURFACES: Surface[] = [
   { to: 'data', label: 'Data', key: '1' },
   { to: 'macro', label: 'Macro', key: '2' },
-  { to: 'pd', label: 'PD model', key: '3' },
-  { to: 'lgd', label: 'LGD model', key: '4' },
-  { to: 'scenarios', label: 'Scenarios', key: '5' },
-  { to: 'versions', label: 'Versions', key: '6' },
+  { to: 'select', label: 'Selection', key: '3' },
+  { to: 'pd', label: 'PD model', key: '4' },
+  { to: 'lgd', label: 'LGD model', key: '5' },
+  { to: 'scenarios', label: 'Scenarios', key: '6' },
+  { to: 'versions', label: 'Versions', key: '7' },
 ]
 
 export default function AppShell() {

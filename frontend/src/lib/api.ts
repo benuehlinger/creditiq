@@ -1015,4 +1015,207 @@ export const api = {
       residual_absolute: number | null; residual_relative: number | null
       identity_holds: boolean | null
     }>(`/mev/reconciliation/${key}`),
+
+  // ── automated selection ────────────────────────────────────────────────
+  selectionDefaults: (k: string) => get<SelectionDefaults>(`/selection/${k}/defaults`),
+  selectionPreview: (k: string, config: SelectionConfigPayload) =>
+    post<SelectionPreview>(`/selection/${k}/preview`, { config }),
+  selectionRun: (k: string, config: SelectionConfigPayload, saveAs?: string) =>
+    post<{ state: string; config_hash: string }>(
+      `/selection/${k}/run`, { config, save_as: saveAs ?? null }),
+  selectionStatus: (k: string) => get<SelectionStatus>(`/selection/${k}/status`),
+  selectionCancel: (k: string) => post<{ state: string }>(`/selection/${k}/cancel`, {}),
+  selectionResults: (k: string, config: string) =>
+    get<SelectionResults>(`/selection/${k}/results`, { config }),
+  selectionConfigs: (k: string) =>
+    get<{ configs: SelectionConfigListing[] }>(`/selection/${k}/configs`),
+  selectionConfig: (k: string, id: string) =>
+    get<{ id: string; name: string; saved_at: string
+          config: SelectionConfigPayload }>(`/selection/${k}/configs/${id}`),
+  selectionConfigDelete: (k: string, id: string) =>
+    fetch(`/api/selection/${k}/configs/${id}`, { method: 'DELETE' })
+      .then((r) => r.json()),
+  selectionReview: (k: string, config: string) =>
+    get<SelectionReview>(`/selection/${k}/review`, { config }),
+  selectionReviewRow: (k: string, config: string, modelHash: string,
+                       body: { reviewer: string; status?: string | null
+                               reason_code?: string | null
+                               justification?: string | null }) =>
+    post<SelectionReview>(
+      `/selection/${k}/review/${modelHash}?config=${encodeURIComponent(config)}`, body),
+  selectionReviewOrder: (k: string, config: string,
+                         body: { reviewer: string; order: string[]
+                                 justifications?: Record<string, string> }) =>
+    post<SelectionReview>(
+      `/selection/${k}/review/order?config=${encodeURIComponent(config)}`, body),
+  selectionReviewExportUrl: (k: string, config: string) =>
+    `/api/selection/${k}/review/export?config=${encodeURIComponent(config)}`,
+}
+
+// ── automated selection types ──────────────────────────────────────────────
+export interface SelectionCandidatePayload {
+  column: string
+  role?: 'candidate' | 'excluded'
+  treatment?: string
+  knots?: number[] | null
+  n_knots?: number
+  max_bins?: number
+}
+
+export interface SelectionRulesPayload {
+  entry_metric?: string
+  entry_threshold?: number
+  exit_threshold?: number
+  mev_screen_p?: number
+  mev_top_per_family?: number
+  min_mevs?: number
+  max_mevs?: number
+  max_predictors?: number | null
+  max_vif?: number | null
+  vif_rule?: 'filter' | 'flag'
+  p_rule?: 'filter' | 'flag'
+  p_cutoff?: number
+  mev_corr_cap?: number
+  core_shift_pct?: number
+  strong_core_size?: number
+  top_n_full?: number
+}
+
+export interface SelectionConfigPayload {
+  candidates: SelectionCandidatePayload[]
+  cores?: string[]
+  expert_core?: string[] | null
+  mev_families?: string[] | null
+  rules?: SelectionRulesPayload
+  oot_from?: string
+  test_fraction?: number
+  label?: string | null
+}
+
+export interface SelectionDefaults {
+  portfolio: string
+  candidates: {
+    column: string; kind: string; iv: number | null; iv_band: string | null
+    above_null: boolean | null
+    leakage_risk: string | null; missing_pct: number | null
+    expected_sign: number | null; cyclical: boolean
+  }[]
+  mev_families: { key: string; label: string; default_on: boolean }[]
+  scenarios: string[]
+  rules: Required<SelectionRulesPayload>
+  reason_codes: string[]
+}
+
+export interface SelectionPreview {
+  n_candidates: number
+  n_mev_variants: number
+  n_cores: number
+  stage1_fit_bound: number
+  screen_fits: number
+  combos_note: string
+  warning: string | null
+}
+
+export interface SelectionStatus {
+  state: 'idle' | 'running' | 'done' | 'error' | 'cancelled'
+  config_hash?: string
+  stage_no?: number
+  n_stages?: number
+  step?: number
+  total?: number
+  label?: string
+  n_combos?: number | null
+  elapsed_s?: number
+  error?: string
+}
+
+export interface LeaderboardMev {
+  key: string; transform: string; lag_months: number; label: string
+}
+
+export interface LeaderboardRow {
+  hash: string
+  name: string
+  spec: Record<string, unknown>
+  lineage: { core: string; method: string }[]
+  n_predictors: number
+  n_core: number
+  core_columns: string[]
+  core_warnings: string[]
+  mevs: LeaderboardMev[]
+  n_mevs: number
+  sign_checks: { mev: string; term: string; transform: string; lag_months: number
+                 expected_sign: number | null; observed_sign: number | null
+                 ok: boolean | null }[]
+  signs_ok: boolean
+  max_p: number | null
+  all_significant: boolean
+  max_vif: number | null
+  core_shifts: { column: string; before: number; after: number
+                 flipped: boolean; shift_pct: number }[]
+  core_shifted: boolean
+  auc_in: number
+  ks_in: number
+  auc_oot: number | null
+  ks_oot: number | null
+  converged: boolean
+  separation_warning: string | null
+  coefficients: { name: string; estimate: number; std_error: number
+                  p_value: number; term: string | null
+                  term_vif: number | null }[]
+  stress?: {
+    usable: boolean; monotone: boolean | null
+    peak_pd?: Record<string, number> | null
+    peak_stressed_pd?: number; anchor_pd?: number
+    smoothness?: number | null; scenarios: string[]
+  }
+  score: number | null
+  auto_rank: number | null
+  filtered: boolean
+  filter_reason: string | null
+  finalist: boolean
+  full?: {
+    auc_test: number | null; auc_oot: number | null
+    errors_in_time: BacktestErrors | null
+    errors_oot: BacktestErrors | null
+    top_decile_capture_pct: number | null
+    top_decile_lift: number | null
+  }
+}
+
+export interface SelectionResults {
+  config: Record<string, unknown>
+  config_hash: string
+  portfolio: string
+  data_fingerprint: string
+  generated_at: string
+  scenarios: string[]
+  cores: { name: string; columns: string[]; warnings: string[]
+           steps: Record<string, unknown>[] }[]
+  survivors: Record<string, string[]>
+  n_combos: number
+  n_rows: number
+  n_filtered: number
+  rows: LeaderboardRow[]
+  /** Whether these results describe the panel currently on the machine. */
+  current: boolean
+}
+
+export interface SelectionConfigListing {
+  id: string; portfolio: string; name: string; saved_at: string
+}
+
+export interface SelectionReviewRow {
+  status?: 'champion' | 'challenger' | 'rejected' | null
+  reason_code?: string | null
+  justification?: string | null
+  user_rank?: number | null
+}
+
+export interface SelectionReview {
+  portfolio: string
+  config_hash: string
+  rows: Record<string, SelectionReviewRow>
+  audit: { reviewer: string; at: string; model_hash: string; field: string
+           before: unknown; after: unknown }[]
 }

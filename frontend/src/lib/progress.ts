@@ -86,13 +86,15 @@ export interface ProgressInput {
   projected?: string | null
   loaded: { hash: string; name: string } | null
   shortlisted: number
+  /** The last completed automated variable search on this book, if any. */
+  selection?: { nModels: number } | null
   originVars: string[] | null
   originLgd: string[] | null
 }
 
 const EMPTY_INPUT: ProgressInput = {
   picked: [], fitted: null, lgd: null, loaded: null,
-  shortlisted: 0, originVars: null, originLgd: null,
+  shortlisted: 0, selection: null, originVars: null, originLgd: null,
 }
 
 /** One shared empty array for every "no variables" answer.
@@ -110,6 +112,7 @@ export function useProgress(portfolio: string | undefined) {
   const lgd = useUi((s) => (pk ? s.fittedLgd[pk] : null))
   const loaded = useUi((s) => (pk ? s.loaded[pk] : null))
   const shortlist = useUi((s) => (pk ? s.macroShortlist[pk] : null))
+  const selectionRun = useUi((s) => (pk ? s.selectionRun[pk] : null))
   // One specification object, so "what is selected" and "what would be fitted"
   // can no longer disagree — they are the same thing read two ways.
   const pdSpec = useUi((s) => (pk ? s.pdSpec[pk] : undefined))
@@ -138,6 +141,7 @@ export function useProgress(portfolio: string | undefined) {
     projected,
     loaded: loaded ? { hash: loaded.hash, name: loaded.name } : null,
     shortlisted: (shortlist?.pd.length ?? 0) + (shortlist?.lgd.length ?? 0),
+    selection: selectionRun ? { nModels: selectionRun.nModels } : null,
     originVars: spec ? (spec.variables ?? []).map((v: any) => v.column) : null,
     originLgd: spec ? [...(spec.lgd?.drivers ?? []),
                        ...(spec.lgd?.categoricals ?? [])] : null,
@@ -145,8 +149,8 @@ export function useProgress(portfolio: string | undefined) {
 }
 
 export function computeProgress(inp: ProgressInput) {
-  const { picked, fitted, lgd, loaded, shortlisted, originVars, originLgd,
-          specNow, projected } = inp
+  const { picked, fitted, lgd, loaded, shortlisted, selection, originVars,
+          originLgd, specNow, projected } = inp
   const currentLgd = lgd ? [...lgd.spec.drivers, ...lgd.spec.categoricals] : []
 
   // A fit is a RESULT, and the tray is the draft specification. Once they
@@ -208,6 +212,15 @@ export function computeProgress(inp: ProgressInput) {
       state: shortlisted > 0 ? 'done' : 'todo',
       note: shortlisted > 0 ? `${shortlisted} terms shortlisted`
                             : 'optional, none shortlisted',
+    },
+    {
+      // Optional: the automated search proposes candidates, it is not a gate.
+      // A book built entirely by hand skips it without looking unfinished.
+      to: 'select', label: 'Selection', parent: 'select', optional: true,
+      state: (selection?.nModels ?? 0) > 0 ? 'done' : 'todo',
+      note: (selection?.nModels ?? 0) > 0
+        ? `${selection!.nModels} models on the leaderboard`
+        : 'optional, no search run',
     },
     {
       to: 'pd', id: 'pd/explore', label: 'PD variables', parent: 'pd',

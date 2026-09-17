@@ -2870,3 +2870,104 @@ unemployment and unemployment YoY, or hpi and hpi_yoy, can never enter
 one model together. Candidate variables default to CONTINUOUS
 (categoricals to WoE) per the user's direction. The per-family variant
 trim died with the sweep; a hand-picked list is never trimmed.
+
+## Every half names itself; a pair is two names collated (2026-09-16)
+
+Naming used to have four sources: the leaderboard named a row from its
+PD-only pair hash, the fit named a run from its full pair hash, the
+identity endpoint minted a third name for PD+LGD together and refused
+to name a half-built model, and the LGD surface named severity models
+from the LgdSpec hash. Following one model from the search into the
+workbench crossed three of them: the row opened as a draft, lost its
+leaderboard name, and greeted the analyst as "Unnamed".
+
+USER-DIRECTED: a saved model is a PAIRING of one PD and one LGD model.
+Each half is named from its own hash (`spec.pd_hash()`,
+`spec.lgd.hash()`); the pair is displayed as the two names collated
+("amber-heron-12 · quiet-anchor-03") and never mints a third name — a
+third name breaks the thread from search to workbench to version list
+and would require a lookup to answer "where did this come from". The
+identity endpoint now names whichever half exists and says which half
+is missing; the earlier refusal-to-name-a-half rule is withdrawn. The
+band falls back to the draft's search origin name before ever saying
+"Unnamed". `versions.save` defaults the stored name to the collation;
+an explicit label still wins, and existing versions keep their names.
+
+Also part of this decision: LGD has no automated search yet. The
+selection surface is PD-only; when LGD selection lands it reuses the
+same leaderboard components with severity metrics (out-of-time MAE as
+the headline; MAPE rejected — it explodes on near-zero actuals).
+
+## "Start from scratch" clears the server too (2026-09-17)
+
+The reset cleared localStorage only, and its own confirmation said so:
+"Saved versions on the server are kept." That was the wrong default for
+what this action is FOR. A reset workspace still opened on the roll-up
+showing a promoted champion and a stressed loss figure from the previous
+session, because the champion was a file on disk. The artifact the reset
+exists to remove was exactly the artifact it could not touch.
+
+`POST /api/workspace/reset` now runs first, and the browser is cleared
+afterwards whether or not it succeeds — a server that cannot be reached
+must not leave the local drafts behind as well.
+
+It ARCHIVES rather than deletes: versions, selection reviews and saved
+selection configurations move into `versions/archive-<timestamp>/`.
+`list_all` globs the top level only, so the archive is invisible to the
+app while every file stays on disk. A demo reset must never be the thing
+that loses real work, and the directory already carried an archive folder
+from an earlier manual cleanup, so the shape was established. Nothing is
+written when there is nothing to move, so resetting twice does not litter
+the directory with empty folders.
+
+The generated panels are deliberately NOT touched: they are expensive to
+rebuild, they are not user work, and every cache over them is already
+keyed by the data fingerprint. `make reset` remains the way to rebuild
+the data itself.
+
+## The fork rationale is structured, and the lineage draws edges (2026-09-17)
+
+Two problems, one cause. The lineage panel laid versions out by GENERATION
+DEPTH in columns and drew no edges at all, so with two roots and one fork
+there was no way to tell which root the fork came from — the single
+question the panel exists to answer. And the rationale captured at the
+fork gate was flattened into a prose `notes` string at save time, so
+nothing could read it back.
+
+The rationale is now STRUCTURED on the version: `fork` carries
+reason_code, justification, change, from_hash, from_name, from_kind and
+the timestamp, written when the departure happened. `origin` carries the
+search row a specification entered the workspace as — name, hash, rank,
+config hash — so a root is explained rather than bare. `lineage()` puts
+the reason ON the edge, which is what lets the graph answer "why did this
+branch happen" without a second request.
+
+`LineageCanvas` replaces the columns: a packed tree (generation on x,
+subtrees packed on y, parents centred on their children), real bezier
+edges labelled with what changed, pan by dragging, zoom on the wheel or
+the buttons, and a fit-to-view that runs on load and whenever the graph
+changes shape so the common case needs no interaction. Selecting a node
+or an edge opens the story beside the graph: where it came from, what
+changed, the reason code, the justification in the analyst's own words.
+Versions saved before the gate existed say so rather than showing an
+empty panel.
+
+## A freshly saved model kept its "saved" marker (2026-09-17)
+
+Saving a model set the loaded marker and invalidated the version list in
+the same moment. React Query serves STALE data while it refetches, so the
+shell's stale-marker guard — which drops the marker when the book's
+version list does not contain it — ran against a list fetched BEFORE the
+save, did not find the model just saved, and cleared the marker.
+
+The workspace then believed it was on a plain draft, so the next edit
+sailed past the fork gate with nothing to fork from: no dialog, no
+rationale, no parent recorded. It bit hardest on a model built from
+scratch, where the cached list predates the new version in every case,
+and not at all when a saved model was OPENED, because then the list
+already contained it. That asymmetry is what made it look intermittent.
+
+The guard now requires proof: it skips while a fetch is in flight, and
+ignores any list whose `dataUpdatedAt` precedes the marker's `loadedAt`.
+Only a list fetched after the marker appeared can show that the version
+is genuinely gone.

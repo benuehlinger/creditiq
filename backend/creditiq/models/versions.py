@@ -74,6 +74,17 @@ class Version:
     tags: list[str] = field(default_factory=list)
     notes: str = ""
     parent_hash: str | None = None
+    # WHY this version departs from its parent, captured at the fork gate when
+    # the edit was made rather than reconstructed at save time. Keys:
+    # reason_code, justification, change, from_hash, from_name, from_kind
+    # ("version" | "selection"), at, reviewer. Empty for a version that was
+    # not forked from anything.
+    fork: dict = field(default_factory=dict)
+    # Where the specification entered the workspace when it came off a search
+    # leaderboard rather than being built by hand. Keys: name, hash, rank,
+    # config_hash. This is what lets the graph say "started from rank 3 of the
+    # 16 Sep search" instead of showing an unexplained root.
+    origin: dict = field(default_factory=dict)
     # Set when this version replaced an earlier one in place. The earlier file is
     # removed, so this records what it superseded.
     replaced_hash: str | None = None
@@ -98,7 +109,8 @@ def _path(hash_: str) -> Path:
 def save(spec: ModelSpec, metrics: dict, ecl: dict | None = None,
          label: str | None = None, notes: str = "", tags: list[str] | None = None,
          parent_hash: str | None = None, author: str = "CreditIQ",
-         replaces: str | None = None) -> Version:
+         replaces: str | None = None, fork: dict | None = None,
+         origin: dict | None = None) -> Version:
     """Write a version.
 
     `replaces` supersedes an existing version. The hash is derived from the
@@ -113,8 +125,13 @@ def save(spec: ModelSpec, metrics: dict, ecl: dict | None = None,
     h = spec.hash()
     existing = load(h)
     inherit = existing or prior
+    # The default name is the two halves collated — never a third name minted
+    # for the pair, which would break the thread from the search's name for
+    # the PD half and the LGD surface's name for the severity half.
+    collated = (f"{friendly_name(spec.pd_hash())} · {friendly_name(spec.lgd.hash())}"
+                if spec.lgd is not None else friendly_name(spec.pd_hash()))
     v = Version(
-        hash=h, name=label or (existing.name if existing else friendly_name(h)),
+        hash=h, name=label or (existing.name if existing else collated),
         portfolio=spec.portfolio,
         created_at=existing.created_at if existing
         else pd.Timestamp.utcnow().isoformat(timespec="seconds"),
@@ -125,6 +142,10 @@ def save(spec: ModelSpec, metrics: dict, ecl: dict | None = None,
         notes=notes or (inherit.notes if inherit else ""),
         parent_hash=parent_hash or (existing.parent_hash if existing
                                     else prior.parent_hash if prior else None),
+        fork=fork or (existing.fork if existing else
+                      prior.fork if prior else {}),
+        origin=origin or (existing.origin if existing else
+                          prior.origin if prior else {}),
         replaced_hash=(prior.hash if prior and prior.hash != h else None),
         author=author, data_fingerprint=data_fingerprint(spec.portfolio),
     )
@@ -272,7 +293,54 @@ def lineage(portfolio: str) -> dict:
         "nodes": [{"hash": v.hash, "name": v.name, "status": v.status,
                    "created_at": v.created_at, "starred": v.starred,
                    "auc": v.metrics.get("auc_test"),
+                   "ecl": v.ecl.get("ecl_severely_adverse"),
+                   "notes": v.notes,
+                   "fork": v.fork, "origin": v.origin,
                    "n_variables": len(v.spec.get("variables", []))} for v in vs],
-        "edges": [{"from": v.parent_hash, "to": v.hash}
+        # An edge carries the REASON, so the graph can answer "why did this
+        # branch happen" without a second lookup.
+        "edges": [{"from": v.parent_hash, "to": v.hash,
+                   "reason_code": v.fork.get("reason_code"),
+                   "justification": v.fork.get("justification"),
+                   "change": v.fork.get("change")}
                   for v in vs if v.parent_hash and v.parent_hash in known],
     }
+
+
+def archive_all() -> dict:
+    """Move every saved version and all selection review state out of the way.
+
+    "Start from scratch" used to clear the BROWSER only, which left the
+    server's saved versions in place: the roll-up still opened on a promoted
+    champion and a loss figure from the previous session, which is precisely
+    the artifact a reset is supposed to remove.
+
+    Archiving rather than deleting, because a demo reset must never be the
+    thing that loses real work. `list_all` globs the top level only, so a
+    timestamped subdirectory is invisible to the app while the files remain
+    on disk — the same shape as the archive folder already sitting here.
+    """
+    stamp = pd.Timestamp.utcnow().strftime("%Y-%m-%dT%H-%M-%S")
+    dest = VERSIONS_DIR / f"archive-{stamp}"
+    moved = {"versions": 0, "selection_reviews": 0, "selection_configs": 0}
+    if not VERSIONS_DIR.exists():
+        return {**moved, "archive": None}
+
+    for p in sorted(VERSIONS_DIR.glob("*.json")):
+        dest.mkdir(parents=True, exist_ok=True)
+        p.replace(dest / p.name)
+        moved["versions"] += 1
+
+    sel = VERSIONS_DIR / "selection"
+    for sub, key in (("reviews", "selection_reviews"),
+                     ("configs", "selection_configs")):
+        src = sel / sub
+        if not src.is_dir():
+            continue
+        for p in sorted(src.glob("*.json")):
+            out = dest / "selection" / sub
+            out.mkdir(parents=True, exist_ok=True)
+            p.replace(out / p.name)
+            moved[key] += 1
+
+    return {**moved, "archive": str(dest.name) if any(moved.values()) else None}

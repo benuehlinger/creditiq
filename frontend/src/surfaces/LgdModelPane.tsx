@@ -65,6 +65,9 @@ export default function LgdModelPane({ portfolio, spec, onOpenVariable }: {
     staleTime: Infinity,
     gcTime: 30 * 60_000,
     retry: 1,
+    // No flicker on a model switch: the previous severity fit stays on
+    // screen while the next loads, and .swap-live carries the change.
+    placeholderData: (prev) => prev,
   })
   // The store's metrics ALWAYS follow the fit on screen. The old guard only
   // refreshed when rmse was missing, so metrics recorded against a previous
@@ -165,6 +168,7 @@ export default function LgdModelPane({ portfolio, spec, onOpenVariable }: {
     queryKey: ['lgdsens', portfolio, res?.hash],
     queryFn: () => api.lgdSensitivity(portfolio, spec),
     enabled: !!res && res.macro_drivers.length > 0,
+    placeholderData: (prev) => prev,
   })
 
   const [tab, setTab] = useState<'spec' | 'diagnostics' | 'backtest'>('spec')
@@ -177,11 +181,16 @@ export default function LgdModelPane({ portfolio, spec, onOpenVariable }: {
     queryKey: ['lgdbacktest', portfolio, res?.hash, ootFrom, btFreq],
     queryFn: () => api.lgdBacktest(portfolio, spec, ootFrom, btFreq),
     enabled: !!res && tab === 'backtest',
+    placeholderData: (prev) => prev,
   })
 
   const nSelected = spec.drivers.length + spec.categoricals.length
   const hasMacro = useMemo(
-    () => spec.drivers.some((d) => cand.data?.numeric.find((c) => c.column === d)?.macro),
+    // A driver named `key@transform@lag` is a shortlisted macro term — the
+    // "@" is the app-wide marker — and the candidates endpoint does not list
+    // those, so the name is checked before the lookup.
+    () => spec.drivers.some((d) => d.includes('@')
+      || cand.data?.numeric.find((c) => c.column === d)?.macro),
     [spec.drivers, cand.data])
 
   if (cand.isLoading || !cand.data) return <Skeleton className="h-[560px]" />
@@ -283,6 +292,9 @@ export default function LgdModelPane({ portfolio, spec, onOpenVariable }: {
               { key: 'backtest', label: 'Backtesting' },
             ]} />
 
+            {/* Keyed on the fit hash: one .swap-live breath per model switch,
+                over content the queries never blank. */}
+            <div key={res.hash} className="swap-live space-y-3">
             {tab === 'spec' && (
               <>
                 <Coefficients rows={res.coefficients} spec={spec}
@@ -297,6 +309,7 @@ export default function LgdModelPane({ portfolio, spec, onOpenVariable }: {
                         ootFrom={ootFrom} onOot={setOotFrom}
                         freq={btFreq} onFreq={setBtFreq} />
             )}
+            </div>
           </div>
         )}
     </div>

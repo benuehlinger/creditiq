@@ -924,16 +924,16 @@ def name_for(hash_: str):
 
 @app.post("/api/model/identity")
 def model_identity(req: FitRequest):
-    """The Model ID for a PD specification AND an LGD specification together.
+    """The identity of a PD specification AND an LGD specification together.
 
-    A Model is both halves. An ECL number is PD x LGD x EAD, so a name that
-    covers only the hazard model refers to half of what produced the figure —
-    two "models" with the same name could carry severity specifications that
-    differ by twenty points of downturn LGD.
-
-    So this is deliberately NOT willing to name a half-built model. Until both
-    halves exist it returns the working hash and no name, and the UI says which
-    half is missing rather than offering a name it would have to revoke.
+    A Model is both halves: an ECL number is PD x LGD x EAD. But each half
+    carries its OWN name, derived from its own hash, and the pair is displayed
+    as the two names collated — never a third, freshly minted name. A third
+    name breaks the thread the analyst is following: the search names a PD
+    model on the leaderboard, and the workbench must still call it that, with
+    or without a severity model beside it. (This replaces the earlier rule of
+    refusing to name a half-built model; the half that exists is named, and
+    the UI says which half is missing.)
     """
     spec = req.to_spec()
     missing = []
@@ -941,10 +941,15 @@ def model_identity(req: FitRequest):
         missing.append("PD variables")
     if spec.lgd is None or not (spec.lgd.drivers or spec.lgd.categoricals):
         missing.append("LGD drivers")
-    h = spec.hash()
+    pd_name = friendly_name(spec.pd_hash()) if spec.variables else None
+    lgd_name = (friendly_name(spec.lgd.hash())
+                if spec.lgd is not None
+                and (spec.lgd.drivers or spec.lgd.categoricals) else None)
+    name = (f"{pd_name} · {lgd_name}" if pd_name and lgd_name
+            else pd_name or lgd_name)
     return {
-        "hash": h, "complete": not missing, "missing": missing,
-        "name": friendly_name(h) if not missing else None,
+        "hash": spec.hash(), "complete": not missing, "missing": missing,
+        "name": name, "pd_name": pd_name, "lgd_name": lgd_name,
         "pd_variables": [v.column for v in spec.variables],
         "lgd_drivers": list(spec.lgd.drivers) if spec.lgd else [],
         "lgd_categoricals": list(spec.lgd.categoricals) if spec.lgd else [],
@@ -1474,6 +1479,11 @@ class SaveVersionRequest(EclRequest):
     notes: str = ""
     tags: list[str] = []
     with_ecl: bool = False
+    # The rationale captured at the fork gate, and the search row this
+    # specification entered the workspace as. Both are recorded on the version
+    # so the lineage graph can explain every edge and every root.
+    fork: dict | None = None
+    origin: dict | None = None
     # Hash of a version this supersedes. The replaced version is removed and its
     # status, tags and starred flag transfer to this one.
     replaces: str | None = None
@@ -1627,7 +1637,7 @@ def save_version(req: SaveVersionRequest):
     v = vstore.save(spec, _metrics_for(run) | _lgd_metrics_for(spec), ecl_summary,
                     label=req.label,
                     notes=req.notes, tags=req.tags, parent_hash=req.parent_hash,
-                    replaces=req.replaces)
+                    replaces=req.replaces, fork=req.fork, origin=req.origin)
     return _jsonable(_version_payload(v))
 
 
@@ -1696,6 +1706,30 @@ def promote_version(hash_: str):
 def delete_version(hash_: str):
     rollupsvc.clear_cache()     # the roll-up's version picker is now stale
     return {"deleted": vstore.delete(hash_)}
+
+
+@app.post("/api/workspace/reset")
+def reset_workspace():
+    """Clear the server's share of "Start from scratch".
+
+    The browser reset only ever cleared localStorage, so saved versions, their
+    promoted champions and the selection review state survived it: the roll-up
+    reopened on a champion and a loss figure from the previous session. That is
+    exactly the artifact a reset exists to remove.
+
+    The generated panels are NOT touched. They are expensive to rebuild, they
+    are not user work, and every cache that depends on them is already keyed by
+    the data fingerprint. Versions are archived rather than deleted, so a demo
+    reset can never be the thing that loses real work.
+    """
+    moved = vstore.archive_all()
+    rollupsvc.clear_cache()
+    _SEL_RESULTS.clear()
+    _LSEL_RESULTS.clear()
+    with _SEL_LOCK:
+        _SEL.clear()
+        _LSEL.clear()
+    return moved
 
 
 @app.get("/api/versions/{hash_}/export")
@@ -2127,6 +2161,139 @@ def mev_reconciliation(key: str):
 
 
 # ── static frontend (container build only) ───────────────────────────────────
+# ── automated severity selection ─────────────────────────────────────────────
+# The LGD twin of the selection block above: same job shape (a module dict
+# under the same lock discipline, a daemon thread, a polled status endpoint
+# with verbose per-fit labels), same cache pattern (runcache kind
+# "lgd_selection" keyed by config hash), different model and yardstick.
+from ..models import lgd_selection as lgdsel                            # noqa: E402
+
+_LSEL: dict[str, dict] = {}
+_LSEL_CANCEL: dict[str, _threading.Event] = {}
+_LSEL_RESULTS: dict[tuple[str, str], dict] = {}
+store.register_dependent_cache(_LSEL_RESULTS.clear)
+
+
+def _lgd_selection_config(key: str, body: SelectionRunRequest) -> "lgdsel.LgdSelectionConfig":
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+    raw = body.config
+    if raw is None:
+        raise HTTPException(400, "a configuration is required: pass config")
+    try:
+        cfg = lgdsel.LgdSelectionConfig.from_dict({**raw, "portfolio": key})
+    except (TypeError, ValueError) as e:
+        raise HTTPException(400, f"{type(e).__name__}: {e}")
+    _reject_unknown_columns(key, cfg.candidates, "severity driver candidates")
+    _reject_unknown_columns(key, cfg.expert_core or [],
+                            "expert severity core variables")
+    if not cfg.candidates:
+        raise HTTPException(400, "no candidate drivers: pass at least one "
+                                 "severity driver column")
+    panel_cols = set(mevpanel.monthly_panel().columns)
+    unknown = sorted({lgdsel.parse_term(t).key for t in cfg.mev_terms
+                      if lgdsel.parse_term(t).key not in panel_cols})
+    if unknown:
+        raise HTTPException(400, "macro terms not in the published panel: "
+                                 + ", ".join(unknown))
+    return cfg
+
+
+@app.get("/api/lgd-selection/{key}/defaults")
+def lgd_selection_defaults(key: str):
+    """Ranked severity-driver candidates plus the default search rules, so
+    the surface seeds itself the same way the PD setup does."""
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+    cand = scensvc.LGD.candidates(store.analysis_frame(key), key,
+                                  mevpanel.monthly_panel())
+    return _jsonable({
+        "candidates": cand,
+        "rules": vars(sel.SelectionRules()),
+        "oot_from": "2023-01-01",
+    })
+
+
+@app.post("/api/lgd-selection/{key}/run")
+def lgd_selection_run(key: str, body: SelectionRunRequest):
+    cfg = _lgd_selection_config(key, body)
+    with _SEL_LOCK:
+        state = _LSEL.get(key, {})
+        if state.get("state") == "running":
+            return {"state": "running", "config_hash": state.get("config_hash")}
+        cancel = _threading.Event()
+        _LSEL_CANCEL[key] = cancel
+        _LSEL[key] = {"state": "running", "config_hash": cfg.hash(),
+                      "stage_no": 1, "n_stages": lgdsel.N_STAGES,
+                      "step": 0, "total": 0, "label": "Starting",
+                      "n_combos": None, "started_at": _time.time(), "error": ""}
+
+    def progress(stage_no, n_stages, step, total, label):
+        with _SEL_LOCK:
+            _LSEL[key].update(stage_no=stage_no, n_stages=n_stages,
+                              step=step, total=total, label=label)
+
+    def checkpoint(payload):
+        runcache.save(key, "lgd_selection", cfg.hash(), payload)
+
+    def run():
+        try:
+            payload = lgdsel.run_search(cfg, progress=progress, cancel=cancel,
+                                        checkpoint=checkpoint)
+            runcache.save(key, "lgd_selection", cfg.hash(), payload)
+            _LSEL_RESULTS[(key, cfg.hash())] = payload
+            with _SEL_LOCK:
+                _LSEL[key].update(state="done", label="Done",
+                                  n_combos=payload["n_combos"])
+        except sel.Cancelled:
+            with _SEL_LOCK:
+                _LSEL[key].update(state="cancelled", label="Cancelled")
+        except Exception as e:                                          # noqa: BLE001
+            with _SEL_LOCK:
+                _LSEL[key].update(state="error", error=f"{type(e).__name__}: {e}")
+
+    _threading.Thread(target=run, daemon=True).start()
+    return {"state": "running", "config_hash": cfg.hash()}
+
+
+@app.get("/api/lgd-selection/{key}/status")
+def lgd_selection_status(key: str):
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+    with _SEL_LOCK:
+        return dict(_LSEL.get(key) or {"state": "idle"})
+
+
+@app.post("/api/lgd-selection/{key}/cancel")
+def lgd_selection_cancel(key: str):
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+    ev = _LSEL_CANCEL.get(key)
+    if ev is not None:
+        ev.set()
+    return {"state": "cancelling"}
+
+
+@app.get("/api/lgd-selection/{key}/results")
+def lgd_selection_results(key: str, config: str = Query(...)):
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+    memo = _LSEL_RESULTS.get((key, config))
+    if memo is None:
+        memo = runcache.load(key, "lgd_selection", config)
+        if memo is None:
+            raise HTTPException(
+                404, "no completed severity search for this configuration on "
+                     "the current data. Run the search.")
+        _LSEL_RESULTS[(key, config)] = memo
+    from ..models.versions import data_fingerprint
+    return _jsonable({
+        **memo,
+        "current": memo.get("data_fingerprint", data_fingerprint(key))
+        == data_fingerprint(key),
+    })
+
+
 # In development the frontend runs on Vite and proxies /api here. In the
 # container the built assets are copied in and served by this app, so
 # `docker compose up` starts ONE thing on ONE port and there is no CORS step, no

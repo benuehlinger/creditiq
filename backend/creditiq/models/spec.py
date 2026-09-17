@@ -17,6 +17,27 @@ import json
 from dataclasses import asdict, dataclass, field
 from typing import Literal
 
+
+def _hash_normalize(o):
+    """Collapse the int/float distinction before hashing.
+
+    A specification round-trips through the browser, and JavaScript has one
+    number type: 0.0 serialises as 0, 1.0 as 1. Hashing the raw values gave
+    the SAME specification two different hashes depending on whether it had
+    crossed the wire — the leaderboard named a model one thing and the
+    workbench, re-hashing the round-tripped spec, named it another. Every
+    integral float becomes an int here, on every path, so the hash sees one
+    canonical number. (bool is untouched: isinstance(True, int) is True, but
+    True.is_integer() is not consulted — bools are not floats.)
+    """
+    if isinstance(o, dict):
+        return {k: _hash_normalize(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_hash_normalize(x) for x in o]
+    if isinstance(o, float) and o.is_integer():
+        return int(o)
+    return o
+
 Estimator = Literal["logistic", "logistic_l1", "logistic_l2", "gbm"]
 
 # Discretizing and encoding are DIFFERENT decisions, and fusing them was the
@@ -297,7 +318,8 @@ class LgdSpec:
                    "edges": sorted((c, list(v)) for c, v in self.edges),
                    "knots": sorted((c, list(v)) for c, v in self.knots),
                    "n_knots": self.n_knots, "max_bins": self.max_bins}
-        return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]
+        return hashlib.sha256(json.dumps(_hash_normalize(payload),
+                                         sort_keys=True).encode()).hexdigest()[:12]
 
     @property
     def macro_drivers(self) -> list[str]:
@@ -347,7 +369,8 @@ class ModelSpec:
         }
 
     def hash(self) -> str:
-        blob = json.dumps(self.canonical(), sort_keys=True, separators=(",", ":"))
+        blob = json.dumps(_hash_normalize(self.canonical()),
+                          sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
     def pd_hash(self) -> str:
@@ -369,7 +392,7 @@ class ModelSpec:
         So each half gets a visible identity. `hash()` remains the identity of
         the pair, which is what is named, promoted and quoted.
         """
-        c = self.canonical()
+        c = _hash_normalize(self.canonical())
         blob = json.dumps({k: v for k, v in c.items() if k != "lgd"},
                           sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(blob.encode()).hexdigest()[:12]

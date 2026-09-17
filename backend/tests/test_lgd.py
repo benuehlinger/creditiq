@@ -83,12 +83,17 @@ def test_the_lgd_specification_changes_the_model_id():
     assert len({pd_only.hash(), with_a.hash(), with_b.hash()}) == 3
 
 
-def test_a_half_built_model_is_not_given_a_name():
+def test_a_half_built_model_names_the_half_that_exists():
+    """USER-DIRECTED (2026-09-16, see DECISIONS): each half carries its own
+    name from its own hash, and the pair is the two names collated — never a
+    third minted name. A half-built model therefore IS named (the half that
+    exists), and the response still says which half is missing."""
     r = client.post("/api/model/identity",
                     json={"portfolio": "cre", "variables": [{"column": "dscr_reported"}]})
     body = r.json()
     assert body["complete"] is False
-    assert body["name"] is None
+    assert body["name"] == body["pd_name"] and body["pd_name"]
+    assert body["lgd_name"] is None
     assert "LGD drivers" in body["missing"]
 
 

@@ -55,3 +55,27 @@ def test_an_unchanged_specification_keeps_its_hash() -> None:
                                 VariableSpec("dti", treatment="spline", n_knots=4)])
     again = ModelSpec.from_dict(spec.to_dict())
     assert again.hash() == spec.hash()
+
+
+def test_the_hash_survives_a_browser_round_trip() -> None:
+    """JavaScript has one number type: 0.0 serialises as 0 and 1.0 as 1. A
+    specification that crosses the wire and comes back must keep its hash, or
+    the leaderboard names a model one thing and the workbench another."""
+    import json
+
+    spec = ModelSpec(portfolio="consumer", regularization=1.0,
+                     variables=[VariableSpec("fico_orig", treatment="continuous",
+                                             shrinkage=0.0)])
+    # What JSON.stringify does to the same payload: integral floats become ints.
+    def js(o):
+        if isinstance(o, dict):
+            return {k: js(v) for k, v in o.items()}
+        if isinstance(o, list):
+            return [js(x) for x in o]
+        if isinstance(o, float) and o.is_integer():
+            return int(o)
+        return o
+
+    round_tripped = ModelSpec.from_dict(json.loads(json.dumps(js(spec.to_dict()))))
+    assert round_tripped.hash() == spec.hash()
+    assert round_tripped.pd_hash() == spec.pd_hash()

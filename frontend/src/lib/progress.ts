@@ -455,6 +455,8 @@ export function useModelIdentity(portfolio: string | undefined) {
   })
   return {
     name: q.data?.name ?? null,
+    pdName: q.data?.pd_name ?? null,
+    lgdName: q.data?.lgd_name ?? null,
     hash: q.data?.hash ?? null,
     complete: !!fitted && !!lgd?.hash,
   }

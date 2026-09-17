@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -9,6 +9,7 @@ import { useUi } from '../lib/store'
 import { fromRequest } from '../lib/spec'
 import { num, pct } from '../lib/format'
 import { Card, CardHead, EmptyState, Field, Notice, Skeleton, ViewTabs } from '../components/ui'
+import LgdSelectionView from './LgdSelectionView'
 
 /**
  * The Selection surface: configure an automated variable search, watch it run
@@ -91,23 +92,46 @@ export default function SelectionSurface() {
 
   const view = params.get('view')
     ?? (run ? 'leaderboard' : 'setup')
+  // One Selection stage, two targets. The PD search and the severity search
+  // share the surface: same discipline, different model and yardstick.
+  const target = params.get('target') === 'lgd' ? 'lgd' : 'pd'
 
   return (
     <div className="mx-auto max-w-[1500px] space-y-3 px-4 py-4">
       <div className="flex items-center justify-between">
-        <ViewTabs
-          value={view as 'setup' | 'leaderboard'}
-          onChange={(v) => setParams(v === 'setup' ? { view: 'setup' }
-                                                   : { view: 'leaderboard' })}
-          tabs={[{ key: 'setup', label: 'Setup' },
-                 { key: 'leaderboard', label: 'Leaderboard' }]} />
-        {run && view === 'setup' && (
+        <div className="flex items-center gap-3">
+          <div className="flex overflow-hidden rounded-ctl border border-hairline text-tiny"
+               role="group" aria-label="Search target">
+            <button onClick={() => setParams({ view })}
+              className={`px-2.5 py-1 ${target === 'pd'
+                ? 'bg-accent font-medium text-white'
+                : 'text-ink-secondary hover:text-ink'}`}>
+              PD
+            </button>
+            <button onClick={() => setParams({ target: 'lgd' })}
+              className={`border-l border-hairline px-2.5 py-1 ${target === 'lgd'
+                ? 'bg-accent font-medium text-white'
+                : 'text-ink-secondary hover:text-ink'}`}>
+              LGD
+            </button>
+          </div>
+          {target === 'pd' && (
+          <ViewTabs
+            value={view as 'setup' | 'leaderboard'}
+            onChange={(v) => setParams(v === 'setup' ? { view: 'setup' }
+                                                     : { view: 'leaderboard' })}
+            tabs={[{ key: 'setup', label: 'Setup' },
+                   { key: 'leaderboard', label: 'Leaderboard' }]} />
+          )}
+        </div>
+        {target === 'pd' && run && view === 'setup' && (
           <span className="text-tiny text-ink-muted">
             Last run: {num(run.nModels)} models on the board
           </span>
         )}
       </div>
 
+      {target === 'lgd' ? <LgdSelectionView pk={pk} /> : <>
       {running && <RunningCard st={st!} pk={pk} />}
       {st?.state === 'error' && (
         <Notice severity="critical" label="The search failed">
@@ -126,12 +150,15 @@ export default function SelectionSurface() {
                      onStarted={() => status.refetch()} />
         : <LeaderboardView pk={pk} running={!!running}
                            goSetup={() => setParams({ view: 'setup' })} />}
+      </>}
     </div>
   )
 }
 
 // ── the run, narrated by the server ─────────────────────────────────────────
-function RunningCard({ st, pk }: { st: SelectionStatus; pk: PortfolioKey }) {
+export function RunningCard({ st, pk, onCancel }: {
+  st: SelectionStatus; pk: PortfolioKey; onCancel?: () => void
+}) {
   const stageNo = st.stage_no ?? 1
   const frac = st.total ? Math.min((st.step ?? 0) / st.total, 1) : 0
   return (
@@ -172,7 +199,7 @@ function RunningCard({ st, pk }: { st: SelectionStatus; pk: PortfolioKey }) {
               </li>
             ))}
           </ol>
-          <button onClick={() => api.selectionCancel(pk)}
+          <button onClick={() => (onCancel ?? (() => api.selectionCancel(pk)))()}
                   className="rounded-ctl border border-hairline px-2.5 py-1 text-tiny text-ink-secondary hover:text-ink">
             Cancel
           </button>
@@ -679,16 +706,66 @@ function Board({ pk, res, review, selected, onSelect }: {
     })
 
   const detail = selected ? byHash.get(selected) ?? null : null
+  // The flag line the search actually scored against, so the column shades on
+  // the reviewer's threshold rather than a second hardcoded one. Twice it is
+  // where the composite's collinearity credit turns negative.
+  const vifFlag = (() => {
+    const r = (res.config as { rules?: { max_vif?: number | null } }).rules
+    return r?.max_vif && r.max_vif > 0 ? r.max_vif : 5
+  })()
+
+  // Rank or provenance: the SAME rows, flat by composite rank or grouped by
+  // the core each model was built on. Grouping is presentation only —
+  // nothing is re-scored, and auto rank keeps its meaning inside a group.
+  // A row whose spec arose from two cores sits under the first, which
+  // preserves the stepwise lineage, and its Model cell names both.
+  const [grouping, setGrouping] = useState<'rank' | 'core'>('rank')
+  const [closedCores, setClosedCores] = useState<Record<string, boolean>>({})
+  const coreGroups = useMemo(() => {
+    const by = new Map<string, LeaderboardRow[]>()
+    for (const r of live) {
+      const k = r.lineage[0]?.core ?? 'unknown'
+      const arr = by.get(k)
+      if (arr) arr.push(r)
+      else by.set(k, [r])
+    }
+    for (const rows of by.values())
+      rows.sort((a, b) => (a.auto_rank ?? 999) - (b.auto_rank ?? 999))
+    return res.cores.filter((c) => by.has(c.name))
+      .map((c) => ({ core: c, rows: by.get(c.name)! }))
+  }, [live, res.cores])
+  const entryMetric =
+    (res.config as { rules?: { entry_metric?: string } }).rules?.entry_metric ?? 'bic'
 
   return (
     <div className={`grid gap-3 ${detail ? 'xl:grid-cols-[minmax(0,1fr)_440px]' : ''}`}>
       <Card>
         <CardHead title="Leaderboard"
           subtitle={`${num(live.length)} models from ${num(res.n_combos)} fitted combinations`}
-          caption="Two rankings, kept side by side: the automated rank from the stated composite, and yours. Drag a row (or use the arrows) to set the user rank; moving a model away from its automated rank requires a justification, which the audit trail records."
+          caption={grouping === 'rank'
+            ? 'Two rankings, kept side by side: the automated rank from the stated composite, and yours. Drag a row (or use the arrows) to set the user rank; moving a model away from its automated rank requires a justification, which the audit trail records.'
+            : 'The same models, grouped by the core each was built on. Every group states its construction method and entry trace, with any candidate the VIF cap refused. Ranks keep their meaning; review actions live in the Rank view.'}
           methodology="selection-composite"
           right={
             <div className="flex items-center gap-2">
+              <div className="flex overflow-hidden rounded-ctl border border-hairline text-tiny"
+                   role="group" aria-label="Board view">
+                <button onClick={() => setGrouping('rank')}
+                  title="Every model in one list, ordered by the composite."
+                  className={`px-2 py-0.5 ${grouping === 'rank'
+                    ? 'bg-accent font-medium text-white'
+                    : 'text-ink-secondary hover:text-ink'}`}>
+                  Rank
+                </button>
+                <button onClick={() => setGrouping('core')}
+                  title="The same models grouped by originating core, with each core's construction method and entry trace."
+                  className={`border-l border-hairline px-2 py-0.5 ${grouping === 'core'
+                    ? 'bg-accent font-medium text-white'
+                    : 'text-ink-secondary hover:text-ink'}`}>
+                  Provenance
+                </button>
+              </div>
+              {grouping === 'rank' && (
               <label className="flex items-center gap-1 text-tiny text-ink-muted">
                 Sort
                 <select value={sortKey}
@@ -702,6 +779,7 @@ function Board({ pk, res, review, selected, onSelect }: {
                   <option value="rmse">Backtest RMSE</option>
                 </select>
               </label>
+              )}
               <a href={api.selectionReviewExportUrl(pk, res.config_hash)}
                  className="rounded-ctl border border-hairline px-2 py-0.5 text-tiny text-ink-secondary hover:text-ink"
                  title="The review audit trail as CSV, for the validation binder.">
@@ -724,9 +802,24 @@ function Board({ pk, res, review, selected, onSelect }: {
             beside a core. Hover for each reason.
           </p>
         )}
+        {/* The column widths are fixed rather than content-derived: with the
+            detail pane open this table lives in roughly half the width, and a
+            content-derived layout answers that by breaking model names
+            mid-word and letting every row find its own height. Fixed columns
+            plus a min-width keep the rows uniform and move the overflow into
+            one honest horizontal scroll. */}
         <div className="thin-scroll max-h-[620px] overflow-auto">
-          <table className="w-full text-left text-xs">
-            <thead className="sticky top-0 z-10 border-y border-hairline bg-surface text-tiny text-ink-muted">
+          <table className="w-full min-w-[1180px] table-fixed text-left text-xs">
+            <colgroup>
+              <col className="w-11" /><col className="w-16" />
+              <col className="w-52" /><col />
+              <col className="w-14" /><col className="w-16" />
+              <col className="w-[4.5rem]" /><col className="w-16" />
+              <col className="w-14" /><col className="w-12" />
+              <col className="w-20" /><col className="w-16" />
+              <col className="w-24" />
+            </colgroup>
+            <thead className="sticky top-0 z-10 border-y border-hairline bg-surface text-tiny text-ink-muted [&_th]:whitespace-nowrap">
               <tr>
                 <th className="px-2 py-2 text-right font-medium" title="The composite rank. Never changed by review.">Auto</th>
                 <th className="px-2 py-2 text-right font-medium" title="Your rank. Drag rows or use the arrows.">User</th>
@@ -744,15 +837,23 @@ function Board({ pk, res, review, selected, onSelect }: {
               </tr>
             </thead>
             <tbody>
-              {ordered.slice(0, 150).map((r, idx) => {
+              {(() => {
+              // One renderer for both views. In the provenance view the row
+              // is not draggable and carries no rank arrows: the user rank is
+              // an ordering of the WHOLE board, and reordering inside a group
+              // would silently cross group boundaries.
+              const renderRow = (r: LeaderboardRow, idx: number,
+                                 interactive = true) => {
                 const rv = rrows[r.hash] ?? {}
                 const active = r.hash === selected
-                const userRank = pendingOrder ? idx + 1 : rv.user_rank
+                const userRank = interactive && pendingOrder ? idx + 1 : rv.user_rank
                 return (
-                  <tr key={r.hash} draggable
-                      onDragStart={() => { dragFrom.current = r.hash }}
-                      onDragOver={(e) => e.preventDefault()}
-                      onDrop={() => {
+                  <tr key={r.hash} draggable={interactive}
+                      onDragStart={interactive
+                        ? () => { dragFrom.current = r.hash } : undefined}
+                      onDragOver={interactive
+                        ? (e) => e.preventDefault() : undefined}
+                      onDrop={interactive ? () => {
                         const from = dragFrom.current
                         if (!from || from === r.hash) return
                         const base = pendingOrder ?? ordered.map((x) => x.hash)
@@ -760,14 +861,15 @@ function Board({ pk, res, review, selected, onSelect }: {
                         next.splice(next.indexOf(r.hash) < 0 ? idx
                           : next.indexOf(r.hash), 0, from)
                         setPendingOrder(next)
-                      }}
+                      } : undefined}
                       onClick={() => onSelect(active ? null : r.hash)}
-                      className={`cursor-pointer border-b border-hairline ${
+                      className={`cursor-pointer border-b border-hairline [&>td]:truncate ${
                         active ? 'bg-accent-soft' : 'hover:bg-sunken/60'} ${
                         rv.status === 'rejected' ? 'opacity-50' : ''}`}>
                     <td className="px-2 py-1.5 text-right tnum text-ink-muted">{r.auto_rank}</td>
                     <td className="px-2 py-1.5 text-right">
                       <span className="tnum text-ink">{userRank ?? '—'}</span>
+                      {interactive && (
                       <span className="ml-1 inline-flex flex-col align-middle"
                             onClick={(e) => e.stopPropagation()}>
                         <button title="Move up" className="text-micro leading-none text-ink-muted hover:text-ink"
@@ -791,15 +893,23 @@ function Board({ pk, res, review, selected, onSelect }: {
                             }
                           }}>▼</button>
                       </span>
+                      )}
                     </td>
-                    <td className="px-2 py-1.5">
+                    <td className="px-2 py-1.5"
+                        title={`${r.name} — ${r.lineage.map((l) => l.core).join(', ')} core${
+                          r.finalist ? '' : ' (lean statistics only)'}`}>
                       <span className="font-medium text-ink">{r.name}</span>
                       <span className="ml-1.5 text-micro text-ink-muted">
                         {r.lineage.map((l) => l.core).join(', ')} core
                         {r.finalist ? '' : ' · lean'}
                       </span>
                     </td>
-                    <td className="px-2 py-1.5">
+                    <td className="px-2 py-1.5"
+                        title={r.mevs.map((m) => {
+                          const sc = r.sign_checks.find((s) => s.term === `mev:${m.label}`)
+                          return `${m.label}${sc?.ok === false ? '  (sign contradicts the prior)'
+                            : sc?.ok === true ? '  (sign agrees with the prior)' : ''}`
+                        }).join('\n')}>
                       {r.mevs.map((m) => {
                         const sc = r.sign_checks.find((s) => s.term === `mev:${m.label}`)
                         return (
@@ -825,11 +935,16 @@ function Board({ pk, res, review, selected, onSelect }: {
                       {fmtP(r.max_p)}
                     </td>
                     <td className="px-2 py-1.5 text-right tnum"
-                        title={r.max_vif != null && r.max_vif > 5
-                          ? 'The worst term-level VIF exceeds 5: two terms carry much of the same information. Open the model to see which.'
-                          : undefined}
-                        style={{ color: r.max_vif != null && r.max_vif > 5
-                          ? 'var(--status-warning)' : undefined }}>
+                        title={r.max_vif == null ? undefined
+                          : r.max_vif > 2 * vifFlag
+                            ? `The worst term-level VIF exceeds ${2 * vifFlag}: the coefficient is barely identified, and the composite penalises this model rather than merely withholding credit. Open the model to see which terms collide.`
+                            : r.max_vif > vifFlag
+                              ? `The worst term-level VIF exceeds ${vifFlag}: two terms carry much of the same information. Open the model to see which.`
+                              : undefined}
+                        style={{ color: r.max_vif == null ? undefined
+                          : r.max_vif > 2 * vifFlag ? 'var(--status-critical)'
+                            : r.max_vif > vifFlag ? 'var(--status-warning)'
+                              : undefined }}>
                       {r.max_vif == null ? '—' : r.max_vif.toFixed(1)}
                     </td>
                     <td className="px-2 py-1.5 text-center">
@@ -866,7 +981,55 @@ function Board({ pk, res, review, selected, onSelect }: {
                     </td>
                   </tr>
                 )
-              })}
+              }
+
+              if (grouping === 'rank')
+                return ordered.slice(0, 150).map((r, idx) => renderRow(r, idx))
+
+              return coreGroups.map(({ core, rows }) => {
+                const open = !closedCores[core.name]
+                const worst = Math.max(0, ...rows.map((r) => r.max_vif ?? 0))
+                const tone = worst > 2 * vifFlag ? 'var(--status-critical)'
+                  : worst > vifFlag ? 'var(--status-warning)'
+                    : 'var(--status-good)'
+                const verdict = worst > 2 * vifFlag
+                  ? `worst VIF ${worst.toFixed(1)} — exceeds ${2 * vifFlag}`
+                  : worst > vifFlag
+                    ? `worst VIF ${worst.toFixed(1)} — exceeds ${vifFlag}`
+                    : `worst VIF ${worst.toFixed(1)} — within tolerance`
+                return (
+                  <Fragment key={core.name}>
+                    <tr className="cursor-pointer border-b border-hairline bg-sunken/70 hover:bg-sunken"
+                        onClick={() => setClosedCores((s) =>
+                          ({ ...s, [core.name]: open }))}>
+                      <td colSpan={13} className="px-3 py-2">
+                        <span className="mr-2 inline-block w-3 font-mono text-micro text-ink-muted">
+                          {open ? '▾' : '▸'}
+                        </span>
+                        <span className="font-medium text-ink">{core.name} core</span>
+                        <span className="ml-2 text-micro text-ink-muted">
+                          {core.columns.length} variables · {num(rows.length)} models
+                        </span>
+                        <span className="ml-3 rounded-full border px-2 py-0.5 text-micro"
+                              style={{ color: tone,
+                                       borderColor: `color-mix(in srgb, ${tone} 45%, transparent)` }}>
+                          {verdict}
+                        </span>
+                      </td>
+                    </tr>
+                    {open && (
+                      <tr className="border-b border-hairline">
+                        <td colSpan={13} className="!whitespace-normal bg-sunken/40 px-4 py-3 align-top">
+                          <CoreConstruction core={core} entryMetric={entryMetric}
+                                            vifFlag={vifFlag} />
+                        </td>
+                      </tr>
+                    )}
+                    {open && rows.map((r, i) => renderRow(r, i, false))}
+                  </Fragment>
+                )
+              })
+              })()}
             </tbody>
           </table>
           {ordered.length > 150 && (
@@ -931,6 +1094,125 @@ function Board({ pk, res, review, selected, onSelect }: {
   )
 }
 
+// ── core construction, shared by the PD provenance view and the LGD board ──
+const fmtSmallP = (p: number) =>
+  p < 1e-4 ? p.toExponential(0) : p < 0.001 ? '<0.001' : p.toFixed(3)
+
+export function CoreConstruction({ core, entryMetric, vifFlag }: {
+  core: SelectionResults['cores'][number]; entryMetric: string; vifFlag: number
+}) {
+  const steps = core.steps as Array<Record<string, unknown>>
+  const entries = steps.filter((s) => s.action === 'enter')
+  const keeps = steps.filter((s) => s.action === 'keep')
+  const drops = steps.filter((s) => s.action === 'drop')
+  const blocks = steps.filter((s) => s.action === 'vif_block')
+  const rejected = steps.filter((s) => s.action === 'rejected')
+  // The entry steps say which rule actually ran; the config's metric is only
+  // the fallback (the severity search always enters on the robust Wald p).
+  const stepMetric = String(entries[0]?.metric ?? entryMetric)
+
+  // The stepwise trace in entry order; the strong core by LR contribution.
+  const bars = (entries.length ? entries : keeps).map((s) => ({
+    column: String(s.column),
+    value: stepMetric === 'p_value' && entries.length
+      ? Math.min(24, -Math.log10(Math.max(Number(s.score) || 1e-24, 1e-24)))
+      : Math.abs(Number(entries.length ? s.score : s.lr_drop) || 0),
+    label: entries.length
+      ? (stepMetric === 'p_value'
+        ? `p ${fmtSmallP(Number(s.score) || 0)}`
+        : `Δ${stepMetric.toUpperCase()} ${num(Math.round(Number(s.score) || 0))}`)
+      : `LR ${num(Math.round(Number(s.lr_drop) || 0))}`,
+  }))
+  // Square-root widths: the first entrant's statistic can dwarf the rest by
+  // two orders of magnitude, and a linear bar makes every later entry
+  // unreadable. The number printed beside the bar stays raw.
+  const maxV = Math.max(1, ...bars.map((b) => b.value))
+
+  const method = core.name === 'stepwise'
+    ? `Forward stepwise selection, ${stepMetric === 'p_value'
+        ? 'entry on the robust Wald p-value'
+        : `${stepMetric.toUpperCase()} on events`}; a candidate that would push
+       any term VIF over ${vifFlag} is refused entry. ${core.columns.length}
+       variable${core.columns.length === 1 ? '' : 's'} entered${drops.length
+         ? `, ${drops.length} removed in backward elimination` : ''}.`
+    : core.name === 'strong'
+      ? `Whole-term likelihood-ratio screen; the ${core.columns.length} terms
+         with the largest LR contribution on removal were retained.`
+      : 'Analyst-specified core, fitted verbatim. Not searched: its value is exactly that a person chose it.'
+
+  return (
+    <div className="max-w-2xl text-xs">
+      <h4 className="mb-1 text-micro font-medium uppercase tracking-wide text-ink-muted">
+        Construction method
+      </h4>
+      <p className="mb-2 text-ink-secondary">{method}</p>
+      {bars.length > 0 && (
+        <>
+          <h4 className="mb-1 text-micro font-medium uppercase tracking-wide text-ink-muted">
+            {entries.length ? 'Entry sequence' : 'Retained variables'}
+          </h4>
+          <div className="mb-1 grid gap-0.5" style={{ maxWidth: '30rem' }}>
+            {bars.map((b, i) => (
+              <div key={b.column}
+                   className="grid grid-cols-[1.2rem_11rem_1fr_6.5rem] items-center gap-2">
+                <span className="text-right font-mono text-micro text-ink-muted">
+                  {entries.length ? i + 1 : ''}
+                </span>
+                <span className="truncate font-mono text-micro text-ink-secondary"
+                      title={b.column}>{b.column}</span>
+                <span className="h-1.5 overflow-hidden rounded-sm bg-hairline/60">
+                  <span className="block h-full rounded-sm bg-accent"
+                        style={{ width: `${Math.max(2, Math.sqrt(b.value / maxV) * 100)}%` }} />
+                </span>
+                <span className="text-right font-mono text-micro text-ink-muted">{b.label}</span>
+              </div>
+            ))}
+          </div>
+          <p className="mb-2 text-micro text-ink-muted">
+            Bar length on a square-root scale; the statistic beside it is raw.
+          </p>
+        </>
+      )}
+      {blocks.length > 0 && (
+        <div className="mb-2 rounded-ctl border px-2.5 py-1.5"
+             style={{ borderColor: 'color-mix(in srgb, var(--status-critical) 40%, transparent)' }}>
+          <h4 className="mb-0.5 text-micro font-medium uppercase tracking-wide"
+              style={{ color: 'var(--status-critical)' }}>
+            Refused entry — VIF cap
+          </h4>
+          {blocks.map((b) => (
+            <p key={String(b.column)} className="text-micro text-ink-secondary">
+              <span className="font-mono">{String(b.column)}</span>
+              {' '}improved the criterion but would carry VIF{' '}
+              {Number(b.vif).toFixed(1)}, over the cap of {String(b.cap)}.
+            </p>
+          ))}
+        </div>
+      )}
+      {rejected.length > 0 && (
+        <div className="mb-2">
+          <h4 className="mb-0.5 text-micro font-medium uppercase tracking-wide text-ink-muted">
+            Tested and stayed out
+          </h4>
+          {rejected.map((b) => (
+            <p key={String(b.column)} className="text-micro text-ink-muted">
+              <span className="font-mono text-ink-secondary">{String(b.column)}</span>
+              {' '}— {String(b.reason)}
+            </p>
+          ))}
+        </div>
+      )}
+      {core.warnings.length > 0 && (
+        <div>
+          {core.warnings.map((w) => (
+            <p key={w} className="text-micro" style={{ color: 'var(--status-warning)' }}>{w}</p>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── drill-in ────────────────────────────────────────────────────────────────
 function DetailPane({ pk, row, res, review, reviewer, setReviewer, onClose }: {
   pk: PortfolioKey; row: LeaderboardRow; res: SelectionResults
@@ -942,6 +1224,8 @@ function DetailPane({ pk, row, res, review, reviewer, setReviewer, onClose }: {
   const qc = useQueryClient()
   const stashDraft = useUi((s) => s.stashDraft)
   const setPdSpec = useUi((s) => s.setPdSpec)
+  const setOrigin = useUi((s) => s.setOrigin)
+  const setFitted = useUi((s) => s.setFitted)
 
   const [status, setStatus] = useState(review.status ?? '')
   const [reason, setReason] = useState(review.reason_code ?? '')
@@ -976,6 +1260,36 @@ function DetailPane({ pk, row, res, review, reviewer, setReviewer, onClose }: {
     }
     stashDraft(pk)
     setPdSpec(pk, fromRequest(req, pk))
+    // The previous draft's fit went into the stash with it. Left live, it
+    // would sit under the new specification marked "out of date" — another
+    // model's numbers on this model's screen.
+    setFitted(pk, null)
+    // The row's identity travels with the draft: the workbench bar answers
+    // "how did I get here", and a later save records the search lineage.
+    setOrigin(pk, { kind: 'selection', name: row.name, hash: row.hash,
+                    rank: row.auto_rank ?? null, configHash: res.config_hash })
+    // A finalist's full run is already on disk under this hash. Restore it
+    // instead of asking for a refit; a lean row 404s and the workbench
+    // offers the fit as before. Lookup only — nothing is computed here.
+    api.model(row.hash).then((r) => {
+      qc.setQueryData(['model', row.hash], r)
+      setFitted(pk, {
+        request: {
+          portfolio: pk,
+          variables: spec.variables ?? [], mevs: spec.mevs ?? [],
+          estimator: spec.estimator, regularization: spec.regularization,
+          seasoning_spline: spec.seasoning_spline,
+          vintage_effect: spec.vintage_effect,
+          test_fraction: spec.sample?.test_fraction,
+          oot_from: spec.sample?.oot_from,
+          downsample_rows: spec.sample?.downsample_rows ?? null,
+          lgd: spec.lgd ?? null,
+        } as any,
+        hash: row.hash, name: row.name,
+        fittedAt: new Date().toISOString(),
+        variablesAtFit: (spec.variables ?? []).map((v: any) => v.column),
+      })
+    }).catch(() => { /* not cached: the draft opens unfitted, honestly */ })
     nav(`/${pk}/pd`)
   }
 

@@ -222,7 +222,12 @@ def run(spec: ModelSpec, force: bool = False) -> ModelRun:
     t["total"] = time.perf_counter() - t0
 
     out = ModelRun(
-        spec=spec, hash=key, name=spec.label or friendly_name(key), fit=res,
+        # Named from the PD HALF's hash: the run's hash stays the pair
+        # identity, but the display name must match what the leaderboard and
+        # every other surface call this PD specification, whatever severity
+        # model happens to sit beside it.
+        spec=spec, hash=key, name=spec.label or friendly_name(spec.pd_hash()),
+        fit=res,
         diagnostics=diag, backtest=bt,
         scored={"dates": np.asarray(des_all.dates), "y": des_all.y.astype(np.int8),
                 "oot_from": spec.sample.oot_from,

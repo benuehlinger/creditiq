@@ -84,10 +84,22 @@ export default function AppShell() {
                            enabled: !!pkey && !!loadedMark })
   useEffect(() => {
     if (!pkey || !loadedMark || !vlist.data) return
+    // Only a list fetched AFTER the marker appeared can prove the version is
+    // gone. Saving a model sets the marker and invalidates this query at the
+    // same moment, and React Query serves the STALE list while it refetches —
+    // a list from before the save, which of course does not contain the model
+    // just saved. This effect then dropped the marker, so the workspace went
+    // straight back to "plain draft" and the next edit sailed past the fork
+    // gate with nothing to fork from. It bit hardest on a model built from
+    // scratch, where the cached list predates the version in every case.
+    if (vlist.isFetching) return
+    const markedAt = Date.parse(loadedMark.loadedAt || '')
+    if (Number.isFinite(markedAt) && vlist.dataUpdatedAt < markedAt) return
     if (!vlist.data.some((v) => v.hash === loadedMark.hash)) {
       setLoadedMark(pkey, null)
     }
-  }, [pkey, loadedMark?.hash, vlist.data])
+  }, [pkey, loadedMark?.hash, loadedMark?.loadedAt,
+      vlist.data, vlist.isFetching, vlist.dataUpdatedAt])
 
   // The portfolio accent is set on <html>, so every chart, badge and focus ring
   // in the workspace follows the book being worked on without threading a prop.

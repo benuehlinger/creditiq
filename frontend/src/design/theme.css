@@ -211,3 +211,15 @@
    colour rather than KaTeX's larger default, and never sets its own black. */
 .katex { font-size: 1.05em; color: inherit; }
 .katex .mord, .katex .mbin, .katex .mrel, .katex .mopen, .katex .mclose { color: inherit; }
+
+/* A model switch keeps the previous result on screen (placeholderData) and
+   the replacement arrives with a breath, not a flash. Keyed on the model
+   hash so it plays once per switch. */
+.swap-live { animation: swap-live .32s cubic-bezier(.2, .6, .2, 1) both; }
+@keyframes swap-live {
+  from { opacity: .35; transform: translateY(4px); }
+  to   { opacity: 1;   transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .swap-live { animation: none; }
+}

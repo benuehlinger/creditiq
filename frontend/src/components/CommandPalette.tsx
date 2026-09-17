@@ -22,15 +22,22 @@ export default function CommandPalette() {
       { id: 'theme', label: 'Toggle light / dark mode', hint: 'Appearance', run: toggleTheme },
       { id: 'brand', label: 'Brand assets', hint: 'Logos, export for a deck',
         run: () => nav('/brand') },
-      // Demo insurance of a different kind: walk into the room with a clean
-      // workspace. Local drafts only — saved versions live on the server and
-      // are managed on the Versions surface, never cleared from here.
+      // Demo insurance: walk into the room with a genuinely clean workspace.
+      // This clears the SERVER's share too — saved versions and selection
+      // review state — because leaving them made a "reset" roll-up reopen on
+      // the previous session's promoted champion and loss figure. Versions
+      // are archived on the server rather than deleted, so this can never be
+      // the action that loses real work. The generated panels are untouched.
       { id: 'reset', label: 'Start from scratch',
-        hint: 'Clears every unsaved draft in this browser',
+        hint: 'Clears local drafts and archives saved versions',
         run: () => {
           if (window.confirm(
-            'Clear every unsaved draft and fitted marker in this browser? '
-            + 'Saved versions on the server are kept.')) resetWorkspace()
+            'Start from scratch?\n\n'
+            + 'Clears every draft and fitted marker in this browser, and '
+            + 'archives all saved versions, promoted champions and selection '
+            + 'review state on the server.\n\n'
+            + 'The generated data is kept. Archived versions are moved to a '
+            + 'timestamped folder, not deleted.')) resetWorkspace()
         } },
     ]
     for (const p of portfolios ?? []) {

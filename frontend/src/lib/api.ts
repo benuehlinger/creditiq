@@ -566,6 +566,51 @@ export function asMap<T>(v: unknown): Record<string, T> {
  *  cannot omit one. */
 export const VERSION_QUERIES = ['versions', 'lineage', 'rollup', 'compare'] as const
 
+/** Why one specification became another. Captured at the fork gate when the
+ *  edit was made, so the graph can explain a branch rather than just draw it. */
+export interface ForkRecord {
+  reason_code?: string
+  justification?: string
+  change?: string
+  from_hash?: string
+  from_name?: string
+  from_kind?: 'version' | 'selection'
+  at?: string
+}
+
+/** Where a specification entered the workspace, when it came off a search
+ *  leaderboard rather than being built by hand. */
+export interface OriginRecord {
+  name?: string
+  hash?: string
+  rank?: number | null
+  config_hash?: string
+}
+
+export interface LineageNode {
+  hash: string
+  name: string
+  status: string
+  created_at: string
+  starred: boolean
+  auc: number | null
+  ecl?: number | null
+  notes?: string
+  n_variables: number
+  fork?: ForkRecord
+  origin?: OriginRecord
+}
+
+export interface LineageEdge {
+  from: string
+  to: string
+  reason_code?: string | null
+  justification?: string | null
+  change?: string | null
+}
+
+export interface LineageGraph { nodes: LineageNode[]; edges: LineageEdge[] }
+
 export function wireLgdSpec(spec: LgdSpecPayload): LgdSpecPayload {
   return {
     ...spec,
@@ -745,7 +790,10 @@ export interface ModelIdentity {
   hash: string
   complete: boolean
   missing: string[]
+  /** The halves collated (`pd · lgd`), or whichever half exists alone. */
   name: string | null
+  pd_name: string | null
+  lgd_name: string | null
   pd_variables: string[]
   lgd_drivers: string[]
   lgd_categoricals: string[]
@@ -933,6 +981,8 @@ export const api = {
   versions: (portfolio?: string) =>
     get<VersionRecord[]>('/versions', { portfolio }),
   saveVersion: async (req: EclRequest & { notes?: string; tags?: string[]
+                                          fork?: Record<string, unknown>
+                                          origin?: Record<string, unknown>
                                           with_ecl?: boolean; replaces?: string | null }) => {
     const r = await fetch('/api/versions', {
       method: 'POST', headers: { 'content-type': 'application/json' },
@@ -988,9 +1038,7 @@ export const api = {
   compareVersions: (hashes: string[]) =>
     get<CompareResult>('/versions/compare', { hashes: hashes.join(',') }),
   lineage: (portfolio: string) =>
-    get<{ nodes: { hash: string; name: string; status: string; created_at: string
-                   starred: boolean; auc: number | null; n_variables: number }[]
-          edges: { from: string; to: string }[] }>('/versions/lineage', { portfolio }),
+    get<LineageGraph>('/versions/lineage', { portfolio }),
   patchVersion: (hash: string, params: Record<string, string | boolean>) =>
     fetch(`/api/versions/${hash}?` + new URLSearchParams(
       Object.entries(params).map(([k, v]) => [k, String(v)])).toString(),
@@ -1027,6 +1075,24 @@ export const api = {
   selectionCancel: (k: string) => post<{ state: string }>(`/selection/${k}/cancel`, {}),
   selectionResults: (k: string, config: string) =>
     get<SelectionResults>(`/selection/${k}/results`, { config }),
+  // ── the severity search ────────────────────────────────────────────────
+  resetServerWorkspace: () =>
+    post<{ versions: number; selection_reviews: number
+           selection_configs: number; archive: string | null }>(
+      '/workspace/reset', {}),
+
+  lgdSelectionDefaults: (k: string) =>
+    get<LgdSelectionDefaults>(`/lgd-selection/${k}/defaults`),
+  lgdSelectionRun: (k: string, config: LgdSelectionConfigPayload) =>
+    post<{ state: string; config_hash: string }>(
+      `/lgd-selection/${k}/run`, { config }),
+  lgdSelectionStatus: (k: string) =>
+    get<SelectionStatus>(`/lgd-selection/${k}/status`),
+  lgdSelectionCancel: (k: string) =>
+    post<{ state: string }>(`/lgd-selection/${k}/cancel`, {}),
+  lgdSelectionResults: (k: string, config: string) =>
+    get<LgdSelectionResults>(`/lgd-selection/${k}/results`, { config }),
+
   selectionConfigs: (k: string) =>
     get<{ configs: SelectionConfigListing[] }>(`/selection/${k}/configs`),
   selectionConfig: (k: string, id: string) =>
@@ -1206,6 +1272,83 @@ export interface SelectionResults {
 
 export interface SelectionConfigListing {
   id: string; portfolio: string; name: string; saved_at: string
+}
+
+// ── the severity search (LGD selection) ─────────────────────────────────────
+export interface LgdLeaderboardRow {
+  hash: string
+  name: string
+  spec: Record<string, unknown>
+  lineage: { core: string; method: string }[]
+  n_predictors: number
+  n_core: number
+  core_columns: string[]
+  mevs: { key: string; transform: string; lag_months: number; label: string }[]
+  n_mevs: number
+  coefficients: { name: string; estimate: number; std_error: number | null
+                  p_value: number | null; term: string
+                  term_vif: number | null }[]
+  max_p: number | null
+  all_significant: boolean
+  max_vif: number | null
+  core_shifts: { column: string; before: number; after: number
+                 flipped: boolean; shift_pct: number }[]
+  core_shifted: boolean
+  mae_in: number
+  mae_oot: number | null
+  rmse_oot: number | null
+  deviance_r2: number | null
+  mean_lgd: number
+  stress: { usable: boolean; monotone?: boolean
+            anchor_severity?: number; peak_stressed_severity?: number } | null
+  score: number | null
+  auto_rank: number | null
+  filtered: boolean
+  filter_reason: string | null
+  finalist: boolean
+  full?: { deviance_r2: number | null; spearman: number | null
+           link_test_ok: boolean | null
+           backtest: Record<string, unknown> }
+}
+
+export interface LgdSelectionResults {
+  target: 'lgd'
+  config: Record<string, unknown>
+  config_hash: string
+  portfolio: string
+  generated_at: string
+  scenarios: string[]
+  cores: { name: string; columns: string[]; warnings: string[]
+           steps: Record<string, unknown>[] }[]
+  survivors: Record<string, string[]>
+  screened_out: { core: string; label: string; reason: string }[]
+  n_combos: number
+  n_rows: number
+  n_filtered: number
+  n_train: number
+  n_test: number
+  rows: LgdLeaderboardRow[]
+  current: boolean
+}
+
+export interface LgdSelectionDefaults {
+  candidates: {
+    numeric: { column: string; filled: number; kind: string; macro: boolean }[]
+    categorical: { column: string; filled: number; kind: string
+                   levels: number; macro: boolean }[]
+    n_defaults: number
+  }
+  rules: Record<string, unknown>
+  oot_from: string
+}
+
+export interface LgdSelectionConfigPayload {
+  candidates: string[]
+  mev_terms: string[]
+  cores?: string[]
+  expert_core?: string[] | null
+  rules?: Record<string, unknown>
+  oot_from?: string
 }
 
 export interface SelectionReviewRow {

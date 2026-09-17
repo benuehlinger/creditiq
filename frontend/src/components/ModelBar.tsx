@@ -73,6 +73,7 @@ export default function ModelBar() {
   const loc = useLocation()
   const fitted = useUi((s) => (pk ? s.fitted[pk] : null))
   const lgd = useUi((s) => (pk ? s.fittedLgd[pk] : null))
+  const origin = useUi((s) => (pk ? s.origin[pk] : null))
   const loaded = useUi((s) => (pk ? s.loaded[pk] : null))
   // Select the SPECIFICATION, then derive the column list outside the selector.
   // `columns()` maps, so calling it inside the selector returns a new array on
@@ -151,6 +152,12 @@ export default function ModelBar() {
     body = (
       <>
         {pill('Working draft', 'muted')}
+        {origin && (
+          <span className="text-ink-muted">
+            from <span className="font-medium text-ink">{origin.name}</span>
+            {origin.rank != null && <span> · rank {origin.rank}</span>}
+          </span>
+        )}
         <span className="text-ink-secondary">{what}</span>
         {fitted && <span className="font-mono text-micro text-ink-muted">{fitted.hash}</span>}
       </>
@@ -166,6 +173,12 @@ export default function ModelBar() {
     body = (
       <>
         {pill('Working draft', 'muted')}
+        {origin && (
+          <span className="text-ink-muted">
+            from <span className="font-medium text-ink">{origin.name}</span>
+            {origin.rank != null && <span> · rank {origin.rank}</span>}
+          </span>
+        )}
         <span className="font-medium text-ink">{ident.name ?? '…'}</span>
       </>
     )

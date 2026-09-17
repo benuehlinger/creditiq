@@ -74,6 +74,10 @@ export default function ModelPane({ portfolio, onOpenVariable }: {
     enabled: !!fitted?.hash,
     staleTime: Infinity,
     retry: false,
+    // Switching models keeps the previous result on screen while the next
+    // one loads — the same no-flicker rule the candidate views follow — and
+    // the .swap-live transition below carries the change.
+    placeholderData: (prev) => prev,
   })
   const result = cached.data ?? null
   const setResult = (r: FitResponse | null) => {
@@ -297,14 +301,19 @@ export default function ModelPane({ portfolio, onOpenVariable }: {
             { key: 'backtest', label: 'Backtesting' },
           ]} />
 
-          {tab === 'spec' && <SpecificationCard r={result} onOpenVariable={onOpenVariable} />}
-          {tab === 'diagnostics' && <FitDiagnostics r={result} />}
-          {tab === 'backtest' && (
-            <>
-              <Verdict r={result} screen={screen.data?.rows} />
-              <BacktestPanel r={result} portfolio={portfolio} request={fitted?.request} />
-            </>
-          )}
+          {/* Keyed on the model hash: a switch plays one .swap-live breath
+              over content that never blanks, because the query holds the
+              previous result until the next one arrives. */}
+          <div key={result.hash} className="swap-live space-y-3">
+            {tab === 'spec' && <SpecificationCard r={result} onOpenVariable={onOpenVariable} />}
+            {tab === 'diagnostics' && <FitDiagnostics r={result} />}
+            {tab === 'backtest' && (
+              <>
+                <Verdict r={result} screen={screen.data?.rows} />
+                <BacktestPanel r={result} portfolio={portfolio} request={fitted?.request} />
+              </>
+            )}
+          </div>
         </>
       )}
 

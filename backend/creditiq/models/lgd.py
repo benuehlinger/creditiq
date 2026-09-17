@@ -372,6 +372,15 @@ def fit_lgd(df: pd.DataFrame, spec: LgdSpec | str,
 
 
 def design_for(df: pd.DataFrame, model: LgdModel) -> np.ndarray:
+    # A spec from the severity search can carry macro terms (`key@transform@lag`).
+    # They are functions of performance_date alone, so attaching them at score
+    # time reproduces exactly the columns the fit saw; the stored means/stds
+    # then standardize them identically. Without this every scoring caller had
+    # to remember the join, and the backtest didn't.
+    macro = tuple(c for c in model.spec.drivers if "@" in c and c not in df.columns)
+    if macro:
+        from ..mev.panel import monthly_panel
+        df = attach_macro(df.copy(), monthly_panel(), macro)
     X, _, _, _, _, _ = _matrix(df, model.spec, levels=model.levels,
                                means=model.means, stds=model.stds, maps=model.maps)
     return X

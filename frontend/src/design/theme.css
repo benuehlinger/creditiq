@@ -135,6 +135,9 @@
 :root[data-portfolio='mortgage'] { --accent: var(--series-2); --accent-soft: color-mix(in srgb, var(--series-2) 14%, transparent); }
 :root[data-portfolio='cre']      { --accent: var(--series-3); --accent-soft: color-mix(in srgb, var(--series-3) 14%, transparent); }
 :root:not([data-portfolio])      { --accent: var(--series-1); --accent-soft: color-mix(in srgb, var(--series-1) 14%, transparent); }
+/* Any other key is an ingested book: they all share the series-4 accent. */
+:root[data-portfolio]:not([data-portfolio='consumer']):not([data-portfolio='mortgage']):not([data-portfolio='cre'])
+                                 { --accent: var(--series-4); --accent-soft: color-mix(in srgb, var(--series-4) 14%, transparent); }
 
 /* Status colours never change with the theme — reserved meaning. */
 :root {

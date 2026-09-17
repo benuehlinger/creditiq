@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../lib/api'
-import { tokens } from '../design/tokens'
+import { portfolioToken } from '../design/tokens'
 import { useBookStates } from '../lib/progress'
 
 /** Portfolio as top-level context, not a dropdown on the data page.
@@ -35,7 +35,7 @@ export default function PortfolioSwitcher() {
     >
       {data.map((p) => {
         const active = p.key === portfolio
-        const dot = tokens.portfolios[p.key]
+        const dot = portfolioToken(p.key)
         const book = books[p.key as keyof typeof books]
         return (
           <button
@@ -75,6 +75,19 @@ export default function PortfolioSwitcher() {
           </button>
         )
       })}
+      {/* Ingestion entry point. Always visible: the getting-started card only
+          exists while the roll-up has no coverage. */}
+      <button
+        onClick={() => nav('/tapes')}
+        title="Load a loan tape: map a CSV or parquet panel onto the canonical schema and add it as a book."
+        aria-label="Load a loan tape"
+        className={`rounded-[5px] px-2 py-1 text-xs font-medium transition-colors ${
+          loc.pathname === '/tapes'
+            ? 'bg-raised text-ink shadow-sm' : 'text-ink-muted hover:text-ink-secondary'
+        }`}
+      >
+        +
+      </button>
     </div>
   )
 }

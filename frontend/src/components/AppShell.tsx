@@ -77,6 +77,11 @@ export default function AppShell() {
   // version list is known and the marker is not in it, drop the marker: the
   // workspace falls back to a plain draft.
   const pkey = isPortfolioKey(portfolio) ? portfolio : null
+  // An ingested book has no entry in the persisted per-book records; give it
+  // one before any surface reads it. Idempotent, so the three synthetic
+  // books pass through untouched.
+  const ensureBook = useUi((s) => s.ensureBook)
+  useEffect(() => { if (pkey) ensureBook(pkey) }, [pkey, ensureBook])
   const loadedMark = useUi((s) => (pkey ? s.loaded[pkey] : null))
   const setLoadedMark = useUi((s) => s.setLoaded)
   const vlist = useQuery({ queryKey: ['versions', portfolio],

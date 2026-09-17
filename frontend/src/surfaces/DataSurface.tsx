@@ -15,7 +15,7 @@ import { accent, ink, mode, status } from '../design/tokens'
  *  not narrate the chart, and it does not explain how the demonstration panel
  *  was produced: neither is information the reader can act on. The marked month
  *  differs per book because the cycle that drives each one differs. */
-const STORY: Record<string, { caption: string; mark: [string, string] }> = {
+const STORY: Record<string, { caption: string; mark: [string, string] | null }> = {
   consumer: {
     caption:
       'Monthly default rate by performance date. Default is 90+ days past due '
@@ -46,7 +46,15 @@ export default function DataSurface() {
 
   const info = pf.data?.find((p) => p.key === portfolio)
 
-  const story = STORY[portfolio] ?? STORY.consumer
+  // Ingested books have no scripted story: the caption states the definition
+  // the uploader gave, and nothing is marked because no month is known to
+  // matter. Falling back to a synthetic book's caption would misstate the
+  // default definition.
+  const story = STORY[portfolio] ?? {
+    caption: `Monthly default rate by performance date. `
+      + `${info?.target.description ?? 'Default as defined at upload'}.`,
+    mark: null,
+  }
 
   const rateOption = useMemo(() => {
     if (!ts.data) return null
@@ -74,7 +82,9 @@ export default function DataSurface() {
       series: [
         {
           ...lineSeries({ name: 'Realized default rate', data: pts, color: accent(), area: true }),
-          markLine: markLineAt(story.mark[0], story.mark[1], status.serious),
+          ...(story.mark
+            ? { markLine: markLineAt(story.mark[0], story.mark[1], status.serious) }
+            : {}),
         },
       ],
     }

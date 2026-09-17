@@ -140,13 +140,16 @@ def check_integrity(panel: pd.DataFrame, spec: PortfolioSpec) -> list[dict]:
         else f"{gaps:,} breaks in the monthly sequence. A missing month is not the "
              f"same as a censored account and will bias a hazard model.", gaps)
 
-    last = s.groupby("account_id")["performance_date"].transform("max")
-    term = s["terminal_event"].isin(["default", "payoff", "matured"])
-    after = int((term & (s["performance_date"] != last)).sum())
-    add("No rows after a terminal event", after == 0, "critical",
-        "Accounts stop at their terminal event." if after == 0
-        else f"{after:,} rows recorded after a terminal event. These inflate the "
-             f"denominator and depress every rate.", after)
+    # Ingested tapes usually carry no terminal_event column; the target-fires-
+    # once check below still catches survival past a default.
+    if "terminal_event" in s.columns:
+        last = s.groupby("account_id")["performance_date"].transform("max")
+        term = s["terminal_event"].isin(["default", "payoff", "matured"])
+        after = int((term & (s["performance_date"] != last)).sum())
+        add("No rows after a terminal event", after == 0, "critical",
+            "Accounts stop at their terminal event." if after == 0
+            else f"{after:,} rows recorded after a terminal event. These inflate the "
+                 f"denominator and depress every rate.", after)
 
     neg = int((panel["current_balance"] < 0).sum())
     add("Balances are non-negative", neg == 0, "serious",

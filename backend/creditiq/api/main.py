@@ -2294,6 +2294,74 @@ def lgd_selection_results(key: str, config: str = Query(...)):
     })
 
 
+# ── loan tape ingestion ──────────────────────────────────────────────────────
+# A validation gate, not a preparation engine: the file must already be a
+# panel. See creditiq/data/tapes.py and docs/CECL-FORK.md for the boundary.
+from fastapi import File, Form, UploadFile                              # noqa: E402
+
+from ..data import tapes as tapemod                                     # noqa: E402
+
+
+@app.get("/api/tapes/schema")
+def tapes_schema():
+    return {"schema": tapemod.SCHEMA, "required": tapemod.REQUIRED}
+
+
+@app.get("/api/tapes")
+def tapes_list():
+    return _jsonable({"tapes": tapemod.records()})
+
+
+@app.post("/api/tapes/inspect")
+async def tapes_inspect(file: UploadFile = File(...)):
+    """Stage the upload and report its columns beside the canonical schema,
+    with a suggested mapping. Nothing is registered here."""
+    content = await file.read()
+    if len(content) > 512 * 1024 * 1024:
+        raise HTTPException(400, "file over 512 MB — export a parquet, or "
+                                 "trim the tape")
+    try:
+        return _jsonable(tapemod.stage(file.filename or "tape.csv", content))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+class TapeIngestRequest(BaseModel):
+    token: str
+    key: str
+    label: str
+    mapping: dict[str, str | None] = {}
+    dpd_state: int = 4
+    ead_method: str = "amortizing"
+    oot_from: str = "2023-01-01"
+
+
+@app.post("/api/tapes/ingest")
+def tapes_ingest(req: TapeIngestRequest):
+    try:
+        record = tapemod.ingest(
+            token=req.token, key=req.key, label=req.label,
+            mapping={k: v for k, v in req.mapping.items() if v},
+            dpd_state=req.dpd_state, ead_method=req.ead_method,
+            oot_from=req.oot_from)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    # The new book is data the rest of the process has never seen.
+    store.clear()
+    rollupsvc.clear_cache()
+    return _jsonable(record)
+
+
+@app.delete("/api/tapes/{key}")
+def tapes_delete(key: str):
+    if not tapemod.remove(key):
+        raise HTTPException(404, f"no ingested tape named {key!r} — synthetic "
+                                 "books cannot be removed here")
+    store.clear()
+    rollupsvc.clear_cache()
+    return {"deleted": key}
+
+
 # In development the frontend runs on Vite and proxies /api here. In the
 # container the built assets are copied in and served by this app, so
 # `docker compose up` starts ONE thing on ONE port and there is no CORS step, no

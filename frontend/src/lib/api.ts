@@ -67,9 +67,11 @@ async function get<T>(path: string, params?: Record<string, string | number | un
 }
 
 export const PORTFOLIO_KEYS = ['consumer', 'mortgage', 'cre'] as const
-export type PortfolioKey = (typeof PORTFOLIO_KEYS)[number]
+/** A book key. The three synthetic books are compiled in; ingested tapes add
+ *  more at runtime, so this is a shape check, not a member check. */
+export type PortfolioKey = string
 export const isPortfolioKey = (k: string | undefined): k is PortfolioKey =>
-  !!k && (PORTFOLIO_KEYS as readonly string[]).includes(k)
+  !!k && /^[a-z][a-z0-9_]{1,23}$/.test(k)
 
 export interface DataInitStatus {
   ready: boolean
@@ -77,6 +79,33 @@ export interface DataInitStatus {
   state: 'idle' | 'running' | 'done' | 'error'
   step: number; total: number; label: string
   elapsed_s: number; eta_s: number | null; error: string
+}
+
+export interface TapeSchemaItem {
+  name: string; role: string; required: boolean; about: string
+}
+
+export interface TapeInspection {
+  token: string
+  filename: string
+  n_rows: number
+  n_columns: number
+  columns: { name: string; dtype: string; n_unique: number; sample: string[] }[]
+  schema: TapeSchemaItem[]
+  suggested_mapping: Record<string, string | null>
+  missing_required: string[]
+}
+
+export interface TapeRecord {
+  key: string; label: string
+  target: { column: string; description: string; dpd_state: number; label: string }
+  ead_method: string
+  default_oot_from: string
+  mapping: Record<string, string>
+  fingerprint: string
+  ingested_at: string
+  n_rows: number; n_accounts: number
+  warnings: string[]
 }
 
 export interface PortfolioInfo {
@@ -880,6 +909,23 @@ export const api = {
   /** Fire-and-forget: warm one book's frame server-side while the user reads. */
   prepare: (k: string) => post<{ status: string }>(`/portfolios/${k}/prepare`, {}),
   portfolios: () => get<PortfolioInfo[]>('/portfolios'),
+
+  // ── loan tape ingestion ────────────────────────────────────────────────
+  tapeSchema: () => get<{ schema: TapeSchemaItem[]; required: string[] }>('/tapes/schema'),
+  tapeInspect: async (file: File): Promise<TapeInspection> => {
+    const body = new FormData()
+    body.append('file', file)
+    const r = await fetch('/api/tapes/inspect', { method: 'POST', body })
+    if (!r.ok) throw new Error(errorText(await r.json().catch(() => null), r.statusText))
+    return r.json()
+  },
+  tapeIngest: (req: { token: string; key: string; label: string
+                      mapping: Record<string, string | null>
+                      dpd_state: number; ead_method: string; oot_from: string }) =>
+    post<TapeRecord>('/tapes/ingest', req, 180_000),
+  tapes: () => get<{ tapes: TapeRecord[] }>('/tapes'),
+  tapeDelete: (key: string) =>
+    fetch(`/api/tapes/${key}`, { method: 'DELETE' }).then((r) => r.json()),
   dataHealth: (k: string) => get<DataHealth>(`/portfolios/${k}/health`),
   timeseries: (k: string, by?: string) => get<TimeseriesPoint[]>(`/portfolios/${k}/timeseries`, { by }),
   sample: (k: string, limit = 200, offset = 0) =>

@@ -3,7 +3,8 @@ import raw from './tokens.json'
 /** The validated palette, typed. `tokens.json` is the single source of truth and
  *  the API serves the same file, so the two cannot drift silently. */
 export type Mode = 'light' | 'dark'
-export type PortfolioKey = 'consumer' | 'mortgage' | 'cre'
+/** Any book key — the three synthetic books or an ingested tape. */
+export type PortfolioKey = string
 
 export const tokens = raw as typeof raw
 
@@ -45,8 +46,17 @@ export function series(i: number, m: Mode = mode()): string {
  *  two marks can end up side by side there. */
 export const SERIES_CAP = { adjacent: 5, allPairs: 3 } as const
 
+// Ingested books have no token entry; they all take series-4 (sky), which the
+// palette validator cleared beside the three fixed book colours.
+const INGESTED_BOOK = { slot: 4, light: '#0091db', dark: '#0091db' }
+
+export const portfolioToken = (k: string): { slot: number; light: string; dark: string } =>
+  (tokens.portfolios as unknown as
+    Record<string, { slot: number; light: string; dark: string }>)[k]
+  ?? INGESTED_BOOK
+
 export const portfolioColor = (k: PortfolioKey, m: Mode = mode()) =>
-  tokens.portfolios[k][m]
+  portfolioToken(k)[m]
 
 export const ink = (m: Mode = mode()) => tokens.ink[m]
 export const chrome = (m: Mode = mode()) => tokens.chrome[m]

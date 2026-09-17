@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
 import type { FitRequest, LgdSpecPayload, PortfolioKey, SelectionConfigPayload } from './api'
-import { type PdSpec, emptyPdSpecs } from './spec'
+import { type PdSpec, emptyPdSpec, emptyPdSpecs } from './spec'
 
 type Theme = 'dark' | 'light'
 
@@ -209,6 +209,11 @@ interface UiState {
   setLoaded: (p: PortfolioKey, v: LoadedModel | null) => void
   setOrigin: (p: PortfolioKey, o: DraftOrigin | null) => void
   setForkNote: (p: PortfolioKey, n: ForkNote | null) => void
+  /** Give a book that did not exist when this store was born — an ingested
+   *  tape — an entry in every per-book record. The three synthetic keys are
+   *  compiled into the initial state; a fourth arrives at runtime, and a
+   *  selector reading an absent key would crash the surface. Idempotent. */
+  ensureBook: (p: PortfolioKey) => void
   /** Called before an edit while a saved model is open. Clears the marker and
    *  returns its hash, which becomes the parent of the new specification. */
   forkFromLoaded: (p: PortfolioKey) => string | null
@@ -395,6 +400,24 @@ export const useUi = create<UiState>()(
       })),
       setOrigin: (p, o) => set((s) => ({ origin: { ...s.origin, [p]: o } })),
       setForkNote: (p, n) => set((s) => ({ forkNote: { ...s.forkNote, [p]: n } })),
+      ensureBook: (p) => {
+        const s = get()
+        if (s.pdSpec[p] !== undefined) return
+        set((st) => ({
+          pdSpec: { ...st.pdSpec, [p]: emptyPdSpec(p) },
+          fitted: { ...st.fitted, [p]: null },
+          fittedLgd: { ...st.fittedLgd, [p]: null },
+          loaded: { ...st.loaded, [p]: null },
+          origin: { ...st.origin, [p]: null },
+          forkNote: { ...st.forkNote, [p]: null },
+          projected: { ...st.projected, [p]: null },
+          draft: { ...st.draft, [p]: null },
+          selectionRun: { ...st.selectionRun, [p]: null },
+          lgdSelectionRun: { ...st.lgdSelectionRun, [p]: null },
+          selectionDraft: { ...st.selectionDraft, [p]: null },
+          macroShortlist: { ...st.macroShortlist, [p]: { pd: [], lgd: [] } },
+        }))
+      },
       forkFromLoaded: (p) => {
         const cur = get().loaded[p]
         if (cur) set((s) => ({ loaded: { ...s.loaded, [p]: null } }))

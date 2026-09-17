@@ -718,8 +718,13 @@ function Welcome() {
         as named, comparable versions. Nothing here is Apollo FIG data.
       </p>
 
-      <div className="mt-8 grid gap-3 sm:grid-cols-3">
-        {(books.data ?? []).map((p) => (
+      {/* Two ways in, stated as a choice rather than discovered later:
+          the synthetic demonstration books, or the user's own tape. */}
+      <h2 className="mt-8 text-tiny uppercase tracking-wider text-ink-muted">
+        Start in demo mode
+      </h2>
+      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+        {(books.data ?? []).filter((p) => ['consumer', 'mortgage', 'cre'].includes(p.key)).map((p) => (
           <button key={p.key} onClick={() => nav(`/${p.key}/data`)}
             className="rounded-card border border-hairline bg-raised px-4 py-4 text-left transition-colors hover:border-accent">
             <span className="flex items-center gap-2 text-sm font-semibold text-ink">
@@ -737,6 +742,24 @@ function Welcome() {
           </button>
         ))}
       </div>
+
+      <h2 className="mt-6 text-tiny uppercase tracking-wider text-ink-muted">
+        Or start from your own data
+      </h2>
+      <button onClick={() => nav('/tapes')}
+        className="mt-3 block w-full rounded-card border border-dashed border-hairline bg-transparent px-4 py-4 text-left transition-colors hover:border-accent">
+        <span className="flex items-center gap-2 text-sm font-semibold text-ink">
+          <span aria-hidden className="h-2 w-2 rounded-full border border-ink-muted" />
+          Load a loan tape
+        </span>
+        <span className="mt-1.5 block text-xs text-ink-secondary">
+          A CSV or parquet panel at monthly account grain. Map its columns onto
+          the canonical schema and it becomes a book like the three above.
+        </span>
+        <span className="mt-3 inline-block text-xs font-medium text-accent">
+          Map columns and add a book
+        </span>
+      </button>
 
       <div className="mt-10">
         <h2 className="text-tiny uppercase tracking-wider text-ink-muted">The workflow</h2>

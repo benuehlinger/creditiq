@@ -19,11 +19,24 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from .data import tapes
 from .data.portfolios import PORTFOLIOS
 from .data.spec import PortfolioSpec
 
 DATA = Path(__file__).resolve().parents[2] / "data" / "synthetic"
 _BUILD_REPORT = DATA / "build_report.json"
+
+# Ingested books re-register on import, so a restart finds the same books an
+# upload created. Synthetic books need no such step: they are compiled in.
+tapes.register_all()
+
+
+def _panel_dir(key: str) -> Path:
+    """Where this book's parquet lives: ingested tapes beside the synthetic
+    books, resolved per key so every reader below stays one code path."""
+    if (tapes.TAPES_DIR / f"{key}_panel.parquet").exists():
+        return tapes.TAPES_DIR
+    return DATA
 
 # The mtime of the build report the caches were filled against. The panels can
 # be rebuilt UNDER a running server — `make data` in another terminal, or the
@@ -62,7 +75,8 @@ class Portfolio:
 
 
 def available() -> list[str]:
-    return [k for k in PORTFOLIOS if (DATA / f"{k}_panel.parquet").exists()]
+    return [k for k in PORTFOLIOS
+            if (_panel_dir(k) / f"{k}_panel.parquet").exists()]
 
 
 def load(key: str) -> Portfolio:
@@ -74,14 +88,18 @@ def load(key: str) -> Portfolio:
 def _load(key: str) -> Portfolio:
     if key not in PORTFOLIOS:
         raise KeyError(f"unknown portfolio {key!r}")
-    p = pd.read_parquet(DATA / f"{key}_panel.parquet")
-    a = pd.read_parquet(DATA / f"{key}_accounts.parquet")
+    d = _panel_dir(key)
+    p = pd.read_parquet(d / f"{key}_panel.parquet")
+    a = pd.read_parquet(d / f"{key}_accounts.parquet")
     for df in (p, a):
         drop = [c for c in df.columns if c.startswith("_truth")]
         if drop:
             df.drop(columns=drop, inplace=True)
     p["performance_date"] = pd.to_datetime(p["performance_date"])
-    a["origination_date"] = pd.to_datetime(a["origination_date"])
+    # An ingested tape may carry no origination date at all; the synthetic
+    # books always do. Parse what exists, require nothing extra here.
+    if "origination_date" in a.columns:
+        a["origination_date"] = pd.to_datetime(a["origination_date"])
     return Portfolio(PORTFOLIOS[key], _compact(p), _compact(a))
 
 

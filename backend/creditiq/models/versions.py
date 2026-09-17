@@ -48,7 +48,14 @@ def data_fingerprint(portfolio: str) -> str:
     try:
         rep = json.loads(BUILD_REPORT.read_text())[portfolio]
     except Exception:                                                   # noqa: BLE001
-        return ""
+        # Not a synthetic book. An ingested tape carries its own content
+        # fingerprint in the tapes registry; read it from disk directly so
+        # this module stays import-cycle-free.
+        tape = BUILD_REPORT.parents[1] / "tapes" / f"{portfolio}.json"
+        try:
+            return json.loads(tape.read_text()).get("fingerprint", "")
+        except Exception:                                               # noqa: BLE001
+            return ""
     # `content` is a digest of what the columns hold. Without it the fingerprint
     # only counted rows, accounts, defaults and the window, all of which survive
     # a rescaling of the money: rebalancing the books moved the mean commercial

@@ -8,6 +8,7 @@ import MacroSurface from './surfaces/MacroSurface'
 import SelectionSurface from './surfaces/SelectionSurface'
 import ScenarioSurface from './surfaces/ScenarioSurface'
 import VersionsSurface from './surfaces/VersionsSurface'
+import TapeSurface from './surfaces/TapeSurface'
 import RollUpSurface from './surfaces/RollUpSurface'
 import BrandSurface from './surfaces/BrandSurface'
 
@@ -29,6 +30,7 @@ export default function App() {
             route passes through this guard first. */}
         <Route path="/" element={<Navigate to="/rollup" replace />} />
         <Route path="/rollup" element={<RollUpSurface />} />
+        <Route path="/tapes" element={<TapeSurface />} />
         <Route path="/brand" element={<BrandSurface />} />
         <Route path="/:portfolio" element={<KnownPortfolio />}>
           <Route path="data" element={<DataSurface />} />

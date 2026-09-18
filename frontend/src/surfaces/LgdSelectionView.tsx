@@ -9,7 +9,7 @@ import { num, pct } from '../lib/format'
 import { Card, CardHead, EmptyState, Field, Notice } from '../components/ui'
 import { CoreConstruction, RunningCard } from './SelectionSurface'
 
-/** The severity search: the LGD half of the Selection stage.
+/** The severity search: the LGD half of the Screen stage.
  *
  *  Same shape as the PD search — candidates and rules, a server-narrated run,
  *  a ranked board — with the severity yardsticks: out-of-time MAE in loss
@@ -36,7 +36,7 @@ export default function LgdSelectionView({ pk, view }: {
   const defaults = useQuery({ queryKey: ['lgdscreen', pk, ''],
                               queryFn: () => api.lgdScreen(pk, []) })
   // Driver candidates are tape columns only: macro terms reach the search
-  // through the Macro surface's LGD shortlist, never as level columns.
+  // through the MEV surface's LGD shortlist, never as level columns.
   const numeric = (defaults.data?.rows ?? [])
     .filter((c) => !c.macro && c.kind === 'numeric')
     .sort((a, b) => Math.abs(b.spearman ?? 0) - Math.abs(a.spearman ?? 0))
@@ -118,7 +118,7 @@ export default function LgdSelectionView({ pk, view }: {
       drivers: spec.drivers ?? [], categoricals: spec.categoricals ?? [],
       treatments: spec.treatments ?? {}, edges: spec.edges ?? {},
       knots: spec.knots ?? {}, n_knots: spec.n_knots, max_bins: spec.max_bins,
-    }), 'the severity search selection',
+    }), 'the severity screening selection',
     { drivers: [], categoricals: [] })
     nav(`/${pk}/lgd`)
   }
@@ -133,7 +133,7 @@ export default function LgdSelectionView({ pk, view }: {
                      onCancel={() => api.lgdSelectionCancel(pk)} />
       )}
       {st?.state === 'error' && (
-        <Notice severity="critical" label="The severity search failed">
+        <Notice severity="critical" label="The severity screening failed">
           {st.error}. The configuration is unchanged, so fix the cause and run
           it again.
         </Notice>
@@ -147,7 +147,7 @@ export default function LgdSelectionView({ pk, view }: {
             subtitle={defaults.data
               ? `${num(defaults.data.n_defaults)} resolved defaults on this book · ranked by |Spearman| with realised severity`
               : undefined}
-            caption="What the severity stepwise search may build the driver core from. Macro terms come from the Macro surface's LGD shortlist, never from this list." />
+            caption="What the severity stepwise screening may build the driver core from. Macro terms come from the MEV surface's LGD shortlist, never from this list." />
           {defaults.isError && (
             <p className="px-4 pb-3 text-xs" style={{ color: 'var(--status-critical)' }}>
               {String((defaults.error as Error).message)}
@@ -206,10 +206,10 @@ export default function LgdSelectionView({ pk, view }: {
 
         <div className="space-y-3">
           <Card>
-            <CardHead title="Search rules"
-              caption="The same discipline as the PD search: the VIF cap applies to core entry, macro terms come 1 to 3 per model from the shortlist, and the headline is out-of-time MAE in loss points." />
+            <CardHead title="Screening rules"
+              caption="The same discipline as the PD screening: the VIF cap applies to core entry, macro terms come 1 to 3 per model from the shortlist, and the headline is out-of-time MAE in loss points." />
             <div className="grid grid-cols-2 gap-3 px-4 pb-4">
-              <Field label="Macro terms per model">
+              <Field label="MEV terms per model">
                 <div className="flex items-center gap-1">
                   <select value={minMevs} onChange={(e) => setMinMevs(+e.target.value)}
                     className="rounded-ctl border border-hairline bg-surface px-1.5 py-1 text-xs">
@@ -227,12 +227,12 @@ export default function LgdSelectionView({ pk, view }: {
                   onChange={(e) => setOotFrom(e.target.value)}
                   className="w-full rounded-ctl border border-hairline bg-surface px-1.5 py-1 text-xs" />
               </Field>
-              <Field label="Macro screen p">
+              <Field label="MEV screen p">
                 <input type="number" step="0.01" value={screenP}
                   onChange={(e) => setScreenP(+e.target.value)}
                   className="w-full rounded-ctl border border-hairline bg-surface px-1.5 py-1 text-xs" />
               </Field>
-              <Field label="Macro pair correlation cap">
+              <Field label="MEV pair correlation cap">
                 <input type="number" step="0.05" value={corrCap}
                   onChange={(e) => setCorrCap(+e.target.value)}
                   className="w-full rounded-ctl border border-hairline bg-surface px-1.5 py-1 text-xs" />
@@ -259,12 +259,12 @@ export default function LgdSelectionView({ pk, view }: {
           </Card>
 
           <Card>
-            <CardHead title="Macro terms, from your LGD shortlist" />
+            <CardHead title="MEV terms, from your LGD shortlist" />
             <div className="px-4 pb-4">
               {shortlist.length === 0 ? (
                 <p className="text-xs text-ink-secondary">
-                  Nothing is shortlisted for LGD on the Macro surface yet. The
-                  search needs at least one term there: open the Macro
+                  Nothing is shortlisted for LGD on the MEV surface yet. The
+                  screening needs at least one term there: open the MEV
                   surface, rank against LGD, and shortlist the terms that
                   should reach severity.
                 </p>
@@ -283,12 +283,12 @@ export default function LgdSelectionView({ pk, view }: {
                   disabled={running || !(picked?.length) || shortlist.length === 0}
                   onClick={() => start.mutate()}
                   title={shortlist.length === 0
-                    ? 'The search needs at least one macro term from the LGD shortlist.'
+                    ? 'The screening needs at least one macro term from the LGD shortlist.'
                     : !(picked?.length)
                       ? 'Pick at least one severity driver candidate.'
                       : undefined}
                   className="rounded-ctl bg-accent px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40">
-                  {running ? 'A search is running' : 'Run the severity search'}
+                  {running ? 'A screening is running' : 'Run the severity screening'}
                 </button>
                 {start.isError && (
                   <span className="text-tiny" style={{ color: 'var(--status-critical)' }}>
@@ -318,7 +318,7 @@ export default function LgdSelectionView({ pk, view }: {
                 <EmptyState title="These results are no longer on this machine"
                   action={<button onClick={() => start.mutate()}
                     className="rounded-ctl bg-accent px-3 py-1.5 text-xs font-semibold text-white">
-                    Run the search again</button>}>
+                    Run the screening again</button>}>
                   {String((results.error as Error).message)}
                 </EmptyState>
               </div>
@@ -530,7 +530,7 @@ export default function LgdSelectionView({ pk, view }: {
       {view === 'leaderboard' && !run && !running && (
         <Card>
           <div className="px-4 py-6">
-            <EmptyState title="No severity search has run on this book">
+            <EmptyState title="No severity screening has run on this book">
               Pick the driver candidates on the Setup tab, check the LGD
               shortlist, and run the search. The board appears here.
             </EmptyState>

@@ -1198,7 +1198,7 @@ export interface SelectionConfigPayload {
   candidates: SelectionCandidatePayload[]
   cores?: string[]
   expert_core?: string[] | null
-  /** Macro terms as `key@transform@lag`, taken from the Macro surface's
+  /** Macro terms as `key@transform@lag`, taken from the MEV surface's
    *  shortlist. The search enumerates combinations of these; it never sweeps
    *  the transformation library itself. */
   mev_terms?: string[]

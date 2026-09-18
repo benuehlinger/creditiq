@@ -61,7 +61,7 @@ class LgdSelectionConfig:
     candidates: list[str] = field(default_factory=list)
     cores: list[str] = field(default_factory=lambda: ["stepwise", "strong"])
     expert_core: list[str] | None = None
-    """Macro terms as `key@transform@lag`, verbatim from the Macro surface's
+    """Macro terms as `key@transform@lag`, verbatim from the MEV surface's
     LGD shortlist — the search never sweeps the transformation library."""
     mev_terms: list[str] = field(default_factory=list)
     rules: SelectionRules = field(default_factory=SelectionRules)
@@ -655,10 +655,10 @@ def run_search(cfg: LgdSelectionConfig, progress=None, cancel=None,
                       >= pd.Timestamp(cfg.oot_from)]
     if not cfg.mev_terms:
         raise ValueError(
-            "No macro terms are shortlisted for LGD on the Macro surface. "
+            "No macro terms are shortlisted for LGD on the MEV surface. "
             "Every emitted severity model must carry a macro term, so there "
             "is nothing to enumerate. Shortlist terms against the LGD target "
-            "on the Macro surface first.")
+            "on the MEV surface first.")
     cores = build_cores(cfg, train, progress=stage(1), cancel=cancel)
     if not cores:
         raise ValueError(

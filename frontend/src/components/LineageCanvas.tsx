@@ -220,8 +220,8 @@ export default function LineageCanvas({ data }: { data: LineageGraph }) {
                     )}
                     {fromSearch && (
                       <span className="truncate rounded-full border border-hairline px-1.5 text-micro text-ink-muted"
-                            title={`Taken from the search leaderboard as ${node.origin!.name}`}>
-                        from search{node.origin!.rank != null
+                            title={`Taken from the screening leaderboard as ${node.origin!.name}`}>
+                        from screening{node.origin!.rank != null
                           ? ` · rank ${node.origin!.rank}` : ''}
                       </span>
                     )}
@@ -291,7 +291,7 @@ export default function LineageCanvas({ data }: { data: LineageGraph }) {
                 </p>
               ) : detail.origin?.name ? (
                 <p className="leading-relaxed text-ink-secondary">
-                  Taken from the search leaderboard as{' '}
+                  Taken from the screening leaderboard as{' '}
                   <span className="font-medium text-ink">{detail.origin.name}</span>
                   {detail.origin.rank != null && <> at rank {detail.origin.rank}</>}
                   {detail.origin.config_hash && (

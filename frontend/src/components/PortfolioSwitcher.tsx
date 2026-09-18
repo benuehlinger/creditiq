@@ -21,7 +21,7 @@ export default function PortfolioSwitcher() {
   const { data } = useQuery({ queryKey: ['portfolios'], queryFn: api.portfolios })
   const books = useBookStates()
 
-  const surface = loc.pathname.split('/')[2] ?? 'data'
+  const surface = loc.pathname.split('/')[2] ?? 'panel'
 
   if (!data) {
     return <div className="skeleton h-7 w-64" />

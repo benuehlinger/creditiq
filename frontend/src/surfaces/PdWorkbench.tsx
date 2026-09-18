@@ -119,7 +119,7 @@ export default function PdWorkbench() {
         title="Candidates"
         subtitle={`${picked.length} variable${picked.length === 1 ? '' : 's'} · ${spec.mevs.length} macro term${spec.mevs.length === 1 ? '' : 's'} in the specification`}
         statLabel="Information value for an internal variable; correlation with the target for a macro term."
-        macroNote="Only Federal Reserve supervisory variables are offered, because they are the only ones with a published forward path. Build transformed and lagged candidates on the Macro stage."
+        macroNote="Only Federal Reserve supervisory variables are offered, because they are the only ones with a published forward path. Build transformed and lagged candidates on the MEV stage."
       />
 
       <div className="min-w-0 space-y-3">

@@ -31,7 +31,7 @@ async function settle(page: Page, ms = 2000) {
  *  app with an empty in-memory query cache — so a lap of gotos would refetch
  *  legitimately and blame the app for the test's own navigation style. */
 const NAV: Record<string, string> = {
-  data: 'Data', macro: 'Macro', select: 'Selection', pd: 'PD model',
+  panel: 'Panel', mev: 'MEV', screen: 'Screen', pd: 'PD model',
   lgd: 'LGD model', scenarios: 'Scenarios', versions: 'Versions',
 }
 async function click(page: Page, stage: string) {
@@ -51,13 +51,13 @@ test('switching stages costs zero computation once warm', async ({ page }) => {
   await click(page, 'scenarios')
   await page.getByText(/Lifetime ECL/i).waitFor({ timeout: 90_000 })
   await page.waitForLoadState('networkidle')
-  for (const s of ['data', 'macro', 'versions']) {
+  for (const s of ['panel', 'mev', 'versions']) {
     await click(page, s); await settle(page)
   }
   // Measured lap: every identity is now computed and cached. The contract
   // says navigation is lookups only.
   const box = countCompute(page)
-  for (const s of ['data', 'macro', 'select', 'pd', 'lgd', 'scenarios', 'versions', 'pd', 'scenarios']) {
+  for (const s of ['panel', 'mev', 'screen', 'pd', 'lgd', 'scenarios', 'versions', 'pd', 'scenarios']) {
     await click(page, s)
     await settle(page, 2500)
   }
@@ -140,7 +140,7 @@ test('start from scratch clears every draft, and it STAYS cleared', async ({ pag
   // that valve. State is planted by hand (not addInitScript, which re-runs
   // on every load and would replant it after the reset).
   const { fit, lgd } = await fitViaApi()
-  await page.goto('/consumer/data')
+  await page.goto('/consumer/panel')
   await page.evaluate(
     (s) => localStorage.setItem('creditiq-ui', JSON.stringify(s)),
     storeStateFor(fit, lgd))
@@ -181,11 +181,11 @@ test('an automated search is server state: leaving and returning resumes it', as
   }).then((r) => r.json())
   expect(started.state).toBe('running')
   try {
-    await page.goto('/consumer/select')
+    await page.goto('/consumer/screen')
     await expect(page.getByText(/Stage \d of 4/)).toBeVisible({ timeout: 15_000 })
-    await click(page, 'data')
+    await click(page, 'panel')
     await settle(page)
-    await click(page, 'select')
+    await click(page, 'screen')
     // still the SAME run: the status endpoint is the single source of truth
     const status = await fetch('http://localhost:8000/api/selection/consumer/status')
       .then((r) => r.json())
@@ -223,7 +223,7 @@ test('the leaderboard is a lookup, never a computation', async ({ page }) => {
   expect(state).toBe('done')
 
   // plant the pointer the surface reads, the way a completed in-app run would
-  await page.goto('/consumer/data')
+  await page.goto('/consumer/panel')
   await page.evaluate((cfgHash) => {
     const raw = JSON.parse(localStorage.getItem('creditiq-ui')
       ?? '{"state":{},"version":4}')
@@ -234,12 +234,12 @@ test('the leaderboard is a lookup, never a computation', async ({ page }) => {
     raw.version = 4
     localStorage.setItem('creditiq-ui', JSON.stringify(raw))
   }, started.config_hash)
-  await page.goto('/consumer/select?view=leaderboard')
+  await page.goto('/consumer/screen?view=leaderboard')
   await page.getByText('Leaderboard', { exact: true }).first().waitFor({ timeout: 30_000 })
   await settle(page, 2000)
 
   const box = countCompute(page)
-  for (const s of ['data', 'select', 'macro', 'select']) {
+  for (const s of ['panel', 'screen', 'mev', 'screen']) {
     await click(page, s)
     await settle(page, 2000)
   }

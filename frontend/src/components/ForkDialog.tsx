@@ -46,7 +46,7 @@ export default function ForkDialog() {
       <div className="w-full max-w-md rounded-card border border-hairline bg-raised p-5"
            onClick={(e) => e.stopPropagation()}>
         <h3 className="text-sm font-semibold text-ink">
-          {loaded ? 'This creates a new Model ID' : 'This revises a search result'}
+          {loaded ? 'This creates a new Model ID' : 'This revises a screening result'}
         </h3>
         <p className="mt-2 text-xs leading-relaxed text-ink-secondary">
           {loaded ? (

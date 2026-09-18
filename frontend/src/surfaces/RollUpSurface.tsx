@@ -262,7 +262,7 @@ export default function RollUpSurface() {
                         ))}
                       </select>
                     ) : (
-                      <button onClick={() => nav(`/${u.portfolio}/data`)}
+                      <button onClick={() => nav(`/${u.portfolio}/panel`)}
                         className="w-full rounded-ctl bg-accent px-3 py-1.5 text-xs font-semibold text-white">
                         Build a model on this book
                       </button>
@@ -364,8 +364,8 @@ export default function RollUpSurface() {
               // picker inside stops the click from bubbling, so choosing a
               // model never navigates.
               <div key={p.portfolio} role="link" tabIndex={0}
-                onClick={() => nav(champ ? `/${p.portfolio}/versions` : `/${p.portfolio}/data`)}
-                onKeyDown={(e) => { if (e.key === 'Enter') nav(champ ? `/${p.portfolio}/versions` : `/${p.portfolio}/data`) }}
+                onClick={() => nav(champ ? `/${p.portfolio}/versions` : `/${p.portfolio}/panel`)}
+                onKeyDown={(e) => { if (e.key === 'Enter') nav(champ ? `/${p.portfolio}/versions` : `/${p.portfolio}/panel`) }}
                 title={`Open the ${p.label} workspace`}
                 className="flex cursor-pointer flex-col bg-surface p-4 transition-colors hover:bg-sunken">
                 <div className="flex items-center justify-between gap-2">
@@ -449,8 +449,8 @@ export default function RollUpSurface() {
             const options = data.available[u.portfolio] ?? []
             return (
               <div key={u.portfolio} role="link" tabIndex={0}
-                onClick={() => nav(`/${u.portfolio}/${options.length ? 'versions' : 'data'}`)}
-                onKeyDown={(e) => { if (e.key === 'Enter') nav(`/${u.portfolio}/data`) }}
+                onClick={() => nav(`/${u.portfolio}/${options.length ? 'versions' : 'panel'}`)}
+                onKeyDown={(e) => { if (e.key === 'Enter') nav(`/${u.portfolio}/panel`) }}
                 title={`Open the ${u.label} workspace`}
                 className="flex cursor-pointer flex-col bg-surface p-4 transition-colors hover:bg-sunken">
                 <div className="flex items-center justify-between gap-2">
@@ -485,7 +485,7 @@ export default function RollUpSurface() {
                       ))}
                     </select>
                   ) : (
-                    <button onClick={() => nav(`/${u.portfolio}/data`)}
+                    <button onClick={() => nav(`/${u.portfolio}/panel`)}
                       className="w-full rounded-ctl bg-accent px-3 py-1.5 text-xs font-semibold text-white">
                       Build a model on this book
                     </button>
@@ -698,8 +698,9 @@ function Welcome() {
   const nav = useNavigate()
   const books = useQuery({ queryKey: ['portfolios'], queryFn: api.portfolios })
   const steps: [string, string][] = [
-    ['Data', 'Review the book: composition, default history, data health.'],
-    ['Macro', 'Screen macroeconomic series and build transformed candidates.'],
+    ['Panel', 'Review the book: composition, default history, data health.'],
+    ['MEV', 'Rank macroeconomic series and build transformed candidates.'],
+    ['Screen', 'Run the automated screening: stepwise cores, macro combinations, a ranked board.'],
     ['PD model', 'Select variables, choose treatments, fit the default model.'],
     ['LGD model', 'Select severity drivers and fit the loss-given-default model.'],
     ['Scenarios', 'Project expected credit loss on the supervisory scenarios.'],
@@ -725,7 +726,7 @@ function Welcome() {
       </h2>
       <div className="mt-3 grid gap-3 sm:grid-cols-3">
         {(books.data ?? []).filter((p) => ['consumer', 'mortgage', 'cre'].includes(p.key)).map((p) => (
-          <button key={p.key} onClick={() => nav(`/${p.key}/data`)}
+          <button key={p.key} onClick={() => nav(`/${p.key}/panel`)}
             className="rounded-card border border-hairline bg-raised px-4 py-4 text-left transition-colors hover:border-accent">
             <span className="flex items-center gap-2 text-sm font-semibold text-ink">
               <span aria-hidden className="h-2 w-2 rounded-full"

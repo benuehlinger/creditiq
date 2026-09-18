@@ -19,9 +19,9 @@ import ErrorBoundary from './ErrorBoundary'
 interface Surface { to: string; label: string; key: string; stages?: { to: string; label: string }[] }
 
 const SURFACES: Surface[] = [
-  { to: 'data', label: 'Data', key: '1' },
-  { to: 'macro', label: 'Macro', key: '2' },
-  { to: 'select', label: 'Selection', key: '3' },
+  { to: 'panel', label: 'Panel', key: '1' },
+  { to: 'mev', label: 'MEV', key: '2' },
+  { to: 'screen', label: 'Screen', key: '3' },
   { to: 'pd', label: 'PD model', key: '4' },
   { to: 'lgd', label: 'LGD model', key: '5' },
   { to: 'scenarios', label: 'Scenarios', key: '6' },

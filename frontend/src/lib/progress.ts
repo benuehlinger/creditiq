@@ -204,11 +204,11 @@ export function computeProgress(inp: ProgressInput) {
     : 'current'
 
   const stages: Stage[] = [
-    { to: 'data', label: 'Data', parent: 'data', state: 'done' },
+    { to: 'panel', label: 'Panel', parent: 'panel', state: 'done' },
     {
       // Optional: a model can take the catalogue's level terms without ever
       // opening the search. An empty one is a choice, not an outstanding task.
-      to: 'macro', label: 'Macro', parent: 'macro', optional: true,
+      to: 'mev', label: 'MEV', parent: 'mev', optional: true,
       state: shortlisted > 0 ? 'done' : 'todo',
       note: shortlisted > 0 ? `${shortlisted} terms shortlisted`
                             : 'optional, none shortlisted',
@@ -216,7 +216,7 @@ export function computeProgress(inp: ProgressInput) {
     {
       // Optional: the automated search proposes candidates, it is not a gate.
       // A book built entirely by hand skips it without looking unfinished.
-      to: 'select', label: 'Selection', parent: 'select', optional: true,
+      to: 'screen', label: 'Screen', parent: 'screen', optional: true,
       state: (selection?.nModels ?? 0) > 0 ? 'done' : 'todo',
       note: (selection?.nModels ?? 0) > 0
         ? `${selection!.nModels} models on the leaderboard`

@@ -46,7 +46,7 @@ function rememberReviewer(name: string) {
 const fmtP = (p: number | null | undefined) =>
   p == null ? '—' : p < 0.001 ? '<0.001' : p.toFixed(3)
 
-/** `key@transform@lag` in the words the Macro surface uses. */
+/** `key@transform@lag` in the words the MEV surface uses. */
 const TF_LABEL: Record<string, string> = {
   level: '', diff: ' 1m chg', yoy: ' YoY', log_diff: ' log-diff',
   qoq_annualized: ' QoQ ann.', z_score: ' z', four_quarter_change: ' 12m chg',
@@ -90,7 +90,7 @@ export default function SelectionSurface() {
     prevState.current = st?.state
   }, [st?.state, st?.config_hash, pk])
 
-  // One Selection stage, two targets. The PD search and the severity search
+  // One Screen stage, two targets. The PD search and the severity search
   // share the surface: same discipline, different model and yardstick.
   const target = params.get('target') === 'lgd' ? 'lgd' : 'pd'
   const lgdRun = useUi((s) => s.lgdSelectionRun[pk])
@@ -136,13 +136,13 @@ export default function SelectionSurface() {
         : <>
       {running && <RunningCard st={st!} pk={pk} />}
       {st?.state === 'error' && (
-        <Notice severity="critical" label="The search failed">
+        <Notice severity="critical" label="The screening failed">
           {st.error}. The configuration is unchanged, so fix the cause and run
           it again.
         </Notice>
       )}
       {st?.state === 'cancelled' && (
-        <Notice severity="warning" label="The search was cancelled">
+        <Notice severity="warning" label="The screening was cancelled">
           Nothing was recorded. Run it again when ready.
         </Notice>
       )}
@@ -233,7 +233,7 @@ function SetupView({ pk, running, onStarted }: {
   // planted near-target column, and an automated search must not start with
   // it. Excluded is visible and one click to reverse, never silently dropped.
   // Numeric candidates default to CONTINUOUS; categoricals to WoE.
-  // The macro terms are the Macro surface's shortlist, verbatim.
+  // The macro terms are the MEV surface's shortlist, verbatim.
   useEffect(() => {
     if ((draft && draft.mev_terms) || !d) return
     setDraft(pk, {
@@ -299,7 +299,7 @@ function SetupView({ pk, running, onStarted }: {
     <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_380px]">
       <Card>
         <CardHead title="Candidate variables"
-          subtitle="What the stepwise search may build the borrower core from"
+          subtitle="What the stepwise screening may build the borrower core from"
           caption="Each variable enters with the treatment chosen here. A spline or a set of bin indicators enters and leaves the model as one block. Columns the leakage check flagged, and columns below the information-value null floor, arrive excluded; include one only deliberately."
           right={<button onClick={() => setDraft(pk, null)}
             title="Discard this setup and reseed it from the variable screen."
@@ -385,7 +385,7 @@ function SetupView({ pk, running, onStarted }: {
 
       <div className="space-y-3">
         <Card>
-          <CardHead title="Search rules"
+          <CardHead title="Screening rules"
             subtitle="Entry, exit and the macro constraints" />
           <div className="grid grid-cols-2 gap-3 px-4 pb-4">
             <Field label="Entry and exit rule"
@@ -398,7 +398,7 @@ function SetupView({ pk, running, onStarted }: {
                 <option value="p_value">p-value</option>
               </select>
             </Field>
-            <Field label="Macro terms per model"
+            <Field label="MEV terms per model"
                    hint="Every model carries at least one macro term, or the scenario engine cannot reach it. Three is the ceiling.">
               <div className="flex items-center gap-1 text-xs">
                 <select value={rules.min_mevs ?? 1}
@@ -414,14 +414,14 @@ function SetupView({ pk, running, onStarted }: {
                 </select>
               </div>
             </Field>
-            <Field label="Macro screen p"
+            <Field label="MEV screen p"
                    hint="A loose cut for single-term screening. Its job is to shrink hundreds of variants to dozens, not to pick the model.">
               <input type="number" step="0.01" min="0.01" max="0.5"
                 value={rules.mev_screen_p ?? 0.10}
                 onChange={(e) => setRule('mev_screen_p', Number(e.target.value))}
                 className="w-full rounded-ctl border border-hairline bg-surface px-2 py-1 text-xs tnum" />
             </Field>
-            <Field label="Macro pair correlation cap"
+            <Field label="MEV pair correlation cap"
                    hint="Two macro terms more correlated than this never enter one model together.">
               <input type="number" step="0.05" min="0.1" max="0.95"
                 value={rules.mev_corr_cap ?? 0.7}
@@ -501,16 +501,16 @@ function SetupView({ pk, running, onStarted }: {
             )}
             <div>
               <p className="mb-1.5 text-micro font-medium uppercase tracking-wide text-ink-muted"
-                 title="The search enumerates combinations of one to three from exactly these terms, one per underlying series. It never sweeps the transformation library; that sweep is the Macro surface's job.">
-                Macro terms, from your Macro shortlist
+                 title="The screening enumerates combinations of one to three from exactly these terms, one per underlying series. It never sweeps the transformation library; that sweep is the MEV surface's job.">
+                MEV terms, from your MEV shortlist
               </p>
               {offered.length === 0 ? (
                 <div className="mt-1.5 rounded-ctl bg-sunken px-3 py-2 text-tiny text-ink-secondary">
-                  Nothing is shortlisted for PD on the Macro surface yet.
+                  Nothing is shortlisted for PD on the MEV surface yet.
                   The search needs at least one term there.
-                  <button onClick={() => nav(`/${pk}/macro`)}
+                  <button onClick={() => nav(`/${pk}/mev`)}
                     className="ml-2 underline decoration-hairline hover:text-ink">
-                    Open the Macro surface
+                    Open the MEV surface
                   </button>
                 </div>
               ) : (
@@ -520,8 +520,8 @@ function SetupView({ pk, running, onStarted }: {
                     return (
                       <button key={t}
                         title={shortlist.includes(t)
-                          ? 'On the Macro shortlist. Click to leave it out of this search.'
-                          : 'No longer on the Macro shortlist; kept from this setup. Click to drop it.'}
+                          ? 'On the MEV shortlist. Click to leave it out of this screening.'
+                          : 'No longer on the MEV shortlist; kept from this setup. Click to drop it.'}
                         onClick={() => setDraft(pk, { ...draft,
                           mev_terms: on ? terms.filter((k) => k !== t)
                                         : [...terms, t] })}
@@ -536,8 +536,8 @@ function SetupView({ pk, running, onStarted }: {
               )}
               <p className="mt-1.5 text-micro text-ink-muted">
                 Shortlist more terms on the
-                {' '}<button onClick={() => nav(`/${pk}/macro`)}
-                  className="underline decoration-hairline hover:text-ink">Macro surface</button>;
+                {' '}<button onClick={() => nav(`/${pk}/mev`)}
+                  className="underline decoration-hairline hover:text-ink">MEV surface</button>;
                 a base variable and its derived forms count as one family, and
                 at most one term per family enters a model.
               </p>
@@ -570,11 +570,11 @@ function SetupView({ pk, running, onStarted }: {
             )}
             <button disabled={running || !nCand || terms.length === 0}
               title={terms.length === 0
-                ? 'The search needs at least one macro term from the shortlist.'
+                ? 'The screening needs at least one macro term from the shortlist.'
                 : undefined}
               onClick={() => start.mutate()}
               className="w-full whitespace-nowrap rounded-ctl bg-accent px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
-              {running ? 'A search is running…' : 'Run the search'}
+              {running ? 'A screening is running…' : 'Run the screening'}
             </button>
 
             <div className="border-t border-hairline pt-3">
@@ -657,13 +657,13 @@ function LeaderboardView({ pk, running, goSetup }: {
   if (!run) {
     return (
       <Card>
-        <EmptyState title="No search has been run on this book"
+        <EmptyState title="No screening has been run on this book"
           action={<button onClick={goSetup}
             className="rounded-ctl bg-accent px-3 py-1.5 text-xs font-semibold text-white">
-            Configure a search</button>}>
+            Configure a screening</button>}>
           {running
-            ? 'A search is running now; the board opens when it completes.'
-            : 'Configure the candidates and rules, then run the search. The leaderboard appears here.'}
+            ? 'A screening is running now; the board opens when it completes.'
+            : 'Configure the candidates and rules, then run the screening. The leaderboard appears here.'}
         </EmptyState>
       </Card>
     )
@@ -675,7 +675,7 @@ function LeaderboardView({ pk, running, goSetup }: {
         <EmptyState title="These results are no longer on this machine"
           action={<button onClick={goSetup}
             className="rounded-ctl bg-accent px-3 py-1.5 text-xs font-semibold text-white">
-            Run the search again</button>}>
+            Run the screening again</button>}>
           {errorText(null, String((results.error as Error).message))}
         </EmptyState>
       </Card>

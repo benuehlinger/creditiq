@@ -114,7 +114,7 @@ def _health(key: str) -> dict:
     the most expensive read in the application: every integrity check and a
     profile of forty-two columns across the full tape, which came to 6.7 seconds
     on the mortgage book. It is also the first request a portfolio switch makes,
-    because the Data surface is where a switch lands — so the cost was paid
+    because the Panel surface is where a switch lands — so the cost was paid
     again on every switch, and again on every switch back, on a result that
     could not have changed. `store.clear()` drops it with the panels.
     """
@@ -142,7 +142,7 @@ def portfolio_health(key: str):
 @app.get("/api/portfolios/{key}/timeseries")
 def portfolio_timeseries(key: str, by: str | None = Query(None)):
     """Default rate and exposure by performance date, optionally split by a
-    categorical column. The headline chart on the Data surface."""
+    categorical column. The headline chart on the Panel surface."""
     if key not in PORTFOLIOS:
         raise HTTPException(404, f"unknown portfolio {key!r}")
     df = store.analysis_frame(key)
@@ -700,7 +700,7 @@ def _warm() -> None:
                 # The panel profile is the single most expensive read in the
                 # application — 7.4 seconds on the mortgage book — and it is the
                 # FIRST request a portfolio switch makes, because a switch lands
-                # on the Data surface. It was absent from this list, so the one
+                # on the Panel surface. It was absent from this list, so the one
                 # call worth warming was the one not warmed.
                 _health(k)
                 # The macro search enumerates 325 candidate terms per book and
@@ -1835,7 +1835,7 @@ def _selection_config(key: str, body: SelectionRunRequest) -> sel.SelectionConfi
 def selection_defaults(key: str):
     """Everything the setup screen needs prefilled: the screened candidate
     list with its warnings and the default rules. The macro terms come from
-    the Macro surface's shortlist, which lives client-side; the search takes
+    the MEV surface's shortlist, which lives client-side; the search takes
     them verbatim rather than offering a second picker here."""
     if key not in PORTFOLIOS:
         raise HTTPException(404, f"unknown portfolio {key!r}")

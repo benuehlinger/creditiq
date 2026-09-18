@@ -41,8 +41,9 @@ export default function CommandPalette() {
         } },
     ]
     for (const p of portfolios ?? []) {
-      for (const [s, l] of [['data', 'Data'],
-                            ['select', 'Selection'],
+      for (const [s, l] of [['panel', 'Panel'],
+                            ['mev', 'MEV'],
+                            ['screen', 'Screen'],
                             ['pd', 'PD model'],
                             ['lgd', 'LGD model'],
                             ['scenarios', 'Scenarios'], ['versions', 'Versions']]) {

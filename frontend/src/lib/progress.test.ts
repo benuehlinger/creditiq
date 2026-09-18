@@ -31,10 +31,10 @@ describe('a book with nothing done', () => {
 
   it('does not treat the optional stages as outstanding work', () => {
     const r = computeProgress(EMPTY)
-    expect(stage(r, 'macro').optional).toBe(true)
+    expect(stage(r, 'mev').optional).toBe(true)
     expect(stage(r, 'scenarios').optional).toBe(true)
     // the next action must never be an optional stage
-    expect(['macro', 'scenarios']).not.toContain(r.next?.to)
+    expect(['mev', 'scenarios']).not.toContain(r.next?.to)
   })
 })
 
@@ -412,16 +412,16 @@ describe('scenarios stage', () => {
 describe('the selection stage', () => {
   it('is optional and never the next action', () => {
     const r = computeProgress(EMPTY)
-    const sel = stage(r, 'select')
+    const sel = stage(r, 'screen')
     expect(sel.optional).toBe(true)
     expect(sel.state).toBe('todo')
     expect(sel.note).toMatch(/optional/)
-    expect(r.next?.to).not.toBe('select')
+    expect(r.next?.to).not.toBe('screen')
   })
 
   it('reads done once a search has completed, with the model count', () => {
     const r = computeProgress({ ...EMPTY, selection: { nModels: 42 } })
-    const sel = stage(r, 'select')
+    const sel = stage(r, 'screen')
     expect(sel.state).toBe('done')
     expect(sel.note).toBe('42 models on the leaderboard')
   })
@@ -434,12 +434,12 @@ describe('the selection stage', () => {
       lgd: lgdOf('L1', ['current_ltv']),
     })
     expect(r.complete).toBe(true)
-    expect(stage(r, 'select').state).toBe('todo')
+    expect(stage(r, 'screen').state).toBe('todo')
     expect(r.next?.to).toBe('versions')
   })
 
   it('an empty search result does not read as done', () => {
     const r = computeProgress({ ...EMPTY, selection: { nModels: 0 } })
-    expect(stage(r, 'select').state).toBe('todo')
+    expect(stage(r, 'screen').state).toBe('todo')
   })
 })

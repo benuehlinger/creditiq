@@ -33,9 +33,13 @@ export default function App() {
         <Route path="/tapes" element={<TapeSurface />} />
         <Route path="/brand" element={<BrandSurface />} />
         <Route path="/:portfolio" element={<KnownPortfolio />}>
-          <Route path="data" element={<DataSurface />} />
-          <Route path="macro" element={<MacroSurface />} />
-          <Route path="select" element={<SelectionSurface />} />
+          <Route path="panel" element={<DataSurface />} />
+          <Route path="mev" element={<MacroSurface />} />
+          <Route path="screen" element={<SelectionSurface />} />
+          {/* Pre-rename stage paths, kept so a saved link still lands. */}
+          <Route path="data" element={<Navigate to="../panel" replace />} />
+          <Route path="macro" element={<Navigate to="../mev" replace />} />
+          <Route path="select" element={<Navigate to="../screen" replace />} />
           {/* One workbench per model. The old Explore and Fit stages are kept
               as redirects so a saved link still lands somewhere. */}
           <Route path="pd" element={<PdWorkbench />} />
@@ -50,7 +54,7 @@ export default function App() {
           {/* Paths from before the surfaces were grouped by model. */}
           <Route path="explore" element={<Navigate to="../pd" replace />} />
           <Route path="model" element={<Navigate to="../pd" replace />} />
-          <Route index element={<Navigate to="data" replace />} />
+          <Route index element={<Navigate to="panel" replace />} />
         </Route>
         <Route path="*" element={<Navigate to="/rollup" replace />} />
       </Route>

@@ -99,7 +99,7 @@ export default function MacroSurface() {
     <div className="space-y-3 p-4">
       <Card>
         <CardHead
-          title="Macro: transformation search"
+          title="MEV: transformation search"
           subtitle={`${d.n_bases} supervisory variables × ${d.transforms.length} transforms × ${d.lags.length} lags · estimation window ${d.window[0].slice(0, 7)} to ${d.window[1].slice(0, 7)}`}
           caption="Only variables with a published Federal Reserve forward path are offered, because a term with no projected path cannot be carried into a scenario."
         />

@@ -32,7 +32,7 @@ const STORY: Record<string, { caption: string; mark: [string, string] | null }> 
     caption:
       'Monthly default rate by performance date. Default is nonaccrual or a '
       + 'downgrade to a default grade. The rate rises from 2022 with the '
-      + 'commercial property cycle. Property type is available on the Explore stage.',
+      + 'commercial property cycle. Property type is available on the PD model stage.',
     mark: ['2022-06-01', 'CRE index peak'],
   },
 }

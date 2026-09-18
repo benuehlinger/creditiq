@@ -327,7 +327,7 @@ export default function VersionsSurface() {
         </div>
         {stale && (
           <div className="border-t border-hairline px-4 py-2">
-            <StatusPill severity="warning">Selection changed since the fit</StatusPill>
+            <StatusPill severity="warning">Specification changed since the fit</StatusPill>
             <span className="ml-2 text-tiny text-ink-secondary">
               {picked.length === 0
                 ? <>No variables are selected, so there is no specification to save.

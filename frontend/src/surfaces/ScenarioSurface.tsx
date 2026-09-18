@@ -136,7 +136,7 @@ export default function ScenarioSurface() {
           <CardHead title="Scenarios" subtitle={portfolio} />
           <EmptyState title="No fitted model to project">
             This stage projects a fitted PD model forward. It does not estimate
-            one. Fit a PD model first; the Macro stage has the supervisory
+            one. Fit a PD model first; the MEV stage has the supervisory
             variables and the transformation search in the meantime.
           </EmptyState>
         </Card>

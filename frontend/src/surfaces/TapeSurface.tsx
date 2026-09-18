@@ -45,7 +45,7 @@ export default function TapeSurface() {
     onSuccess: (rec) => {
       qc.invalidateQueries({ queryKey: ['portfolios'] })
       qc.invalidateQueries({ queryKey: ['health'] })
-      nav(`/${rec.key}/data`)
+      nav(`/${rec.key}/panel`)
     },
   })
 
@@ -202,7 +202,7 @@ export default function TapeSurface() {
                   Validation refuses duplicates on the account-month key,
                   unparseable dates and a non-0/1 default flag. Judgement
                   findings (gaps, negative balances, an implausible default
-                  rate) land on the Data surface instead, where they belong.
+                  rate) land on the Panel surface instead, where they belong.
                 </p>
               </div>
             </Card>

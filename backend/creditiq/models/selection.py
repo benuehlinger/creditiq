@@ -17,8 +17,8 @@ p-value calls almost anything significant, and the effective sample size of a
 rare-event model is set by the rarer outcome. A p-value rule remains available
 because some reviewers ask for one.
 
-**Stage 2 — macro terms, from the Macro surface's shortlist.** The search does
-NOT sweep the transformation library; that sweep is the Macro surface's whole
+**Stage 2 — macro terms, from the MEV surface's shortlist.** The search does
+NOT sweep the transformation library; that sweep is the MEV surface's whole
 job, and re-running it here would ignore the choice the analyst made there.
 The shortlisted terms are screened one at a time against each core (right
 sign, loose p, with removals reported by reason, never silent), and the
@@ -130,9 +130,9 @@ class SelectionConfig:
     cores: list[str] = field(default_factory=lambda: ["stepwise", "strong"])
     expert_core: list[str] | None = None
     # The macro terms the search may use, as `key@transform@lag` — the SAME
-    # form the Macro surface's shortlist and the PD specification carry. The
+    # form the MEV surface's shortlist and the PD specification carry. The
     # search does not sweep the transformation library; that sweep is the
-    # Macro surface's whole job, and re-running it here would ignore the
+    # MEV surface's whole job, and re-running it here would ignore the
     # choice the analyst just made there. Combinations of one to three are
     # enumerated from exactly this list.
     mev_terms: list[str] = field(default_factory=list)
@@ -517,7 +517,7 @@ def mev_family(key: str) -> str:
 def mev_variants(cfg: SelectionConfig) -> list[MevSpec]:
     """The macro terms the analyst handed the search, parsed and deduplicated.
 
-    These come from the Macro surface's shortlist (`key@transform@lag`), where
+    These come from the MEV surface's shortlist (`key@transform@lag`), where
     the transformation library was already swept, filtered for stationarity
     and sign, and narrowed by a human. The search's job is combinations, not
     rediscovery.
@@ -1091,7 +1091,7 @@ def run_search(cfg: SelectionConfig, progress=None, cancel=None,
     if not mev_variants(cfg):
         raise ValueError(
             "no macro terms were given to the search. Shortlist terms on the "
-            "Macro surface and include them in the setup; every emitted "
+            "MEV surface and include them in the setup; every emitted "
             "model must carry one")
     cores = build_cores(cfg, progress=stage(1), cancel=cancel)
     if not cores:
@@ -1107,7 +1107,7 @@ def run_search(cfg: SelectionConfig, progress=None, cancel=None,
             "no shortlisted term survived the screen on any core. Every "
             "emitted model must carry a macro term, so there is nothing to "
             "enumerate. Loosen the screen p-value or revisit the shortlist "
-            "on the Macro surface")
+            "on the MEV surface")
     rows = joint_fit_rows(cfg, cores, combos, progress=stage(3), cancel=cancel)
     stress_check(cfg, rows, progress=stage(3), cancel=cancel)
     composite_rank(rows, max_vif=cfg.rules.max_vif)

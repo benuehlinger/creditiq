@@ -141,7 +141,12 @@ export default function VersionsSurface() {
       // `replaces` supersedes the open version: it inherits its status, tags and
       // starred flag, and the superseded file is removed. Without it both remain
       // and the new one records the other as its parent.
-      const base = loaded?.hash ?? fitted.request.parent_hash ?? null
+      // Confirming a fork clears `loaded` so the edit lands on a draft — the
+      // parent at that point lives only in the fork note. Without reading it
+      // here a fork saved right after its parent showed up as a second root.
+      const base = loaded?.hash
+        ?? (forkNote?.fromKind === 'version' ? forkNote.fromHash : null)
+        ?? fitted.request.parent_hash ?? null
       return api.saveVersion({
         ...fitted.request,
         lgd: fittedLgd.spec,
@@ -477,7 +482,8 @@ Fit a model, then save it here. A version records the data, the target, the
       {lineage.data && lineage.data.nodes.length > 0 && (
         <Card>
           <CardHead title="Lineage"
-            subtitle={`${lineage.data.nodes.length} versions · ${lineage.data.edges.length} forks`}
+            subtitle={`${lineage.data.nodes.length} version${lineage.data.nodes.length === 1 ? '' : 's'}`
+              + ` · ${lineage.data.edges.length} fork${lineage.data.edges.length === 1 ? '' : 's'}`}
             caption="Every model on this book and what it was derived from. An arrow carries the rationale recorded when the change was made; a root says whether it came off a search leaderboard." />
           <div className="px-4 pb-4">
             <LineageCanvas data={lineage.data} />

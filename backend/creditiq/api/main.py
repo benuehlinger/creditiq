@@ -1965,6 +1965,25 @@ def selection_results(key: str, config: str = Query(...)):
 
 
 # ── selection configurations ─────────────────────────────────────────────────
+class ConfigSaveRequest(BaseModel):
+    config: dict
+    name: str
+
+
+@app.post("/api/selection/{key}/configs")
+def selection_config_save(key: str, body: ConfigSaveRequest):
+    """Store a configuration WITHOUT running it.
+
+    The run endpoint's `save_as` only fires when the run actually starts, so
+    while a search was in flight there was no way to save at all — the button
+    sat disabled and the name went nowhere.
+    """
+    cfg = _selection_config(key, SelectionRunRequest(config=body.config))
+    if not body.name.strip():
+        raise HTTPException(422, "a saved configuration needs a name")
+    return _jsonable(selstore.save_config(cfg, name=body.name.strip()))
+
+
 @app.get("/api/selection/{key}/configs")
 def selection_configs(key: str):
     if key not in PORTFOLIOS:

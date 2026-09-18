@@ -1141,6 +1141,8 @@ export const api = {
 
   selectionConfigs: (k: string) =>
     get<{ configs: SelectionConfigListing[] }>(`/selection/${k}/configs`),
+  selectionConfigSave: (k: string, config: SelectionConfigPayload, name: string) =>
+    post<{ id: string; name: string }>(`/selection/${k}/configs`, { config, name }),
   selectionConfig: (k: string, id: string) =>
     get<{ id: string; name: string; saved_at: string
           config: SelectionConfigPayload }>(`/selection/${k}/configs/${id}`),

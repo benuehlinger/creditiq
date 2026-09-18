@@ -128,6 +128,14 @@ def save(spec: ModelSpec, metrics: dict, ecl: dict | None = None,
     parent.
     """
     prior = load(replaces) if replaces else None
+    # A fork IS parentage. The client clears its "loaded" marker the moment
+    # the fork is confirmed (so the edit lands on a working draft), which
+    # means the refit request often carries no parent — but the fork record
+    # names exactly the version departed from. Without this, a fork saved
+    # right after its parent appeared in the lineage as a second unexplained
+    # root.
+    if parent_hash is None and fork and fork.get("from_kind") == "version":
+        parent_hash = fork.get("from_hash") or None
     VERSIONS_DIR.mkdir(parents=True, exist_ok=True)
     h = spec.hash()
     existing = load(h)
@@ -305,12 +313,19 @@ def lineage(portfolio: str) -> dict:
                    "fork": v.fork, "origin": v.origin,
                    "n_variables": len(v.spec.get("variables", []))} for v in vs],
         # An edge carries the REASON, so the graph can answer "why did this
-        # branch happen" without a second lookup.
-        "edges": [{"from": v.parent_hash, "to": v.hash,
+        # branch happen" without a second lookup. Parentage is parent_hash
+        # first; a version saved without one but carrying a fork record from
+        # a known version is still that version's child — this reads the
+        # records already on disk from before save() started normalizing.
+        "edges": [{"from": parent, "to": v.hash,
                    "reason_code": v.fork.get("reason_code"),
                    "justification": v.fork.get("justification"),
                    "change": v.fork.get("change")}
-                  for v in vs if v.parent_hash and v.parent_hash in known],
+                  for v in vs
+                  if (parent := v.parent_hash
+                      or (v.fork.get("from_hash")
+                          if v.fork.get("from_kind") == "version" else None))
+                  and parent in known and parent != v.hash],
     }
 
 

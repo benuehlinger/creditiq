@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   api, type LgdLeaderboardRow, type PortfolioKey,
@@ -17,9 +17,12 @@ import { CoreConstruction, RunningCard } from './SelectionSurface'
  *  and a stress check whose direction is severity UP. Rows are named from the
  *  LgdSpec hash, so a row's name IS the severity-half name a saved pairing
  *  will display. */
-export default function LgdSelectionView({ pk }: { pk: PortfolioKey }) {
+export default function LgdSelectionView({ pk, view }: {
+  pk: PortfolioKey; view: 'setup' | 'leaderboard'
+}) {
   const qc = useQueryClient()
   const nav = useNavigate()
+  const [, setParams] = useSearchParams()
   const shortlist = useUi((s) => s.macroShortlist[pk]?.lgd ?? (NONE as string[]))
   const run = useUi((s) => s.lgdSelectionRun[pk])
   const setRun = useUi((s) => s.setLgdSelectionRun)
@@ -87,6 +90,8 @@ export default function LgdSelectionView({ pk }: { pk: PortfolioKey }) {
       api.lgdSelectionResults(pk, st.config_hash).then((r) => {
         setRun(pk, { configHash: st.config_hash!, finishedAt: r.generated_at,
                      nModels: r.rows.filter((x) => !x.filtered).length })
+        // Open the board, exactly as the PD search does when it finishes.
+        setParams({ target: 'lgd', view: 'leaderboard' }, { replace: true })
       }).catch(() => { /* the board names the problem */ })
     }
     prev.current = st?.state
@@ -135,6 +140,7 @@ export default function LgdSelectionView({ pk }: { pk: PortfolioKey }) {
       )}
 
       {/* ── setup ─────────────────────────────────────────────────────── */}
+      {view === 'setup' && (
       <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_380px]">
         <Card>
           <CardHead title="Severity driver candidates"
@@ -258,7 +264,7 @@ export default function LgdSelectionView({ pk }: { pk: PortfolioKey }) {
               {shortlist.length === 0 ? (
                 <p className="text-xs text-ink-secondary">
                   Nothing is shortlisted for LGD on the Macro surface yet. The
-                  search needs at least one term there — open the Macro
+                  search needs at least one term there: open the Macro
                   surface, rank against LGD, and shortlist the terms that
                   should reach severity.
                 </p>
@@ -295,8 +301,10 @@ export default function LgdSelectionView({ pk }: { pk: PortfolioKey }) {
         </div>
       </div>
 
+      )}
+
       {/* ── the board ─────────────────────────────────────────────────── */}
-      {run && (
+      {view === 'leaderboard' && run && (
         <div className={`grid gap-3 ${detail ? 'xl:grid-cols-[minmax(0,1fr)_420px]' : ''}`}>
           <Card>
             <CardHead title="Severity leaderboard"
@@ -367,7 +375,7 @@ export default function LgdSelectionView({ pk }: { pk: PortfolioKey }) {
                         Shift
                       </th>
                       <th className="px-2 py-2 text-center font-medium"
-                          title="Peak severity must order by scenario severity — the severe path pushes loss severity UP.">
+                          title="Peak severity must order by scenario severity: the severe path pushes loss severity UP.">
                         Stress ↑
                       </th>
                     </tr>
@@ -386,7 +394,7 @@ export default function LgdSelectionView({ pk }: { pk: PortfolioKey }) {
                               {r.auto_rank}
                             </td>
                             <td className="px-2 py-1.5"
-                                title={`${r.name} — ${r.n_core} drivers${
+                                title={`${r.name}: ${r.n_core} drivers${
                                   r.finalist ? '' : ' (no full panel yet)'}`}>
                               <span className="font-medium text-ink">{r.name}</span>
                               <span className="ml-1.5 text-micro text-ink-muted">
@@ -399,7 +407,7 @@ export default function LgdSelectionView({ pk }: { pk: PortfolioKey }) {
                             </td>
                             <td className="px-2 py-1.5 text-right tnum text-ink"
                                 title={r.mae_oot == null
-                                  ? 'Fewer than 20 defaults resolved after the boundary — too thin to report.'
+                                  ? 'Fewer than 20 defaults resolved after the boundary; too thin to report.'
                                   : undefined}>
                               {r.mae_oot == null ? '—' : r.mae_oot.toFixed(4)}
                             </td>
@@ -519,12 +527,12 @@ export default function LgdSelectionView({ pk }: { pk: PortfolioKey }) {
         </div>
       )}
 
-      {!run && !running && (
+      {view === 'leaderboard' && !run && !running && (
         <Card>
           <div className="px-4 py-6">
             <EmptyState title="No severity search has run on this book">
-              Pick the driver candidates, check the LGD shortlist, and run the
-              search. The board appears here.
+              Pick the driver candidates on the Setup tab, check the LGD
+              shortlist, and run the search. The board appears here.
             </EmptyState>
           </div>
         </Card>

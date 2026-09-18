@@ -463,3 +463,46 @@ def test_a_fork_records_why_and_the_edge_carries_it(tmp_path, monkeypatch):
     assert edge["reason_code"] == "sign_contradicts_history"
     root = next(n for n in g["nodes"] if n["hash"] == parent.hash)
     assert root["origin"]["rank"] == 3
+
+
+def test_a_fork_saved_without_a_parent_is_still_its_parents_child(tmp_path, monkeypatch):
+    """Confirming the fork gate clears the client's loaded marker, so the refit
+    request often arrives with NO parent_hash — only the fork note names the
+    version departed from. The graph must read that, or a fork saved right
+    after its parent shows up as a second unexplained root (the bug: 2
+    versions, 0 forks, rationale recorded but no arrow)."""
+    from creditiq.models import versions as V
+    from creditiq.models.spec import ModelSpec, VariableSpec
+
+    monkeypatch.setattr(V, "VERSIONS_DIR", tmp_path)
+    parent = V.save(ModelSpec("consumer", [VariableSpec("fico_orig"),
+                                           VariableSpec("dti")]), {})
+    fork = {"reason_code": "business_judgment",
+            "justification": "The client decided not to use WoE.",
+            "change": "dti", "from_hash": parent.hash,
+            "from_name": parent.name, "from_kind": "version"}
+    child = V.save(ModelSpec("consumer", [VariableSpec("fico_orig")]), {},
+                   parent_hash=None, fork=fork)
+
+    # save() normalizes: the fork names the parent.
+    assert child.parent_hash == parent.hash
+    edge = next(e for e in V.lineage("consumer")["edges"] if e["to"] == child.hash)
+    assert edge["from"] == parent.hash
+
+    # And a record already on disk from before the normalization (parent_hash
+    # missing in the file) is healed at read time by lineage(). update()
+    # treats None as "leave unchanged", so the legacy file is written directly.
+    import json
+    f = tmp_path / f"{child.hash}.json"
+    rec = json.loads(f.read_text())
+    rec["parent_hash"] = None
+    f.write_text(json.dumps(rec))
+    assert V.load(child.hash).parent_hash is None
+    edge = next(e for e in V.lineage("consumer")["edges"] if e["to"] == child.hash)
+    assert edge["from"] == parent.hash
+
+    # A fork from a SELECTION row is not version parentage.
+    sel_fork = dict(fork, from_kind="selection", from_hash="cafecafecafecafe")
+    lone = V.save(ModelSpec("consumer", [VariableSpec("dti")]), {},
+                  parent_hash=None, fork=sel_fork)
+    assert lone.parent_hash is None

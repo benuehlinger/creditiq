@@ -90,11 +90,12 @@ export default function SelectionSurface() {
     prevState.current = st?.state
   }, [st?.state, st?.config_hash, pk])
 
-  const view = params.get('view')
-    ?? (run ? 'leaderboard' : 'setup')
   // One Selection stage, two targets. The PD search and the severity search
   // share the surface: same discipline, different model and yardstick.
   const target = params.get('target') === 'lgd' ? 'lgd' : 'pd'
+  const lgdRun = useUi((s) => s.lgdSelectionRun[pk])
+  const view = params.get('view')
+    ?? ((target === 'lgd' ? lgdRun : run) ? 'leaderboard' : 'setup')
 
   return (
     <div className="mx-auto max-w-[1500px] space-y-3 px-4 py-4">
@@ -115,14 +116,13 @@ export default function SelectionSurface() {
               LGD
             </button>
           </div>
-          {target === 'pd' && (
           <ViewTabs
             value={view as 'setup' | 'leaderboard'}
-            onChange={(v) => setParams(v === 'setup' ? { view: 'setup' }
-                                                     : { view: 'leaderboard' })}
+            onChange={(v) => setParams(target === 'lgd'
+              ? { target: 'lgd', view: v }
+              : { view: v })}
             tabs={[{ key: 'setup', label: 'Setup' },
                    { key: 'leaderboard', label: 'Leaderboard' }]} />
-          )}
         </div>
         {target === 'pd' && run && view === 'setup' && (
           <span className="text-tiny text-ink-muted">
@@ -131,7 +131,9 @@ export default function SelectionSurface() {
         )}
       </div>
 
-      {target === 'lgd' ? <LgdSelectionView pk={pk} /> : <>
+      {target === 'lgd'
+        ? <LgdSelectionView pk={pk} view={view as 'setup' | 'leaderboard'} />
+        : <>
       {running && <RunningCard st={st!} pk={pk} />}
       {st?.state === 'error' && (
         <Notice severity="critical" label="The search failed">
@@ -265,10 +267,21 @@ function SetupView({ pk, running, onStarted }: {
   const savedConfigs = useQuery({ queryKey: ['selconfigs', pk],
                                   queryFn: () => api.selectionConfigs(pk) })
   const [saveName, setSaveName] = useState('')
+  const [savedAs, setSavedAs] = useState<string | null>(null)
   const qc = useQueryClient()
-  const saveAndRun = useMutation({
-    mutationFn: () => api.selectionRun(pk, draft!, saveName || undefined),
-    onSuccess: () => { onStarted(); qc.invalidateQueries({ queryKey: ['selconfigs', pk] }) },
+  // Saving stores the configuration only — it never starts a run, so it works
+  // while a search is in flight. Before this there was no standalone save at
+  // all: the name only landed if it rode along on a run that actually started.
+  const saveConfig = useMutation({
+    mutationFn: () => api.selectionConfigSave(pk, draft!, saveName),
+    onSuccess: (r) => {
+      setSavedAs(r.name); setSaveName('')
+      qc.invalidateQueries({ queryKey: ['selconfigs', pk] })
+    },
+  })
+  const dropConfig = useMutation({
+    mutationFn: (id: string) => api.selectionConfigDelete(pk, id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['selconfigs', pk] }),
   })
 
   if (!d || !draft) return <Skeleton className="h-64" />
@@ -451,24 +464,30 @@ function SetupView({ pk, running, onStarted }: {
         </Card>
 
         <Card>
-          <CardHead title="Cores and macro families" />
-          <div className="space-y-3 px-4 pb-4">
-            <div className="flex flex-wrap gap-2">
-              {[['stepwise', 'Stepwise core'], ['strong', 'Strongest drivers'],
-                ['expert', 'Expert core']].map(([k, l]) => (
-                <button key={k}
-                  onClick={() => {
-                    const cores = draft.cores ?? ['stepwise', 'strong']
-                    setDraft(pk, { ...draft, cores: cores.includes(k)
-                      ? cores.filter((c) => c !== k) : [...cores, k] })
-                  }}
-                  className={`rounded-full border px-2.5 py-1 text-tiny ${
-                    (draft.cores ?? []).includes(k)
-                      ? 'border-accent bg-accent-soft text-ink'
-                      : 'border-hairline text-ink-muted'}`}>
-                  {l}
-                </button>
-              ))}
+          <CardHead title="Cores and macro families"
+            subtitle="Which borrower cores are built, and which macro terms may join them" />
+          <div className="space-y-4 px-4 pb-4">
+            <div>
+              <p className="mb-1.5 text-micro font-medium uppercase tracking-wide text-ink-muted">
+                Borrower cores
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {[['stepwise', 'Stepwise core'], ['strong', 'Strongest drivers'],
+                  ['expert', 'Expert core']].map(([k, l]) => (
+                  <button key={k}
+                    onClick={() => {
+                      const cores = draft.cores ?? ['stepwise', 'strong']
+                      setDraft(pk, { ...draft, cores: cores.includes(k)
+                        ? cores.filter((c) => c !== k) : [...cores, k] })
+                    }}
+                    className={`whitespace-nowrap rounded-full border px-2.5 py-1 text-tiny transition-colors ${
+                      (draft.cores ?? []).includes(k)
+                        ? 'border-accent bg-accent-soft text-ink'
+                        : 'border-hairline text-ink-muted hover:text-ink-secondary'}`}>
+                    {l}
+                  </button>
+                ))}
+              </div>
             </div>
             {(draft.cores ?? []).includes('expert') && (
               <Field label="Expert core" hint="Your own variable list, fitted verbatim beside the searched cores. Comma separated column names.">
@@ -481,10 +500,10 @@ function SetupView({ pk, running, onStarted }: {
               </Field>
             )}
             <div>
-              <span className="text-tiny text-ink-muted"
-                    title="The search enumerates combinations of one to three from exactly these terms, one per underlying series. It never sweeps the transformation library; that sweep is the Macro surface's job.">
-                Macro terms in the search, from your Macro shortlist
-              </span>
+              <p className="mb-1.5 text-micro font-medium uppercase tracking-wide text-ink-muted"
+                 title="The search enumerates combinations of one to three from exactly these terms, one per underlying series. It never sweeps the transformation library; that sweep is the Macro surface's job.">
+                Macro terms, from your Macro shortlist
+              </p>
               {offered.length === 0 ? (
                 <div className="mt-1.5 rounded-ctl bg-sunken px-3 py-2 text-tiny text-ink-secondary">
                   Nothing is shortlisted for PD on the Macro surface yet.
@@ -495,7 +514,7 @@ function SetupView({ pk, running, onStarted }: {
                   </button>
                 </div>
               ) : (
-                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                <div className="flex flex-wrap gap-1.5">
                   {offered.map((t) => {
                     const on = terms.includes(t)
                     return (
@@ -506,9 +525,9 @@ function SetupView({ pk, running, onStarted }: {
                         onClick={() => setDraft(pk, { ...draft,
                           mev_terms: on ? terms.filter((k) => k !== t)
                                         : [...terms, t] })}
-                        className={`rounded-full border px-2 py-0.5 font-mono text-micro ${
+                        className={`whitespace-nowrap rounded-full border px-2 py-1 font-mono text-micro transition-colors ${
                           on ? 'border-accent bg-accent-soft text-ink'
-                             : 'border-hairline text-ink-muted'}`}>
+                             : 'border-hairline text-ink-muted hover:text-ink-secondary'}`}>
                         {termLabel(t)}
                       </button>
                     )
@@ -549,37 +568,64 @@ function SetupView({ pk, running, onStarted }: {
                 {String((start.error as Error).message)}
               </p>
             )}
-            <div className="flex items-center gap-2">
-              <button disabled={running || !nCand || terms.length === 0}
-                title={terms.length === 0
-                  ? 'The search needs at least one macro term from the shortlist.'
-                  : undefined}
-                onClick={() => start.mutate()}
-                className="rounded-ctl bg-accent px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
-                {running ? 'A search is running' : 'Run the search'}
-              </button>
-              <input value={saveName} onChange={(e) => setSaveName(e.target.value)}
-                placeholder="Save configuration as…"
-                className="w-44 rounded-ctl border border-hairline bg-surface px-2 py-1.5 text-tiny" />
-              <button disabled={running || !nCand || terms.length === 0 || !saveName}
-                onClick={() => saveAndRun.mutate()}
-                title="Store this configuration for reuse, then run it"
-                className="rounded-ctl border border-hairline px-3 py-1.5 text-tiny text-ink-secondary hover:text-ink disabled:opacity-40">
-                Save and run
-              </button>
-            </div>
-            {(savedConfigs.data?.configs.length ?? 0) > 0 && (
-              <div className="text-tiny text-ink-muted">
-                Saved:{' '}
-                {savedConfigs.data!.configs.map((c) => (
-                  <button key={c.id} className="mr-2 underline decoration-hairline hover:text-ink"
-                    onClick={() => api.selectionConfig(pk, c.id)
-                      .then((r) => setDraft(pk, r.config))}>
-                    {c.name}
-                  </button>
-                ))}
+            <button disabled={running || !nCand || terms.length === 0}
+              title={terms.length === 0
+                ? 'The search needs at least one macro term from the shortlist.'
+                : undefined}
+              onClick={() => start.mutate()}
+              className="w-full whitespace-nowrap rounded-ctl bg-accent px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
+              {running ? 'A search is running…' : 'Run the search'}
+            </button>
+
+            <div className="border-t border-hairline pt-3">
+              <p className="mb-1.5 text-tiny text-ink-muted"
+                 title="Stores the candidate roles, cores, macro terms and rules so this exact search can be reproduced or re-run later. Saving never starts a run.">
+                Save this configuration for reuse
+              </p>
+              <div className="flex items-center gap-2">
+                <input value={saveName}
+                  onChange={(e) => { setSaveName(e.target.value); setSavedAs(null) }}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && saveName.trim()) saveConfig.mutate() }}
+                  placeholder="Configuration name"
+                  className="min-w-0 flex-1 rounded-ctl border border-hairline bg-surface px-2 py-1.5 text-tiny" />
+                <button disabled={!saveName.trim() || saveConfig.isPending}
+                  onClick={() => saveConfig.mutate()}
+                  className="shrink-0 whitespace-nowrap rounded-ctl border border-hairline px-3 py-1.5 text-tiny text-ink-secondary hover:text-ink disabled:opacity-40">
+                  Save
+                </button>
               </div>
-            )}
+              {savedAs && (
+                <p className="mt-1.5 text-tiny" style={{ color: 'var(--status-good)' }}>
+                  Saved as “{savedAs}”.
+                </p>
+              )}
+              {saveConfig.isError && (
+                <p className="mt-1.5 text-tiny" style={{ color: 'var(--status-critical)' }}>
+                  {String((saveConfig.error as Error).message)}
+                </p>
+              )}
+              {(savedConfigs.data?.configs.length ?? 0) > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {savedConfigs.data!.configs.map((c) => (
+                    <span key={c.id}
+                      className="inline-flex items-center gap-1 rounded-full border border-hairline pl-2.5 pr-1 py-0.5 text-tiny text-ink-secondary">
+                      <button className="hover:text-ink"
+                        title="Load this saved configuration into the setup."
+                        onClick={() => api.selectionConfig(pk, c.id)
+                          .then((r) => setDraft(pk, r.config))}>
+                        {c.name}
+                      </button>
+                      <button aria-label={`Delete the saved configuration ${c.name}`}
+                        title="Delete this saved configuration."
+                        onClick={() => dropConfig.mutate(c.id)}
+                        className="rounded-full px-1 text-ink-muted hover:text-ink">
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </Card>
       </div>
@@ -1243,9 +1289,17 @@ function DetailPane({ pk, row, res, review, reviewer, setReviewer, onClose }: {
       reason_code: reason || null,
       justification: just || null,
     }),
-    onSuccess: (r) => { qc.setQueryData(['selreview', pk, res.config_hash], r); setErr(null) },
+    onSuccess: (r) => {
+      qc.setQueryData(['selreview', pk, res.config_hash], r)
+      setErr(null)
+      // Say it landed. The audit trail is the point of this panel, and a
+      // button that writes a file with no acknowledgement reads as broken.
+      setRecorded(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))
+    },
     onError: (e) => setErr(String((e as Error).message)),
   })
+  const [recorded, setRecorded] = useState<string | null>(null)
+  useEffect(() => { setRecorded(null) }, [row.hash])
 
   const openAsDraft = () => {
     const spec = row.spec as Record<string, any>
@@ -1426,10 +1480,15 @@ function DetailPane({ pk, row, res, review, reviewer, setReviewer, onClose }: {
               onChange={(e) => { setReviewer(e.target.value); rememberReviewer(e.target.value) }}
               placeholder="Reviewer name"
               className="w-36 rounded-ctl border border-hairline bg-surface px-2 py-1 text-tiny" />
-            <button onClick={() => save.mutate()} disabled={!reviewer}
+            <button onClick={() => save.mutate()} disabled={!reviewer || save.isPending}
               className="rounded-ctl border border-hairline px-3 py-1 text-tiny text-ink-secondary hover:text-ink disabled:opacity-40">
               Save review
             </button>
+            {recorded && !save.isPending && (
+              <span className="text-tiny" style={{ color: 'var(--status-good)' }}>
+                Recorded at {recorded}.
+              </span>
+            )}
           </div>
           {err && (
             <p className="mt-1 text-tiny" style={{ color: 'var(--status-critical)' }}>{err}</p>

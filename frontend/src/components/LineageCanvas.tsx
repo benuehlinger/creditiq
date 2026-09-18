@@ -107,7 +107,10 @@ export default function LineageCanvas({ data }: { data: LineageGraph }) {
       const mx = e.clientX - r.left
       const my = e.clientY - r.top
       setView((v) => {
-        const k = Math.min(2.5, Math.max(0.25, v.k * (e.deltaY < 0 ? 1.12 : 1 / 1.12)))
+        // Scale by the wheel DELTA, not a fixed step per event: a trackpad
+        // fires dozens of small events per flick, and a fixed 1.12x each
+        // rocketed the zoom across its whole range in one gesture.
+        const k = Math.min(2.5, Math.max(0.25, v.k * Math.exp(-e.deltaY * 0.0022)))
         // Keep the point under the cursor fixed.
         return { k, x: mx - (mx - v.x) * (k / v.k), y: my - (my - v.y) * (k / v.k) }
       })
@@ -279,6 +282,12 @@ export default function LineageCanvas({ data }: { data: LineageGraph }) {
               {detailParent ? (
                 <p className="leading-relaxed text-ink-secondary">
                   Forked from <span className="font-medium text-ink">{detailParent.name}</span>.
+                </p>
+              ) : detail.fork?.from_name ? (
+                <p className="leading-relaxed text-ink-secondary">
+                  Forked from{' '}
+                  <span className="font-medium text-ink">{detail.fork.from_name}</span>,
+                  which is no longer saved on this book.
                 </p>
               ) : detail.origin?.name ? (
                 <p className="leading-relaxed text-ink-secondary">

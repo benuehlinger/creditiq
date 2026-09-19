@@ -1,8 +1,8 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api, type LgdSpecPayload, type PortfolioKey } from '../lib/api'
-import { Skeleton, ViewTabs } from '../components/ui'
+import { Card, CardHead, EmptyState, Skeleton, ViewTabs } from '../components/ui'
 import SpecificationList, { lgdRows } from '../components/SpecificationList'
 import LgdVariableDetail, { LgdTarget } from './LgdVariableDetail'
 import LgdModelPane from './LgdModelPane'
@@ -36,9 +36,14 @@ export default function LgdWorkbench() {
   }
   useEffect(() => { if (column) setView('model') }, [portfolio])   // eslint-disable-line react-hooks/exhaustive-deps
 
+  // A tape without realised losses cannot rank drivers against severity, so
+  // the screen is never asked; the stage becomes a declaration instead.
+  const books = useQuery({ queryKey: ['portfolios'], queryFn: api.portfolios })
+  const hasSeverity = books.data?.find((b) => b.key === pk)?.has_severity
   const screen = useQuery({
     queryKey: ['lgdscreen', portfolio, shortlisted.join(',')],
     queryFn: () => api.lgdScreen(portfolio, shortlisted),
+    enabled: hasSeverity !== false,
   })
   const rows = screen.data?.rows ?? []
   const internal = useMemo(() => lgdRows(rows.filter((r) => !r.macro)), [screen.data])
@@ -67,6 +72,15 @@ export default function LgdWorkbench() {
 
   const n = spec.drivers.length + spec.categoricals.length
   const known = !column || rows.some((r) => r.column === column)
+
+  if (hasSeverity === false) {
+    return (
+      <div className="p-4">
+        <ModelBand portfolio={portfolio} />
+        <AssumedSeverityPane pk={pk} />
+      </div>
+    )
+  }
 
   if (screen.isLoading || !screen.data) {
     return <div className="grid gap-3 p-4 lg:grid-cols-[minmax(0,360px)_minmax(0,1fr)]">
@@ -122,6 +136,99 @@ export default function LgdWorkbench() {
         )}
       </div>
       </div>
+    </div>
+  )
+}
+
+
+/** The severity stage for a tape that carries no realised losses.
+ *
+ *  Nothing can be estimated here, and the pane says so instead of showing an
+ *  empty candidate list. The one action is a DECLARED flat severity: entered,
+ *  recorded in the specification, hashed like any other choice. Changing it on
+ *  a saved pairing forks, like any other specification edit. The loss number
+ *  scales one-for-one with the value, which is what the Scenarios stage's
+ *  what-if control makes visible. */
+function AssumedSeverityPane({ pk }: { pk: PortfolioKey }) {
+  const fittedLgd = useUi((s) => s.fittedLgd[pk])
+  const setFittedLgd = useUi((s) => s.setFittedLgd)
+  const editLgd = useUi((s) => s.editLgd)
+  const declared = fittedLgd?.spec.assumed_lgd ?? null
+  const [pctText, setPctText] = useState(declared != null ? String(Math.round(declared * 100)) : '55')
+  const [err, setErr] = useState<string | null>(null)
+
+  // The gate applies the edited spec with an empty hash; identity is then
+  // settled server-side. Cheap - nothing is estimated - so it runs itself.
+  useEffect(() => {
+    const v = fittedLgd?.spec.assumed_lgd
+    if (v == null || fittedLgd?.hash) return
+    api.lgdAssume(pk, v)
+      .then((r) => setFittedLgd(pk, {
+        spec: { drivers: [], categoricals: [], assumed_lgd: v },
+        hash: r.hash, name: r.name, fittedAt: new Date().toISOString(),
+        meanLgd: r.mean_lgd, nDefaults: 0,
+      }))
+      .catch((e) => setErr(String((e as Error).message)))
+  }, [pk, fittedLgd?.spec.assumed_lgd, fittedLgd?.hash, setFittedLgd])
+
+  const declare = () => {
+    const v = Number(pctText) / 100
+    if (!(v > 0 && v < 1)) { setErr('Enter a severity between 1 and 99 percent.'); return }
+    setErr(null)
+    editLgd(pk, () => ({ drivers: [], categoricals: [], assumed_lgd: v }),
+            `the assumed severity (${Math.round(v * 100)}%)`,
+            { drivers: [], categoricals: [] })
+  }
+
+  return (
+    <div className="mx-auto max-w-[720px] space-y-3">
+      <Card>
+        <CardHead title="No realised losses on this tape"
+          subtitle="A severity model cannot be fitted here"
+          caption="The upload carried no lgd_realised, recovery_amount or exposure_at_default columns, so there is nothing to estimate severity from. Books whose tapes carry workout data get a fitted model; this one runs on a declared assumption instead, and every loss number it produces says so." />
+        <div className="space-y-3 px-4 pb-4">
+          {declared != null && fittedLgd?.hash ? (
+            <div className="rounded-ctl bg-sunken px-3 py-2.5">
+              <p className="text-sm font-medium text-ink">
+                Severity assumed at {Math.round(declared * 100)}%
+              </p>
+              <p className="mt-1 text-tiny leading-relaxed text-ink-secondary">
+                Flat across accounts and scenarios: with no drivers there is
+                nothing for stress to move, so the severe path changes defaults
+                but not severity. The lifetime loss scales one-for-one with
+                this number. Recorded in the specification as
+                {' '}<span className="font-mono">{fittedLgd.name ?? `assumed ${Math.round(declared * 100)}%`}</span>.
+              </p>
+            </div>
+          ) : (
+            <EmptyState title="No severity declared yet">
+              Declare the flat severity this book should be priced at. Deal
+              documents and rating-agency recovery assumptions are the usual
+              sources for the number.
+            </EmptyState>
+          )}
+          <div className="flex items-center gap-2">
+            <input type="number" min={1} max={99} value={pctText}
+              onChange={(e) => setPctText(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') declare() }}
+              className="w-24 rounded-ctl border border-hairline bg-surface px-2 py-1.5 text-sm tnum" />
+            <span className="text-sm text-ink-secondary">% of exposure lost at default</span>
+            <button onClick={declare}
+              className="ml-auto rounded-ctl bg-accent px-3 py-1.5 text-xs font-semibold text-white">
+              {declared != null ? 'Change the assumption' : 'Declare this severity'}
+            </button>
+          </div>
+          {err && (
+            <p className="text-tiny" style={{ color: 'var(--status-critical)' }}>{err}</p>
+          )}
+          <p className="text-micro leading-relaxed text-ink-muted">
+            Changing the assumption on a saved pairing is a specification
+            change: it forks, with a rationale, like any other edit. The
+            Scenarios stage offers a what-if control to explore sensitivities
+            without changing the declared number.
+          </p>
+        </div>
+      </Card>
     </div>
   )
 }

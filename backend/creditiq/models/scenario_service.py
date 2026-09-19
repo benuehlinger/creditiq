@@ -48,6 +48,11 @@ def lgd_model(portfolio: str, spec: LGD.LgdSpec | None = None) -> LGD.LgdModel:
     spec = spec or LGD.LgdSpec.default_for(portfolio)
     key = spec.hash()
     if key not in _LGD_CACHE:
+        # A declared assumption estimates nothing, so it never touches the
+        # panel and never needs the disk cache.
+        if spec.assumed_lgd is not None:
+            _LGD_CACHE[key] = LGD.assumed_model(spec)
+            return _LGD_CACHE[key]
         prev = runcache.load(spec.portfolio, "lgd", key)
         if prev is None:
             df = store.analysis_frame(spec.portfolio)

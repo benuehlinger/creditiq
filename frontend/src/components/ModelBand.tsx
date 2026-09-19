@@ -213,9 +213,9 @@ export default function ModelBand({ portfolio }: { portfolio: string }) {
           {lgdFitted ? (
             <>
               <div className="mt-1 flex items-baseline gap-2">
-                {ident.lgdName
+                {(ident.lgdName ?? lgd!.name)
                   ? <>
-                      <span className="text-base font-medium text-ink">{ident.lgdName}</span>
+                      <span className="text-base font-medium text-ink">{ident.lgdName ?? lgd!.name}</span>
                       <span className="font-mono text-micro text-ink-muted">{lgd!.hash}</span>
                     </>
                   : <span className="font-mono text-base text-ink">{lgd!.hash}</span>}

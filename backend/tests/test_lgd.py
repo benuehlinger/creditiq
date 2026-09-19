@@ -177,3 +177,34 @@ def test_a_specification_saved_in_the_older_list_form_still_loads():
     r = client.post("/api/lgd/fit", json=legacy)
     assert r.status_code == 200, r.json()
     assert any(c.startswith("cltv_basis") for c in r.json()["columns"])
+
+
+def test_a_declared_severity_scores_exactly_that_value_everywhere():
+    """An assumed model is not a fit: an intercept-only model whose intercept
+    is the logit of the declared value, flowing through the same scoring
+    machinery as a fitted model. Every account, every month, exactly the
+    declared number."""
+    import numpy as np
+    import pandas as pd
+    from creditiq.models import lgd as LGD
+    from creditiq.models.spec import LgdSpec
+
+    spec = LgdSpec(portfolio="consumer", assumed_lgd=0.55)
+    m = LGD.assumed_model(spec)
+    df = pd.DataFrame({"performance_date": pd.to_datetime(["2024-01-01"] * 7)})
+    pred = m.predict(LGD.design_for(df, m))
+    assert np.allclose(pred, 0.55)
+    assert m.n_defaults == 0, "nothing was estimated and the record says so"
+
+    # The assumption is identity: a different value is a different model, and
+    # a spec without one keeps the hash it always had (adding the key
+    # unconditionally would have renamed every saved model).
+    assert spec.hash() != LgdSpec(portfolio="consumer").hash()
+    assert spec.hash() != LgdSpec(portfolio="consumer", assumed_lgd=0.45).hash()
+    assert LgdSpec.from_dict(spec.to_dict()).hash() == spec.hash()
+
+    from creditiq.models.naming import lgd_display
+    assert lgd_display(spec) == "assumed 55%"
+
+    with __import__("pytest").raises(ValueError, match="between 0 and 1"):
+        LGD.assumed_model(LgdSpec(portfolio="consumer", assumed_lgd=1.2))

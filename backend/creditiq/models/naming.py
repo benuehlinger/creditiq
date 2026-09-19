@@ -33,3 +33,13 @@ def friendly_name(config_hash: str) -> str:
     noun = NOUNS[(h // len(ADJECTIVES)) % len(NOUNS)]
     nn = (h // (len(ADJECTIVES) * len(NOUNS))) % 100
     return f"{adj}-{noun}-{nn:02d}"
+
+
+def lgd_display(lgd_spec) -> str:
+    """The severity half's display name. A fitted model gets the hash-derived
+    name like any other; a declared assumption IS its own name — minting a
+    codename for "55%, because I said so" would dress an assumption as an
+    estimate."""
+    if getattr(lgd_spec, "assumed_lgd", None) is not None:
+        return f"assumed {lgd_spec.assumed_lgd:.0%}"
+    return friendly_name(lgd_spec.hash())

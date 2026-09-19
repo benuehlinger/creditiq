@@ -304,6 +304,32 @@ def attach_macro(d: pd.DataFrame, mev_panel: pd.DataFrame,
     return d
 
 
+def assumed_model(spec: LgdSpec) -> LgdModel:
+    """The severity half of a book whose tape carries no realised losses.
+
+    Not a fit: a DECLARED flat severity, entered by the user and recorded in
+    the specification. Built as an intercept-only model whose intercept is the
+    logit of the declared value, so every scoring path — projection, ECL,
+    design_for — produces exactly that value through the machinery a fitted
+    model uses, with nothing special-cased downstream. It has no macro terms,
+    so severity holds flat under stress, and the interface says so.
+    """
+    v = float(spec.assumed_lgd)                     # type: ignore[arg-type]
+    if not 0.0 < v < 1.0:
+        raise ValueError(f"an assumed severity must be strictly between 0 and 1, "
+                         f"got {v}")
+    logit = float(np.log(v / (1.0 - v)))
+    return LgdModel(
+        portfolio=spec.portfolio, spec=spec, columns=["intercept"],
+        beta=np.array([logit]), means=np.array([]), stds=np.array([]),
+        levels={}, n_defaults=0, mean_lgd=v, zero_loss_share=0.0,
+        mean_severity_given_loss=v,
+        fit_note=(f"Assumed severity {v:.0%}, declared by the user. This tape "
+                  f"carries no realised losses, so nothing here is estimated: "
+                  f"the loss number scales one-for-one with this assumption."),
+    )
+
+
 def fit_lgd(df: pd.DataFrame, spec: LgdSpec | str,
             mev_panel: pd.DataFrame) -> LgdModel:
     """Fit on the DEFAULTED account-months only — the only rows where a realised

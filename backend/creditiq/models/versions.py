@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from .naming import friendly_name
+from .naming import friendly_name, lgd_display
 from .spec import ModelSpec
 
 VERSIONS_DIR = Path(__file__).resolve().parents[3] / "versions"
@@ -143,7 +143,7 @@ def save(spec: ModelSpec, metrics: dict, ecl: dict | None = None,
     # The default name is the two halves collated — never a third name minted
     # for the pair, which would break the thread from the search's name for
     # the PD half and the LGD surface's name for the severity half.
-    collated = (f"{friendly_name(spec.pd_hash())} · {friendly_name(spec.lgd.hash())}"
+    collated = (f"{friendly_name(spec.pd_hash())} · {lgd_display(spec.lgd)}"
                 if spec.lgd is not None else friendly_name(spec.pd_hash()))
     v = Version(
         hash=h, name=label or (existing.name if existing else collated),

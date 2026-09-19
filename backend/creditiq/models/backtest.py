@@ -190,7 +190,18 @@ def vintage_curves(df: pd.DataFrame, target: str = "default_flag",
     The standard cohort view. Vintages are ORDERED, so the UI colours them with a
     one-hue ramp rather than eleven categorical hues.
     """
-    d = df[["vintage", "months_on_book", target]].copy()
+    # The generated books carry an explicit vintage; an ingested tape carries
+    # origination_date, of which the vintage year is a pure function. With
+    # neither, there is no cohort dimension and the chart is honestly empty.
+    if "vintage" in df.columns:
+        vintage = df["vintage"]
+    elif "origination_date" in df.columns:
+        vintage = pd.to_datetime(df["origination_date"], errors="coerce").dt.year
+    else:
+        return []
+    d = pd.DataFrame({"vintage": vintage,
+                      "months_on_book": df["months_on_book"],
+                      target: df[target]}).dropna(subset=["vintage"])
     d = d[d["months_on_book"] <= max_mob]
     g = (d.groupby(["vintage", "months_on_book"])[target]
            .agg(["sum", "size"]).reset_index())

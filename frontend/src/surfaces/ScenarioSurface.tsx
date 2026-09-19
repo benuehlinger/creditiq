@@ -308,6 +308,11 @@ export default function ScenarioSurface() {
             </div>
           </Card>
 
+          {fittedLgd?.spec.assumed_lgd != null && (
+            <SeverityWhatIf declared={fittedLgd.spec.assumed_lgd}
+              baseline={base.ecl} severe={sa.ecl} weighted={res.weighted_ecl} />
+          )}
+
           <div className="grid gap-3 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
             <Card>
               <CardHead title="ECL attribution bridge"
@@ -454,5 +459,60 @@ export default function ScenarioSurface() {
       </>
       </div>
     </div>
+  )
+}
+
+
+/** What-if on a DECLARED severity.
+ *
+ *  Only for a book running on an assumption: with a flat severity every
+ *  month's loss is EAD x PD x LGD, so lifetime ECL is exactly linear in the
+ *  assumed value and the slider is exact arithmetic, not an approximation and
+ *  not a re-projection. The declared number stays the number of record; this
+ *  control explores, and changing the record is a specification edit on the
+ *  LGD stage, where it forks like any other.
+ */
+function SeverityWhatIf({ declared, baseline, severe, weighted }: {
+  declared: number; baseline: number; severe: number; weighted: number
+}) {
+  const [pct, setPct] = useState(Math.round(declared * 100))
+  const k = (pct / 100) / declared
+  const off = Math.abs(k - 1) > 1e-9
+  return (
+    <Card>
+      <CardHead title="Severity what-if"
+        subtitle={`This book runs on an assumed severity of ${Math.round(declared * 100)}%`}
+        caption="With a flat severity the lifetime loss is exactly proportional to it, so these figures are arithmetic on the projection above, not a new projection. The declared value remains the number of record; to change it, edit the assumption on the LGD stage."
+        right={off ? (
+          <button onClick={() => setPct(Math.round(declared * 100))}
+            className="rounded-ctl border border-hairline px-2 py-0.5 text-tiny text-ink-secondary hover:text-ink">
+            Reset to {Math.round(declared * 100)}%
+          </button>
+        ) : undefined} />
+      <div className="flex flex-wrap items-center gap-6 px-4 pb-4">
+        <div className="flex min-w-[260px] flex-1 items-center gap-3">
+          <input type="range" min={5} max={95} step={1} value={pct}
+            onChange={(e) => setPct(+e.target.value)}
+            aria-label="What-if severity, percent of exposure lost at default"
+            className="w-full accent-[var(--accent)]" />
+          <span className="w-12 text-right text-sm font-semibold tnum text-ink">{pct}%</span>
+        </div>
+        <div className="flex divide-x divide-hairline">
+          <StatTile label="Baseline ECL" value={usd(baseline * k)}
+            explain="Baseline lifetime ECL at the what-if severity." />
+          <StatTile label="Severely adverse" value={usd(severe * k)}
+            explain="Severely adverse lifetime ECL at the what-if severity." />
+          <StatTile label="Probability-weighted" value={usd(weighted * k)}
+            explain="Probability-weighted lifetime ECL at the what-if severity." />
+        </div>
+        {off && (
+          <p className="w-full text-tiny text-ink-muted">
+            Shown at {pct}% against the declared {Math.round(declared * 100)}%:
+            every figure above scales by {(k).toFixed(2)}x. Nothing is saved
+            from here.
+          </p>
+        )}
+      </div>
+    </Card>
   )
 }

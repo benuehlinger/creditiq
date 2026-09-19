@@ -242,6 +242,11 @@ class LgdSpec:
     knots: tuple[tuple[str, tuple[float, ...]], ...] = ()
     n_knots: int = 3
     max_bins: int = 5
+    # A DECLARED flat severity, for a book whose tape carries no realised
+    # losses. When set, the severity half is this number, stated: no drivers,
+    # no fit, no stress response. It is part of the specification, so it is
+    # part of the hash — changing the assumption is changing the model.
+    assumed_lgd: float | None = None
     @staticmethod
     def default_for(portfolio: str) -> "LgdSpec":
         return LgdSpec(portfolio=portfolio,
@@ -278,12 +283,15 @@ class LgdSpec:
         validation, so no treatment other than the default could ever be
         applied. A mapping on the wire is a mapping.
         """
-        return {"portfolio": self.portfolio, "drivers": list(self.drivers),
-                "categoricals": list(self.categoricals),
-                "treatments": dict(self.treatments),
-                "edges": {c: list(v) for c, v in self.edges},
-                "knots": {c: list(v) for c, v in self.knots},
-                "n_knots": self.n_knots, "max_bins": self.max_bins}
+        out = {"portfolio": self.portfolio, "drivers": list(self.drivers),
+               "categoricals": list(self.categoricals),
+               "treatments": dict(self.treatments),
+               "edges": {c: list(v) for c, v in self.edges},
+               "knots": {c: list(v) for c, v in self.knots},
+               "n_knots": self.n_knots, "max_bins": self.max_bins}
+        if self.assumed_lgd is not None:
+            out["assumed_lgd"] = float(self.assumed_lgd)
+        return out
 
     @staticmethod
     def _pairs(v) -> tuple:
@@ -306,7 +314,9 @@ class LgdSpec:
             treatments=LgdSpec._pairs(d.get("treatments")),
             edges=tuple((c, tuple(v)) for c, v in LgdSpec._pairs(d.get("edges"))),
             knots=tuple((c, tuple(v)) for c, v in LgdSpec._pairs(d.get("knots"))),
-            n_knots=int(d.get("n_knots", 3)), max_bins=int(d.get("max_bins", 5)))
+            n_knots=int(d.get("n_knots", 3)), max_bins=int(d.get("max_bins", 5)),
+            assumed_lgd=(float(d["assumed_lgd"])
+                         if d.get("assumed_lgd") is not None else None))
 
     def hash(self) -> str:
         """Order-insensitive: reordering the driver list is not a different model.
@@ -318,6 +328,10 @@ class LgdSpec:
                    "edges": sorted((c, list(v)) for c, v in self.edges),
                    "knots": sorted((c, list(v)) for c, v in self.knots),
                    "n_knots": self.n_knots, "max_bins": self.max_bins}
+        # Only when set: adding the key unconditionally would change every
+        # existing hash, which renames every saved model on every machine.
+        if self.assumed_lgd is not None:
+            payload["assumed_lgd"] = self.assumed_lgd
         return hashlib.sha256(json.dumps(_hash_normalize(payload),
                                          sort_keys=True).encode()).hexdigest()[:12]
 

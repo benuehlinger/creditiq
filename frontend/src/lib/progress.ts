@@ -81,7 +81,7 @@ export interface ProgressInput {
             specAtFit?: string } | null
   /** The canonical specification currently on screen. */
   specNow?: string
-  lgd: { hash: string; spec: { drivers: string[]; categoricals: string[] } } | null
+  lgd: { hash: string; spec: { drivers: string[]; categoricals: string[]; assumed_lgd?: number | null } } | null
   /** `pdHash:lgdHash` of the model this book was last projected on. */
   projected?: string | null
   loaded: { hash: string; name: string } | null
@@ -152,6 +152,9 @@ export function computeProgress(inp: ProgressInput) {
   const { picked, fitted, lgd, loaded, shortlisted, selection, originVars,
           originLgd, specNow, projected } = inp
   const currentLgd = lgd ? [...lgd.spec.drivers, ...lgd.spec.categoricals] : []
+  // A declared severity is a complete LGD half with zero drivers - the
+  // absence of drivers is its definition, not an emptied tray.
+  const lgdAssumed = lgd?.spec.assumed_lgd != null
 
   // A fit is a RESULT, and the tray is the draft specification. Once they
   // diverge the fit no longer describes what is on screen: clearing every
@@ -164,7 +167,7 @@ export function computeProgress(inp: ProgressInput) {
     // Everything the names do not carry: treatments, bin edges, spline knots,
     // the estimator, the out-of-time boundary, the macro terms.
     || (!!fitted.specAtFit && !!specNow && fitted.specAtFit !== specNow))
-  const lgdStale = !!lgd?.hash && currentLgd.length === 0
+  const lgdStale = !!lgd?.hash && currentLgd.length === 0 && !lgdAssumed
 
   // Whether the SPECIFICATION differs from the opened version. Decided from the
   // variables and drivers, never from the hash: a hash that differs while the
@@ -239,15 +242,19 @@ export function computeProgress(inp: ProgressInput) {
     },
     {
       to: 'lgd', id: 'lgd/explore', label: 'LGD drivers', parent: 'lgd',
-      state: !currentLgd.length ? 'todo'
+      state: lgdAssumed ? 'done'
+        : !currentLgd.length ? 'todo'
         : originLgd && !sameSet(originLgd, currentLgd) ? 'changed' : 'done',
-      note: currentLgd.length ? `${currentLgd.length} drivers selected` : 'no drivers selected',
+      note: lgdAssumed ? 'severity assumed, no drivers'
+        : currentLgd.length ? `${currentLgd.length} drivers selected` : 'no drivers selected',
     },
     {
       to: 'lgd', id: 'lgd/fit', label: 'LGD fit', parent: 'lgd',
       state: !lgd?.hash || lgdStale ? 'todo' : 'done',
       note: !lgd?.hash ? 'not fitted'
-        : lgdStale ? 'no drivers selected. Refit needed' : 'fitted',
+        : lgdStale ? 'no drivers selected. Refit needed'
+        : lgdAssumed ? `assumed ${Math.round((lgd!.spec.assumed_lgd ?? 0) * 100)}%`
+        : 'fitted',
     },
     {
       // Done means RUN, the way it does on every other stage. Being able to

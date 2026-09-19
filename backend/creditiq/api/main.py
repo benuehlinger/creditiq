@@ -89,6 +89,14 @@ def portfolios():
         s, p = pf.spec, pf.panel
         out.append(_jsonable({
             "key": key, "label": s.label, "accent_slot": s.accent_slot,
+            # Whether this book is generated or someone's real tape. The
+            # interface labels synthetic data everywhere, and that label must
+            # not follow real loans onto the screen once a tape is ingested.
+            "source": "ingested" if tapemod.is_ingested(key) else "synthetic",
+            # Whether the tape carries realised losses. Without them no
+            # severity model can be fitted and the LGD stage offers a
+            # declared assumption instead.
+            "has_severity": "lgd_realised" in p.columns,
             "n_accounts": len(pf.accounts), "n_rows": len(p),
             "n_defaults": int(p[s.target.column].sum()),
             "annual_default_rate_pct": round(float(annualize(p[s.target.column].mean())), 3),
@@ -725,7 +733,7 @@ from ..models import fit as modelfit                                    # noqa: 
 from ..models import design                                             # noqa: E402
 from ..models import rollup as rollupsvc                                # noqa: E402
 from ..models import service as modelsvc                                # noqa: E402
-from ..models.naming import friendly_name                               # noqa: E402
+from ..models.naming import friendly_name, lgd_display                  # noqa: E402
 from ..models.spec import (LGD_MACRO, LgdSpec, MevSpec, ModelSpec,  # noqa: E402
                            SampleSpec, VariableSpec)
 
@@ -939,12 +947,13 @@ def model_identity(req: FitRequest):
     missing = []
     if not spec.variables:
         missing.append("PD variables")
-    if spec.lgd is None or not (spec.lgd.drivers or spec.lgd.categoricals):
+    lgd_present = spec.lgd is not None and (
+        spec.lgd.drivers or spec.lgd.categoricals
+        or spec.lgd.assumed_lgd is not None)
+    if not lgd_present:
         missing.append("LGD drivers")
     pd_name = friendly_name(spec.pd_hash()) if spec.variables else None
-    lgd_name = (friendly_name(spec.lgd.hash())
-                if spec.lgd is not None
-                and (spec.lgd.drivers or spec.lgd.categoricals) else None)
+    lgd_name = lgd_display(spec.lgd) if lgd_present else None
     name = (f"{pd_name} · {lgd_name}" if pd_name and lgd_name
             else pd_name or lgd_name)
     return {
@@ -1307,6 +1316,36 @@ class LgdFitRequest(BaseModel):
             edges=tuple((c, tuple(v)) for c, v in sorted(self.edges.items())),
             knots=tuple((c, tuple(v)) for c, v in sorted(self.knots.items())),
             n_knots=self.n_knots, max_bins=self.max_bins)
+
+
+class LgdAssumeRequest(BaseModel):
+    portfolio: str
+    value: float
+
+
+@app.post("/api/lgd/assume")
+def lgd_assume(req: LgdAssumeRequest):
+    """Declare a flat severity for a book whose tape carries no realised
+    losses. Not a fit: the value is recorded in the specification, hashed like
+    any other choice, and the loss number scales one-for-one with it. Refused
+    where realised severity exists — there, fit the model."""
+    if req.portfolio not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {req.portfolio!r}")
+    if "lgd_realised" in store.load(req.portfolio).panel.columns:
+        raise HTTPException(400,
+            "This book carries realised severities, so a severity model can "
+            "be fitted on it. An assumption is only offered where nothing "
+            "can be estimated.")
+    if not 0.0 < req.value < 1.0:
+        raise HTTPException(422, "an assumed severity must be strictly "
+                                 "between 0 and 1")
+    spec = LgdSpec(portfolio=req.portfolio, assumed_lgd=float(req.value))
+    m = scensvc.lgd_model(req.portfolio, spec)
+    return _jsonable({
+        "portfolio": req.portfolio, "spec": spec.to_dict(), "hash": spec.hash(),
+        "name": lgd_display(spec), "assumed": True,
+        "mean_lgd": m.mean_lgd, "n_defaults": 0, "note": m.fit_note,
+    })
 
 
 @app.post("/api/lgd/fit")

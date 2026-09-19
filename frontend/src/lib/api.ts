@@ -115,6 +115,9 @@ export interface PortfolioInfo {
   /** Generated book, or someone's uploaded tape. Drives the honesty badge:
    *  synthetic data is always labelled, and real loans never carry that label. */
   source: 'synthetic' | 'ingested'
+  /** Whether the tape carries realised losses. Without them the LGD stage
+   *  offers a declared assumption instead of a fitted model. */
+  has_severity: boolean
   n_accounts: number
   n_rows: number
   n_defaults: number
@@ -655,6 +658,9 @@ export function wireLgdSpec(spec: LgdSpecPayload): LgdSpecPayload {
 export interface LgdSpecPayload {
   drivers: string[]
   categoricals: string[]
+  /** A declared flat severity for a tape with no realised losses. When set,
+   *  the severity half is this number, stated - no drivers, no fit. */
+  assumed_lgd?: number | null
   treatments?: Record<string, LgdTreatment>
   edges?: Record<string, number[]>
   knots?: Record<string, number[]>
@@ -1053,6 +1059,10 @@ export const api = {
       `/portfolios/${k}/lgd/knots/${encodeURIComponent(col)}`, { n_knots: nKnots }),
   lgdDistribution: (k: string) => get<LgdDistribution>(`/portfolios/${k}/lgd/distribution`),
   lgdCandidates: (k: string) => get<LgdCandidates>(`/portfolios/${k}/lgd/candidates`),
+  lgdAssume: (portfolio: string, value: number) =>
+    post<{ hash: string; name: string; mean_lgd: number; note: string
+           spec: LgdSpecPayload & { portfolio: string } }>(
+      '/lgd/assume', { portfolio, value }),
   lgdFit: (portfolio: string, spec: LgdSpecPayload): Promise<LgdFitResult> =>
     post('/lgd/fit', { portfolio, ...wireLgdSpec(spec) }),
   lgdBacktest: async (portfolio: string, spec: LgdSpecPayload,

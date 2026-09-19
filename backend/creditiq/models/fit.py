@@ -129,10 +129,28 @@ def irls(X: np.ndarray, y: np.ndarray, l2: float = 0.0, max_iter: int = 40,
     return beta, cov, max_iter, False
 
 
+# The floor under any PD estimation. Below it a logistic fit does not fail
+# loudly — it separates: a handful of events can be walled off perfectly by a
+# spline segment or a thin WoE bin, the coefficients run to the boundary, and
+# every projected PD saturates. The first real prime auto tape (26 defaults in
+# the training window) produced a 12-month PD of 1.0 on every account this
+# way, behind nothing but a warning. LGD has refused below 60 defaults since
+# the start; the default model gets the same discipline.
+MIN_EVENTS_TO_FIT = 50
+
+
 def fit(design: Design, spec: ModelSpec) -> FitResult:
     t0 = time.perf_counter()
     X = np.asarray(design.X, dtype=np.float64)
     y = design.y.astype(float)
+    n_events = int(y.sum())
+    if n_events < MIN_EVENTS_TO_FIT:
+        raise ValueError(
+            f"{spec.portfolio}: {n_events} defaults in the estimation window, "
+            f"and a default model needs at least {MIN_EVENTS_TO_FIT}. With this "
+            f"few events a fit separates rather than estimates, and every "
+            f"projected PD saturates. Widen the estimation window, move the "
+            f"out-of-time boundary later, or bring a larger tape.")
     l2 = 0.0
     if spec.estimator == "logistic_l2":
         l2 = max(spec.regularization, 1e-6) * len(y) / 1000.0

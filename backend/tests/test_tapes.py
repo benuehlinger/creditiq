@@ -216,3 +216,35 @@ def test_start_from_scratch_archives_ingested_books(sandbox, tmp_path):
     # And a restart does not resurrect it.
     T.register_all()
     assert "acme_t9" not in PORTFOLIOS
+
+
+def test_rows_after_default_are_reported_not_refused(sandbox):
+    """For a default model the history must stop at default. A tape that keeps
+    reporting a defaulted loan gets a named integrity finding — the model
+    still fits, and the scorecard says what the number is standing on."""
+    from creditiq.analysis.profile import check_integrity
+
+    df = _tape()
+    # Make one loan default mid-history and keep reporting afterwards.
+    df = df.sort_values(["LoanNumber", "AsOfDate"]).reset_index(drop=True)
+    victim = df.LoanNumber.iloc[0]
+    rows = df.index[df.LoanNumber == victim]
+    df.loc[rows, "DefaultInd"] = 0
+    df.loc[rows[10], "DefaultInd"] = 1          # defaults in month 11 of 24
+
+    rep = _stage(df)
+    rec = T.ingest(rep["token"], "acme_t10", "Acme", MAPPING,
+                   dpd_state=4, ead_method="amortizing", oot_from="2023-06-01")
+    sandbox.append("acme_t10")
+
+    import pandas as pd
+    panel = pd.read_parquet(T.TAPES_DIR / "acme_t10_panel.parquet")
+    accounts = pd.read_parquet(T.TAPES_DIR / "acme_t10_accounts.parquet")
+    frame = panel.merge(accounts, on="account_id", how="left")
+    from creditiq.data.portfolios import PORTFOLIOS
+    issues = check_integrity(frame, PORTFOLIOS["acme_t10"])
+    row = next(i for i in issues if i["check"] == "History stops at default")
+    assert not row["passed"]
+    # 13 from the victim (months 12-24); the fixture's own scattered random
+    # defaults leave trailing rows too, so the count is at least that.
+    assert row["n_affected"] >= 13

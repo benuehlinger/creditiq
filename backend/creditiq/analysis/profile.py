@@ -157,6 +157,20 @@ def check_integrity(panel: pd.DataFrame, spec: PortfolioSpec) -> list[dict]:
         else f"{neg:,} negative balance(s). A balance cannot be below zero; this "
              f"is a data error, not a credit.", neg)
 
+    # For a default model the history must STOP at default: rows recorded
+    # after an account's default month survive into the non-event denominator
+    # and depress every rate. Reported, not refused — the model still fits,
+    # and the finding tells the user what their number is standing on.
+    first_def = (panel.loc[panel[spec.target.column] == 1]
+                 .groupby("account_id")["performance_date"].min())
+    fd = panel["account_id"].map(first_def)
+    after_def = int((fd.notna() & (panel["performance_date"] > fd)).sum())
+    add("History stops at default", after_def == 0, "serious",
+        "No account has performance rows after its default month." if after_def == 0
+        else f"{after_def:,} rows recorded after the account's default month. "
+             f"For a default model the history must stop at default; these rows "
+             f"sit in the denominator and depress every rate.", after_def)
+
     tgt = panel[spec.target.column]
     multi = int((panel.groupby("account_id")[spec.target.column].sum() > 1).sum())
     add("Target fires at most once per account", multi == 0, "critical",
@@ -176,10 +190,13 @@ def check_integrity(panel: pd.DataFrame, spec: PortfolioSpec) -> list[dict]:
         + ("" if span >= 3 else " Under three years leaves no room for an "
                                "out-of-time split."))
 
-    fut = int((panel["performance_date"] < panel["origination_date"]).sum())
-    add("No performance before origination", fut == 0, "critical",
-        "No account is observed before it was booked." if fut == 0
-        else f"{fut:,} rows dated before origination.", fut)
+    # origination_date is optional on an ingested tape; without it this check
+    # has nothing to compare and is skipped rather than crashed.
+    if "origination_date" in panel.columns:
+        fut = int((panel["performance_date"] < panel["origination_date"]).sum())
+        add("No performance before origination", fut == 0, "critical",
+            "No account is observed before it was booked." if fut == 0
+            else f"{fut:,} rows dated before origination.", fut)
     return issues
 
 

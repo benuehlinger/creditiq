@@ -937,9 +937,10 @@ export const api = {
     fetch(`/api/tapes/${key}`, { method: 'DELETE' }).then((r) => r.json()),
   dataHealth: (k: string) => get<DataHealth>(`/portfolios/${k}/health`),
   timeseries: (k: string, by?: string) => get<TimeseriesPoint[]>(`/portfolios/${k}/timeseries`, { by }),
-  sample: (k: string, limit = 200, offset = 0) =>
+  sample: (k: string, limit = 200, offset = 0, structure = false) =>
     get<{ total: number; columns: string[]; rows: Record<string, unknown>[] }>(
-      `/portfolios/${k}/sample`, { limit, offset }),
+      `/portfolios/${k}/sample`, { limit, offset,
+                                   structure: structure ? 'true' : undefined }),
   mevCatalog: () => get<{ why_restricted: string; built_at: string
                           variables: MevVariable[]; by_portfolio: Record<string, string[]> }>('/mev/catalog'),
   mevSeries: (keys: string[], start?: string, end?: string) =>

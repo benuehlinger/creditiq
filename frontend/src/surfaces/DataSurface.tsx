@@ -261,13 +261,14 @@ function ColumnTable({ columns }: { columns: ColumnProfile[] }) {
  *  cheap; editing is the CECL product's job. */
 function SampleRows({ pk }: { pk: string }) {
   const q = useQuery({ queryKey: ['sample', pk],
-                       queryFn: () => api.sample(pk, 10), staleTime: Infinity })
+                       queryFn: () => api.sample(pk, 15, 0, true),
+                       staleTime: Infinity })
   if (!q.data) return null
   return (
     <Card>
-      <CardHead title="The rows themselves"
-        subtitle={`First 10 of ${num(q.data.total)} account-months · every column`}
-        caption="Exactly as stored after ingestion: canonical names for mapped columns, the seller's own names for everything that rode along. Read-only." />
+      <CardHead title="Data structure"
+        subtitle={`Three accounts of ${num(q.data.total)} account-months · grouped by account, sorted by month`}
+        caption="A small example of what the panel looks like, for quick reference: one row per account per month, each account's history in order. Column names are exactly as stored — canonical for mapped columns, the seller's own for everything that rode along. Read-only." />
       <div className="thin-scroll overflow-x-auto px-4 pb-4">
         <table className="w-full text-left text-micro">
           <thead className="text-tiny text-ink-muted">
@@ -277,7 +278,9 @@ function SampleRows({ pk }: { pk: string }) {
           </thead>
           <tbody>
             {q.data.rows.map((r, i) => (
-              <tr key={i} className="border-t border-hairline">
+              <tr key={i}
+                className={i > 0 && r.account_id !== q.data!.rows[i - 1].account_id
+                  ? 'border-t-2 border-ink-muted/40' : 'border-t border-hairline'}>
                 {q.data!.columns.map((c) => (
                   <td key={c} className="whitespace-nowrap py-1 pr-4 tnum text-ink-secondary">
                     {r[c] == null ? '\u2014' : String(r[c])}

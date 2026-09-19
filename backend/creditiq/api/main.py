@@ -170,9 +170,22 @@ def portfolio_timeseries(key: str, by: str | None = Query(None)):
 
 
 @app.get("/api/portfolios/{key}/sample")
-def portfolio_sample(key: str, limit: int = 200, offset: int = 0):
+def portfolio_sample(key: str, limit: int = 200, offset: int = 0,
+                     structure: bool = False):
+    """Raw rows. With `structure=true`, a few whole accounts sorted by month
+    instead of the first N rows: the first rows of a date-ordered panel are
+    fifty different accounts on the same date, which shows the columns but
+    not the SHAPE — one row per account per month is the fact the panel view
+    exists to make visible."""
     df = store.analysis_frame(key)
-    sub = df.iloc[offset:offset + min(limit, 2000)].copy()
+    if structure:
+        ids = df["account_id"].drop_duplicates().head(3)
+        sub = (df[df["account_id"].isin(ids)]
+               .sort_values(["account_id", "performance_date"])
+               .groupby("account_id", sort=False).head(max(2, limit // len(ids)))
+               .copy())
+    else:
+        sub = df.iloc[offset:offset + min(limit, 2000)].copy()
     for c in sub.columns:
         if pd.api.types.is_datetime64_any_dtype(sub[c]):
             sub[c] = sub[c].dt.strftime("%Y-%m-%d")

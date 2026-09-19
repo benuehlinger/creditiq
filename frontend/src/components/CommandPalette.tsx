@@ -29,15 +29,16 @@ export default function CommandPalette() {
       // are archived on the server rather than deleted, so this can never be
       // the action that loses real work. The generated panels are untouched.
       { id: 'reset', label: 'Start from scratch',
-        hint: 'Clears local drafts and archives saved versions',
+        hint: 'Clears drafts, archives saved versions and ingested tapes',
         run: () => {
           if (window.confirm(
             'Start from scratch?\n\n'
             + 'Clears every draft and fitted marker in this browser, and '
-            + 'archives all saved versions, promoted champions and selection '
-            + 'review state on the server.\n\n'
-            + 'The generated data is kept. Archived versions are moved to a '
-            + 'timestamped folder, not deleted.')) resetWorkspace()
+            + 'archives all saved versions, promoted champions, selection '
+            + 'review state and INGESTED TAPE BOOKS on the server.\n\n'
+            + 'The generated demo books are kept. Everything archived is '
+            + 'moved to a timestamped folder, not deleted, and your original '
+            + 'tape files are untouched.')) resetWorkspace()
         } },
     ]
     for (const p of portfolios ?? []) {

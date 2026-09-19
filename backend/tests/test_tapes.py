@@ -194,3 +194,25 @@ def test_an_ingested_tape_is_never_generated_or_asserted_on(sandbox):
     assert "acme_t8" in PORTFOLIOS, "an ingested book is a book everywhere else"
     assert "acme_t8" not in SYNTHETIC_KEYS, "but it is not a GENERATED book"
     assert set(SYNTHETIC_KEYS) == {"consumer", "mortgage", "cre"}
+
+
+def test_start_from_scratch_archives_ingested_books(sandbox, tmp_path):
+    """A tape registers itself on every server start, so a reset that left
+    tapes alone reopened "from scratch" with last session's book already
+    loaded. Archived, never deleted: the files move aside where
+    register_all() cannot see them, and the user's original upload is
+    untouched wherever they keep it."""
+    rep = _stage(_tape())
+    T.ingest(rep["token"], "acme_t9", "Acme", MAPPING,
+             dpd_state=4, ead_method="amortizing", oot_from="2023-06-01")
+    assert "acme_t9" in PORTFOLIOS
+
+    n = T.archive_all()
+    assert n == 1
+    assert "acme_t9" not in PORTFOLIOS
+    archives = list(T.TAPES_DIR.glob("archive-*"))
+    assert archives, "the files must move aside, not vanish"
+    assert (archives[0] / "acme_t9_panel.parquet").exists()
+    # And a restart does not resurrect it.
+    T.register_all()
+    assert "acme_t9" not in PORTFOLIOS

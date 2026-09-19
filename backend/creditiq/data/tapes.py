@@ -484,6 +484,31 @@ def fingerprint_for(key: str) -> str:
         return ""
 
 
+def archive_all() -> int:
+    """Move every ingested book out of the registry, keeping the files.
+
+    "Start from scratch" means scratch: a tape ingested during a session is
+    exactly the kind of artifact a reset exists to clear. Archived rather
+    than deleted — same rule as the versions archive — and the upload the
+    tape came from is still wherever the user keeps it, so nothing is lost.
+    register_all() globs the top level only, so an archived book is invisible
+    to the app while its files remain on disk."""
+    recs = records()
+    if not recs:
+        return 0
+    dest = TAPES_DIR / f"archive-{pd.Timestamp.utcnow().strftime('%Y-%m-%dT%H-%M-%S')}"
+    dest.mkdir(parents=True, exist_ok=True)
+    for r in recs:
+        key = r["key"]
+        for suffix in (".json", "_panel.parquet", "_accounts.parquet"):
+            f = TAPES_DIR / f"{key}{suffix}"
+            if f.exists():
+                shutil.move(str(f), str(dest / f.name))
+        PORTFOLIOS.pop(key, None)
+        PORTFOLIO_MEVS.pop(key, None)
+    return len(recs)
+
+
 def remove(key: str) -> bool:
     """Delete an ingested book: registry, data, and its cache directory.
     Synthetic books cannot be removed this way."""

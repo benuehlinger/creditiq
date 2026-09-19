@@ -1762,6 +1762,11 @@ def reset_workspace():
     reset can never be the thing that loses real work.
     """
     moved = vstore.archive_all()
+    # Ingested books go too: they register themselves on every start, so a
+    # reset that left them made "from scratch" reopen with last session's
+    # tape already loaded. Archived alongside the versions, never deleted.
+    moved["ingested_books"] = tapemod.archive_all()
+    store.clear()
     rollupsvc.clear_cache()
     _SEL_RESULTS.clear()
     _LSEL_RESULTS.clear()

@@ -21,7 +21,17 @@ def test_candidates_only_offer_columns_that_exist_on_defaulted_rows():
     c = candidates(store.analysis_frame("cre"), "cre", monthly_panel())
     assert c["n_defaults"] > 0
     assert all(r["filled"] >= 0.5 for r in c["numeric"])
-    assert all(2 <= r["levels"] <= 12 for r in c["categorical"])
+    # The 12-level cap blocks wide identity-like categoricals (a 144-level
+    # metro). Cohort labels (vintage, origination year) are exempt: they are
+    # offered as categoricals PRECISELY so they can never enter as a linear
+    # term, and their levels bin down at fit time.
+    from creditiq.analysis.screening import is_cohort_label
+    import pandas as pd
+    for r in c["categorical"]:
+        if is_cohort_label(pd.Series([], name=r["column"], dtype=float)) \
+                or "vintage" in r["column"]:
+            continue
+        assert 2 <= r["levels"] <= 12, r["column"]
 
 
 def test_the_macro_block_is_reachable():

@@ -188,6 +188,12 @@ export default function DataSurface() {
           <ColumnTable columns={health.data?.columns ?? []} />
         </Card>
       </div>
+
+      {/* ── the rows themselves ── */}
+      <SampleRows pk={portfolio} />
+
+      {/* ── how this book came to be: permanent, not a one-time flow ── */}
+      <BookRecord pk={portfolio} info={info} />
     </div>
   )
 }
@@ -244,5 +250,113 @@ function ColumnTable({ columns }: { columns: ColumnProfile[] }) {
         </tbody>
       </table>
     </div>
+  )
+}
+
+
+/** Raw rows, exactly as the panel holds them.
+ *
+ *  Analysts do not trust a dataset they have never seen a row of, and until
+ *  now nothing in the app showed one. Read-only: browsing is honest and
+ *  cheap; editing is the CECL product's job. */
+function SampleRows({ pk }: { pk: string }) {
+  const q = useQuery({ queryKey: ['sample', pk],
+                       queryFn: () => api.sample(pk, 10), staleTime: Infinity })
+  if (!q.data) return null
+  return (
+    <Card>
+      <CardHead title="The rows themselves"
+        subtitle={`First 10 of ${num(q.data.total)} account-months · every column`}
+        caption="Exactly as stored after ingestion: canonical names for mapped columns, the seller's own names for everything that rode along. Read-only." />
+      <div className="thin-scroll overflow-x-auto px-4 pb-4">
+        <table className="w-full text-left text-micro">
+          <thead className="text-tiny text-ink-muted">
+            <tr>{q.data.columns.map((c) => (
+              <th key={c} className="whitespace-nowrap py-1 pr-4 font-mono font-medium">{c}</th>
+            ))}</tr>
+          </thead>
+          <tbody>
+            {q.data.rows.map((r, i) => (
+              <tr key={i} className="border-t border-hairline">
+                {q.data!.columns.map((c) => (
+                  <td key={c} className="whitespace-nowrap py-1 pr-4 tnum text-ink-secondary">
+                    {r[c] == null ? '\u2014' : String(r[c])}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  )
+}
+
+/** Where this book came from, permanently visible.
+ *
+ *  Ingestion is a flow, not a place: once a tape is in, its mapping and the
+ *  four answers used to live nowhere. This card is their record. A generated
+ *  book states what it is instead, so neither kind is unexplained. */
+function BookRecord({ pk, info }: {
+  pk: string; info: import('../lib/api').PortfolioInfo
+}) {
+  const tapes = useQuery({ queryKey: ['tapes'], queryFn: api.tapes,
+                           staleTime: Infinity,
+                           enabled: info.source === 'ingested' })
+  if (info.source !== 'ingested') {
+    return (
+      <Card>
+        <CardHead title="About this book" subtitle="Generated demonstration data"
+          caption={`A synthetic book, generated on this machine; no real borrower data is present. Default definition: ${info.target.description}. Exposure: ${info.ead_note}`} />
+      </Card>
+    )
+  }
+  const rec = tapes.data?.tapes.find((t) => t.key === pk)
+  if (!rec) return null
+  return (
+    <Card>
+      <CardHead title="How this book was loaded"
+        subtitle={`Ingested ${rec.ingested_at.slice(0, 10)} \u00b7 fingerprint ${rec.fingerprint}`}
+        caption="The record of the upload: the four answers given at ingestion and how the seller's columns map onto the canonical schema. This is the book's provenance; it does not change unless the tape is re-ingested." />
+      <div className="grid gap-4 px-4 pb-4 md:grid-cols-[280px_minmax(0,1fr)]">
+        <dl className="space-y-1.5 text-xs">
+          {[['Default definition', `${info.target.description}`],
+            ['Exposure method', info.ead_method === 'ccf'
+              ? 'Revolving commitments (CCF)' : 'Amortising loans'],
+            ['Out-of-time window from', rec.default_oot_from],
+            ['Rows', num(rec.n_rows)], ['Accounts', num(rec.n_accounts)],
+          ].map(([k, v]) => (
+            <div key={k} className="flex justify-between gap-3">
+              <dt className="text-ink-muted">{k}</dt>
+              <dd className="text-right text-ink-secondary">{v}</dd>
+            </div>
+          ))}
+          {rec.warnings.length > 0 && (
+            <div className="pt-1.5">
+              {rec.warnings.map((w) => (
+                <p key={w} className="text-micro leading-relaxed"
+                   style={{ color: 'var(--status-warning)' }}>{w}</p>
+              ))}
+            </div>
+          )}
+        </dl>
+        <div>
+          <p className="mb-1.5 text-micro font-medium uppercase tracking-wide text-ink-muted">
+            Column mapping, as confirmed at upload
+          </p>
+          <table className="w-full text-left text-micro">
+            <tbody>
+              {Object.entries(rec.mapping).map(([canon, orig]) => (
+                <tr key={canon} className="border-t border-hairline">
+                  <td className="py-1 pr-3 font-mono text-ink">{canon}</td>
+                  <td className="py-1 pr-3 text-ink-muted">←</td>
+                  <td className="py-1 font-mono text-ink-secondary">{orig}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </Card>
   )
 }

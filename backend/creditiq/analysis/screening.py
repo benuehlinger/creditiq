@@ -130,10 +130,30 @@ def observed_sign(b: Binning) -> int | None:
     return 1 if r[-1] > r[0] else -1
 
 
+def is_cohort_label(x: pd.Series) -> bool:
+    """A column whose numbers NAME a cohort rather than measure a quantity.
+
+    An origination year is ordered but not a scale: 2021 is not "two more"
+    than 2019 in any sense a coefficient can use, and at scoring time future
+    vintages do not exist to extrapolate to. Detected by name (vintage,
+    cohort) or by shape (whole calendar years, few of them) — with 13+ years
+    the unique-count heuristic below reads it as continuous, which is exactly
+    how a vintage ended up offered as a linear term."""
+    name = str(x.name).lower()
+    if "vintage" in name or "cohort" in name:
+        return True
+    if pd.api.types.is_numeric_dtype(x):
+        v = pd.Series(x.dropna().unique())
+        return (0 < len(v) <= 60
+                and bool(((v == v.round()) & (v >= 1970) & (v <= 2049)).all()))
+    return False
+
+
 def screen_column(x: pd.Series, y: pd.Series, expected: int | None = None,
                   max_bins: int = 8, with_null: bool = True,
                   null_floor: float | None = None) -> tuple[Screen, Binning]:
-    numeric = pd.api.types.is_numeric_dtype(x) and x.nunique(dropna=True) > 12
+    numeric = (pd.api.types.is_numeric_dtype(x) and x.nunique(dropna=True) > 12
+               and not is_cohort_label(x))
     b = bin_numeric(x, y, max_bins=max_bins) if numeric else bin_categorical(x, y)
     risk, reason, lift = leakage_verdict(b)
     if null_floor is not None:

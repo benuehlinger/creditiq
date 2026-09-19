@@ -260,6 +260,16 @@ def candidates(df: pd.DataFrame, portfolio: str,
         if pd.api.types.is_numeric_dtype(col):
             if filled < 0.5 or col.nunique(dropna=True) < 3:
                 continue
+            # A cohort label (vintage, origination year) is ordered but not a
+            # scale; it enters as bins, never as a linear term. The 12-level
+            # categorical cap below does not apply — cohorts bin cleanly.
+            from ..analysis.screening import is_cohort_label
+            if is_cohort_label(col):
+                categorical.append({"column": c, "filled": filled,
+                                    "kind": "categorical",
+                                    "levels": int(col.nunique(dropna=True)),
+                                    "macro": False})
+                continue
             numeric.append({"column": c, "filled": filled, "kind": "numeric",
                             "macro": c in LGD_MACRO})
         elif col.dtype == object or str(col.dtype) == "category":

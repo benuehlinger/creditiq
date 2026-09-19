@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .. import store
 from ..analysis import profile as prof
+from ..analysis import univariate as univar
 from ..analysis.rates import annualize
 from ..data.build import PLANTED_NOTES
 from ..data.portfolios import PORTFOLIOS
@@ -443,6 +444,21 @@ def binning(key: str, column: str, edges: str | None = None, max_bins: int = 8,
         "expected_sign": PORTFOLIOS[key].expected_signs.get(column),
         "observed_sign": screen.observed_sign(b),
     })
+
+
+@app.get("/api/portfolios/{key}/univariate/{column}")
+def univariate(key: str, column: str):
+    """One column on its own, before any target: shape, spread, concentration,
+    and the findings that follow. Answers "what does this look like", which is
+    the question the binning panels assume has already been answered."""
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+    df, sampled = store.screening_frame(key)
+    if column not in df.columns:
+        raise HTTPException(404, f"unknown column {column!r}")
+    out = univar.describe(df[column], column, df[PORTFOLIOS[key].target.column])
+    out["sampled"] = bool(sampled)
+    return _jsonable(out)
 
 
 @app.get("/api/portfolios/{key}/bivariate/{column}")

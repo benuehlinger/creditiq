@@ -155,6 +155,42 @@ export interface ColumnProfile {
   note?: string | null
 }
 
+/** Equal-width bars, with the event rate read on the same axis. */
+export interface Histogram {
+  edges: number[]
+  counts: number[]
+  events?: number[]
+  /** null where the bar holds too few rows for a rate to mean anything. */
+  rates?: (number | null)[]
+  below: number; above: number
+  window: [number, number]
+}
+
+/** One column on its own, before any target. */
+export interface Univariate {
+  column: string
+  kind: 'numeric' | 'categorical'
+  n: number; n_missing: number; missing_pct: number; n_unique: number
+  sampled?: boolean
+  findings: { severity: 'good' | 'warning' | 'serious' | 'critical'
+              label: string; detail: string }[]
+  // numeric
+  mean?: number; std?: number; median?: number; min?: number; max?: number
+  percentiles?: Record<string, number>
+  iqr?: number; cv?: number | null
+  skew?: number; kurtosis_excess?: number; skew_note?: string
+  mode?: number; mode_share_pct?: number
+  zero_pct?: number; negative_pct?: number
+  n_outliers?: number; outlier_fence?: [number, number]
+  log1p_skew?: number
+  histogram?: Histogram
+  histogram_trimmed?: Histogram
+  // categorical
+  levels?: { level: string; count: number; pct: number }[]
+  concentration_hhi?: number; top_level_pct?: number
+  n_levels_under_1pct?: number; pct_in_thin_levels?: number
+}
+
 export interface DataHealth {
   portfolio: string
   n_rows: number
@@ -970,6 +1006,8 @@ export const api = {
       floors: Record<string, number>; sample_note: string; null_note: string
       bands: { upto: number | null; label: string }[]
     }>(`/portfolios/${k}/screen`),
+  univariate: (k: string, column: string) =>
+    get<Univariate>(`/portfolios/${k}/univariate/${encodeURIComponent(column)}`),
   binning: (k: string, col: string, edges?: number[], maxBins = 8, nKnots = 4) =>
     get<BinningResult>(`/portfolios/${k}/binning/${encodeURIComponent(col)}`, {
       max_bins: maxBins, n_knots: nKnots,

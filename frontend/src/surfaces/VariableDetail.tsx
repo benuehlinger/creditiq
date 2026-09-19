@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api, type PortfolioKey, type Treatment } from '../lib/api'
-import { Card, CardHead, Skeleton, StatusPill, Notice , QueryError} from '../components/ui'
+import { Card, CardHead, Notice, QueryError, Skeleton, StatTile, StatusPill, ViewTabs } from '../components/ui'
+import EChart from '../charts/EChart'
+import { baseOption, barSeries, escapeHtml, gridFor, lineSeries, markTooltip, xName, yName } from '../charts/base'
 import BinningEditor from '../components/BinningEditor'
 import {
   DEFAULT_MAX_BINS, DEFAULT_N_KNOTS, columns, setVariable, toggleTerm, variable,
@@ -11,8 +13,8 @@ import BinStability from '../components/BinStability'
 import TreatmentControl from '../components/TreatmentControl'
 import { useUi } from '../lib/store'
 import { isDiscretised } from '../lib/api'
-import { num, pct, visibleLevel } from '../lib/format'
-import { diverging, mode } from '../design/tokens'
+import { byUnit, num, pct, visibleLevel } from '../lib/format'
+import { accent, diverging, ink, mode, status } from '../design/tokens'
 
 /**
  * One variable, in full: its leakage check, its binning or treatment, its
@@ -62,6 +64,13 @@ export default function VariableDetail({ portfolio, column }: {
     editPd(portfolio as PortfolioKey,
            (x) => setVariable(x, column, { treatment: t }), `${column} as ${t}`)
 
+  // The column ON ITS OWN, before any target. Binning and shape both assume
+  // this question is already answered, and neither can answer it.
+  const uni = useQuery({
+    queryKey: ['univariate', portfolio, column],
+    queryFn: () => api.univariate(portfolio, column),
+    staleTime: Infinity,
+  })
   const binning = useQuery({
     queryKey: ['binning', portfolio, column, edges?.join(','), maxBins, nKnots],
     queryFn: () => api.binning(portfolio, column, edges, maxBins, nKnots),
@@ -84,6 +93,7 @@ export default function VariableDetail({ portfolio, column }: {
     <div className="min-w-0 space-y-3">
     {binning.data && (
       <>
+        {uni.data && <Distribution d={uni.data} />}
         {binning.data.leakage_risk !== 'none' && (
           <LeakageBanner risk={binning.data.leakage_risk}
                          reason={binning.data.leakage_reason}
@@ -386,6 +396,200 @@ function BinTable({ b, selected, onSelect }: {
           ))}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+
+/** What this column looks like, before any relationship to default.
+ *
+ *  A histogram shows a shape; it does not put a number on it, and it hides a
+ *  point mass by spreading it across a bar. The statistics here are the ones
+ *  that change a modelling decision: how skewed, how heavy the tails, how
+ *  much of the column sits on one value, and how much of it is missing. Each
+ *  finding names the treatment that answers it. */
+function Distribution({ d }: { d: import('../lib/api').Univariate }) {
+  const fmt = (v: number | undefined) =>
+    v == null ? '—'
+      : Math.abs(v) >= 1000 ? v.toLocaleString(undefined, { maximumFractionDigits: 0 })
+      : Math.abs(v) >= 1 ? v.toFixed(2) : v.toPrecision(3)
+  const P = d.percentiles ?? {}
+  return (
+    <Card>
+      <CardHead title="Distribution"
+        subtitle={d.kind === 'numeric'
+          ? `${num(d.n)} values · ${num(d.n_unique)} distinct`
+          : `${num(d.n)} values · ${d.n_unique} levels`}
+        caption={d.kind === 'numeric'
+          ? 'The column on its own, before any relationship to default. Percentiles describe a skewed column honestly where a mean and a standard deviation do not.'
+          : 'Level shares, and how much of the book sits in the long thin tail that binning has to collapse.'} />
+
+      {d.findings.length > 0 && (
+        <div className="space-y-1.5 px-4 pb-3">
+          {d.findings.map((f) => (
+            <div key={f.label} className="flex gap-2 text-tiny">
+              <StatusPill severity={f.severity}>{f.label}</StatusPill>
+              <p className="leading-relaxed text-ink-secondary">{f.detail}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {d.kind === 'numeric' ? (
+        <>
+          {d.histogram && <HistogramPair d={d} />}
+          <div className="grid grid-cols-2 divide-x divide-hairline border-t border-hairline md:grid-cols-4">
+            <StatTile label="Skew" value={fmt(d.skew)} explain={d.skew_note} />
+            <StatTile label="Excess kurtosis" value={fmt(d.kurtosis_excess)}
+              explain="Fourth standardised moment less 3. Zero is normal-tailed; large positive means extreme values are far more common than a normal distribution implies." />
+            <StatTile label="Mean / median" value={`${fmt(d.mean)} / ${fmt(d.median)}`}
+              explain="A mean far above the median is the signature of a right tail: the mean is being pulled by it, the median is not." />
+            <StatTile label="Missing" value={`${(d.missing_pct ?? 0).toFixed(1)}%`}
+              explain="Missing takes its own bin and its own weight of evidence. It is not imputed." />
+          </div>
+          <div className="thin-scroll overflow-x-auto px-4 py-3">
+            <table className="w-full text-left text-micro">
+              <thead className="text-ink-muted">
+                <tr>
+                  {['min', 'p01', 'p05', 'p10', 'p25', 'p50', 'p75', 'p90', 'p95', 'p99', 'max']
+                    .map((k) => <th key={k} className="py-1 pr-4 font-medium uppercase">{k}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                <tr className="border-t border-hairline">
+                  {[d.min, P.p01, P.p05, P.p10, P.p25, P.p50, P.p75, P.p90, P.p95, P.p99, d.max]
+                    .map((v, i) => (
+                      <td key={i} className="py-1.5 pr-4 tnum text-ink-secondary">{fmt(v)}</td>
+                    ))}
+                </tr>
+              </tbody>
+            </table>
+            <p className="mt-2 text-micro leading-relaxed text-ink-muted">
+              Most common value {fmt(d.mode)}, held by {(d.mode_share_pct ?? 0).toFixed(0)}% of rows
+              {(d.zero_pct ?? 0) > 0 && <> · {(d.zero_pct ?? 0).toFixed(0)}% exactly zero</>}
+              {(d.negative_pct ?? 0) > 0 && <> · {(d.negative_pct ?? 0).toFixed(1)}% negative</>}
+              {' '}· {num(d.n_outliers ?? 0)} beyond the 3-IQR fence
+              {d.cv != null && <> · coefficient of variation {fmt(d.cv)}</>}
+            </p>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 divide-x divide-hairline border-t border-hairline md:grid-cols-4">
+            <StatTile label="Levels" value={String(d.n_unique)}
+              explain="Distinct values. Above roughly twenty, weight of evidence on the thin ones fits noise and the binning collapses them." />
+            <StatTile label="Largest level" value={`${(d.top_level_pct ?? 0).toFixed(0)}%`}
+              explain="Share of the book in the single most common level." />
+            <StatTile label="Concentration" value={fmt(d.concentration_hhi)}
+              explain="Herfindahl index of the level shares: 1 means one level holds everything, 1/k means the levels are even." />
+            <StatTile label="Missing" value={`${(d.missing_pct ?? 0).toFixed(1)}%`}
+              explain="Missing takes its own level and its own weight." />
+          </div>
+          <div className="px-4 py-3">
+            {(d.levels ?? []).map((l) => (
+              <div key={l.level} className="flex items-center gap-2 py-0.5 text-micro">
+                <span className="w-40 shrink-0 truncate text-ink-secondary" title={l.level}>{l.level}</span>
+                <span className="h-2 rounded-sm bg-accent"
+                      style={{ width: `${Math.max(l.pct, 0.4)}%`, minWidth: 2 }} />
+                <span className="tnum text-ink-muted">{l.pct.toFixed(1)}%</span>
+              </div>
+            ))}
+            {(d.n_levels_under_1pct ?? 0) > 0 && (
+              <p className="mt-2 text-micro text-ink-muted">
+                {d.n_levels_under_1pct} levels under 1% of the book, holding
+                {' '}{(d.pct_in_thin_levels ?? 0).toFixed(1)}% between them.
+              </p>
+            )}
+          </div>
+        </>
+      )}
+    </Card>
+  )
+}
+
+
+/** The shape, and the relationship read on the SAME axis.
+ *
+ *  Equal-width bars, because the quantile bins the model uses carry equal
+ *  counts by construction and draw a flat rectangle. The full range is shown
+ *  first: trimming to the 1st-99th percentile by default would hide the long
+ *  tail, which is the one thing a reader opens a histogram to see. */
+function HistogramPair({ d }: { d: import('../lib/api').Univariate }) {
+  const [trimmed, setTrimmed] = useState(false)
+  const theme = useUi((s) => s.theme)
+  const h = (trimmed && d.histogram_trimmed) || d.histogram!
+  const opt = useMemo(() => {
+    const k = ink(mode())
+    const centre = h.counts.map((_, i) => (h.edges[i] + h.edges[i + 1]) / 2)
+    const hasRates = !!h.rates?.some((r) => r != null)
+    const fmtX = (v: number) =>
+      Math.abs(v) >= 1000 ? `${(v / 1000).toFixed(1)}k`
+        : Math.abs(v) >= 1 ? v.toFixed(0) : v.toPrecision(2)
+    return {
+      ...baseOption(),
+      grid: [
+        gridFor({ left: 62, right: 18, top: 10, bottom: hasRates ? 132 : 40 }),
+        ...(hasRates ? [gridFor({ left: 62, right: 18, top: 176, bottom: 40 })] : []),
+      ],
+      tooltip: markTooltip((p: any) => {
+        const i = p.dataIndex ?? 0
+        const rate = h.rates?.[i]
+        return `<div style="font-size:11px;color:${k.muted}">`
+          + `${escapeHtml(fmtX(h.edges[i]))} to ${escapeHtml(fmtX(h.edges[i + 1]))}</div>`
+          + `<div><b>${num(h.counts[i])}</b> account-months</div>`
+          + (rate == null
+            ? (hasRates ? `<div style="color:${k.muted}">too few rows for a rate</div>` : '')
+            : `<div>${(rate * 100).toFixed(2)}% default rate</div>`)
+      }),
+      xAxis: [
+        { ...(baseOption().xAxis as object), type: 'category' as const,
+          data: centre, gridIndex: 0, axisLabel: { show: false } },
+        ...(hasRates ? [{ ...(baseOption().xAxis as object), type: 'category' as const,
+          data: centre, gridIndex: 1, ...xName(d.column, 28),
+          axisLabel: { color: k.muted, fontSize: 10, interval: 7,
+                       formatter: (v: string) => fmtX(Number(v)) } }] : []),
+      ],
+      yAxis: [
+        { ...(baseOption().yAxis as object), type: 'value' as const, gridIndex: 0,
+          ...yName('Account-months', 54),
+          axisLabel: { color: k.muted, fontSize: 10,
+                       formatter: (v: number) => byUnit(v, 'count') } },
+        ...(hasRates ? [{ ...(baseOption().yAxis as object), type: 'value' as const,
+          gridIndex: 1, ...yName('Default rate', 54),
+          axisLabel: { color: k.muted, fontSize: 10,
+                       formatter: (v: number) => `${(v * 100).toFixed(1)}%` } }] : []),
+      ],
+      series: [
+        { ...barSeries({ name: 'Account-months', data: h.counts, color: accent() }),
+          xAxisIndex: 0, yAxisIndex: 0 },
+        ...(hasRates ? [{
+          ...lineSeries({ name: 'Default rate', color: status.serious,
+            data: h.rates!.map((r, i) => [String(centre[i]), r] as [string, number | null]),
+            showSymbol: false }),
+          xAxisIndex: 1, yAxisIndex: 1, connectNulls: false }] : []),
+      ],
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [h, theme, d.column])
+
+  return (
+    <div className="border-t border-hairline px-4 pb-2 pt-3">
+      <div className="mb-1 flex items-center justify-between">
+        <span className="text-tiny text-ink-muted">
+          Equal-width bars over the {trimmed ? '1st to 99th percentile' : 'full range'}
+          {h.above + h.below > 0 && (
+            <> · {num(h.above + h.below)} rows outside the window, held in the end bars</>
+          )}
+        </span>
+        {d.histogram_trimmed && (
+          <ViewTabs value={trimmed ? 'trim' : 'full'}
+            onChange={(v) => setTrimmed(v === 'trim')}
+            tabs={[{ key: 'full', label: 'Full range' },
+                   { key: 'trim', label: '1st to 99th' }]} />
+        )}
+      </div>
+      <EChart option={opt} height={h.rates?.some((r) => r != null) ? 300 : 170}
+        ariaLabel={`Distribution of ${d.column}`} />
     </div>
   )
 }

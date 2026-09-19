@@ -65,6 +65,13 @@ def _as_of_frame(df: pd.DataFrame, as_of: pd.Timestamp) -> pd.DataFrame:
     if d.empty:
         last = df["performance_date"].max()
         d = df.loc[df["performance_date"] == last]
+    # The generated books carry an explicit terminal_event, so a defaulted or
+    # prepaid account can be excluded by name. An ingested tape usually does
+    # not: the panel is required to STOP at the terminal event instead, which
+    # the integrity checks enforce, so an account still present on the
+    # reporting date is by construction still open.
+    if "terminal_event" not in d.columns:
+        return d.copy()
     return d.loc[d["terminal_event"].isin(["none", "censored"])].copy()
 
 

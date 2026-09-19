@@ -18,6 +18,7 @@ export default function TapeSurface() {
   const qc = useQueryClient()
   const fileRef = useRef<HTMLInputElement>(null)
   const [report, setReport] = useState<TapeInspection | null>(null)
+  const [dragging, setDragging] = useState(false)
   const [mapping, setMapping] = useState<Record<string, string | null>>({})
   const [label, setLabel] = useState('')
   const [key, setKey] = useState('')
@@ -64,29 +65,48 @@ export default function TapeSurface() {
         <CardHead title="Load a loan tape"
           subtitle="CSV or parquet, already at monthly account grain"
           caption="The file must be a panel: one row per account per month, with a 0/1 default flag. Column names are mapped below; nothing is renamed or recoded without being shown here first. This gate validates a panel; it does not build one. Converting a snapshot or raw performance file into account-months takes judgement, and judgement belongs in a workflow that documents it." />
-        <div className="flex items-center gap-3 px-4 pb-4">
+        {/* A drop target as well as a picker: a tape arrives as a file on
+            someone's desktop, and dragging it here is the shorter path. */}
+        <div className="px-4 pb-4">
           <input ref={fileRef} type="file" accept=".csv,.parquet,.pq"
             className="hidden"
             onChange={(e) => {
               const f = e.target.files?.[0]
               if (f) inspect.mutate(f)
             }} />
-          <button onClick={() => fileRef.current?.click()}
-            disabled={inspect.isPending}
-            className="rounded-ctl bg-accent px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40">
-            {inspect.isPending ? 'Reading the file…'
-              : report ? 'Choose a different file' : 'Choose a file'}
-          </button>
+          <div
+            onDragOver={(e) => { e.preventDefault(); setDragging(true) }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={(e) => {
+              e.preventDefault()
+              setDragging(false)
+              const f = e.dataTransfer.files?.[0]
+              if (f) inspect.mutate(f)
+            }}
+            onClick={() => fileRef.current?.click()}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') fileRef.current?.click() }}
+            className={`flex cursor-pointer flex-col items-center gap-1 rounded-card border border-dashed px-4 py-7 text-center transition-colors ${
+              dragging ? 'border-accent bg-accent-soft' : 'border-hairline hover:border-accent'
+            }`}>
+            <span className="text-sm font-medium text-ink">
+              {inspect.isPending ? 'Reading the file…'
+                : dragging ? 'Drop to read it'
+                : 'Drag a tape here, or click to choose one'}
+            </span>
+            <span className="text-tiny text-ink-muted">CSV or parquet</span>
+          </div>
           {report && (
-            <span className="text-xs text-ink-secondary">
+            <p className="mt-2 text-xs text-ink-secondary">
               <span className="font-mono">{report.filename}</span>
               {' · '}{num(report.n_rows)} rows · {report.n_columns} columns
-            </span>
+            </p>
           )}
           {inspect.isError && (
-            <span className="text-xs" style={{ color: 'var(--status-critical)' }}>
+            <p className="mt-2 text-xs" style={{ color: 'var(--status-critical)' }}>
               {String((inspect.error as Error).message)}
-            </span>
+            </p>
           )}
         </div>
       </Card>

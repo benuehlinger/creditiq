@@ -77,6 +77,11 @@ export default function AppShell() {
   // version list is known and the marker is not in it, drop the marker: the
   // workspace falls back to a plain draft.
   const pkey = isPortfolioKey(portfolio) ? portfolio : null
+  // Which kind of data the badge below should own up to. Only while a book is
+  // open: the roll-up spans several at once and cannot claim either label.
+  const books = useQuery({ queryKey: ['portfolios'], queryFn: api.portfolios })
+  const ingested = !!pkey
+    && books.data?.find((b) => b.key === pkey)?.source === 'ingested'
   // An ingested book has no entry in the persisted per-book records; give it
   // one before any surface reads it. Idempotent, so the three synthetic
   // books pass through untouched.
@@ -185,11 +190,17 @@ export default function AppShell() {
               {health.mev_series_resolved} MEV series · offline
             </span>
           )}
-          {/* Permanent, on every data-bearing view: it stops a screenshot being
-              mistaken for a real book. */}
-          <span className="flex items-center gap-1.5 rounded border border-hairline px-1.5 py-0.5">
-            <span className="h-1.5 w-1.5 rounded-full bg-warning" />
-            Synthetic demonstration data
+          {/* On every data-bearing view, and it states which kind of data is
+              actually on screen. A generated book must never be mistaken for a
+              real one — and, since tapes can be ingested, a real book must
+              never carry the synthetic label either. */}
+          <span className="flex items-center gap-1.5 rounded border border-hairline px-1.5 py-0.5"
+                title={ingested
+                  ? 'This book was ingested from an uploaded loan tape. The loans and their performance are real; the macroeconomic scenarios remain the published supervisory paths.'
+                  : 'This book is generated. No real borrower data is present.'}>
+            <span className="h-1.5 w-1.5 rounded-full"
+                  style={{ background: ingested ? 'var(--status-good)' : 'var(--status-warning)' }} />
+            {ingested ? 'Ingested loan tape' : 'Synthetic demonstration data'}
           </span>
         </div>
 

@@ -38,6 +38,36 @@ today that stop being safe assumptions on foreign data):
 3. Where does the out-of-time window start (`oot_from`)?
 4. What is this book called (`label`)?
 
+### Worked example: SEC ABS-EE (2026-09-18)
+
+Four real auto-loan tapes were built from Reg AB II Schedule AL filings and
+ingested, which is the sharpest test of the line above because the raw filings
+are already monthly account-level and still cannot be modelled as they stand.
+
+The gate handled: column mapping (`ABS_EE_ALIASES` covers the Reg AB II
+vocabulary; case and separators normalize away, so one alias matches
+camelCase, snake_case and the rest), the four questions, and every integrity
+check — the Carvana tape scores 100/100.
+
+The prep script had to handle, OUTSIDE the app:
+
+- **The default definition.** ABS-EE carries `zeroBalanceCode`, not a target.
+  It is sticky (every filing after resolution repeats it), and it covers
+  prepayment and repurchase alongside charge-off. Deciding that charge-off is
+  the default, and that it fires in the month of `zeroBalanceEffectiveDate`
+  rather than every month thereafter, is a modelling judgement. There is
+  deliberately no alias mapping it to `default_flag`.
+- **Where an account's history stops.** Resolved loans keep reporting; those
+  rows inflate the denominator and depress every rate.
+- **Sampling.** Keeping every defaulter and a handful of survivors produced a
+  36%/yr rate that the plausibility check correctly rejected. A tape must be a
+  population, not a case-control sample.
+
+The demo this unlocks is the product argument: the same methodology across
+Toyota (0.42%/yr), Hyundai (0.93%), Santander Drive (8.2%) and Carvana
+(12.0%) — one asset class, one schema, a 30x spread in credit. That is the
+buyer's actual problem, and it needs no CECL machinery.
+
 ## What the fork adds (CECL-only, the reason it exists)
 
 - **Fundamental data preparation** — cleaning, outlier and missingness

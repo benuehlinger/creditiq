@@ -123,7 +123,14 @@ def spec_for(portfolio: str,
             return ModelSpec.from_dict(champ.spec), "champion", champ
         except Exception:                                               # noqa: BLE001
             pass
-    cols, mevs = FALLBACK_SPECS[portfolio]
+    # The three generated books each have a DOCUMENTED default specification,
+    # written down and defensible, which the roll-up may stand on until a
+    # champion is promoted. An ingested tape has none: nobody wrote one, and
+    # its drivers are whatever the seller happened to file. Inventing a
+    # specification for it would be precisely the silent fallback this app
+    # refuses, so it reports as not covered until a model is saved on it.
+    fallback = FALLBACK_SPECS.get(portfolio)
+    cols, mevs = fallback if fallback else ((), ())
     return (ModelSpec(portfolio, [VariableSpec(c) for c in cols],
                       [MevSpec(m) for m in mevs],
                       lgd=LgdSpec.default_for(portfolio)), "default", None)

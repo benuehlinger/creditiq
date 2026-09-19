@@ -122,3 +122,75 @@ def test_remove_unregisters_and_deletes(sandbox):
     assert "acme_t6" not in PORTFOLIOS
     assert not (T.TAPES_DIR / "acme_t6_panel.parquet").exists()
     assert T.remove("consumer") is False, "synthetic books are not removable"
+
+
+def test_one_alias_covers_every_naming_convention():
+    """Case and separators are normalized on both sides, so a single alias
+    matches snake_case, camelCase, PascalCase, SCREAMING_SNAKE, kebab-case and
+    spaced words. Only a different VOCABULARY needs its own alias."""
+    styles = {
+        "snake": ["loan_id", "as_of_date", "default_flag", "current_balance"],
+        "camel": ["loanId", "asOfDate", "defaultFlag", "currentBalance"],
+        "pascal": ["LoanId", "AsOfDate", "DefaultFlag", "CurrentBalance"],
+        "screaming": ["LOAN_ID", "AS_OF_DATE", "DEFAULT_FLAG", "CURRENT_BALANCE"],
+        "kebab": ["loan-id", "as-of-date", "default-flag", "current-balance"],
+        "spaced": ["Loan Id", "As Of Date", "Default Flag", "Current Balance"],
+    }
+    for style, cols in styles.items():
+        m = T.suggest_mapping(cols)
+        assert m["account_id"] == cols[0], style
+        assert m["performance_date"] == cols[1], style
+        assert m["default_flag"] == cols[2], style
+        assert m["current_balance"] == cols[3], style
+
+
+def test_sec_abs_ee_names_are_recognised_but_never_the_target():
+    """Reg AB II Schedule AL is the public format every securitized tape is
+    filed in, so a diligence file often arrives in exactly these names.
+
+    `zeroBalanceCode` must NOT be offered as the target: it is sticky across
+    filings, and it covers prepayment and repurchase as well as charge-off.
+    Turning it into a 0/1 hazard target is panel construction, which this gate
+    refuses to do on someone's behalf.
+    """
+    cols = ["assetNumber", "reportingPeriodBeginningDate", "originationDate",
+            "reportingPeriodActualEndBalanceAmount", "zeroBalanceCode",
+            "reportingPeriodInterestRatePercentage",
+            "remainingTermToMaturityNumber", "obligorCreditScore"]
+    m = T.suggest_mapping(cols)
+    assert m["account_id"] == "assetNumber"
+    assert m["performance_date"] == "reportingPeriodBeginningDate"
+    assert m["current_balance"] == "reportingPeriodActualEndBalanceAmount"
+    assert m["origination_date"] == "originationDate"
+    assert m["interest_rate"] == "reportingPeriodInterestRatePercentage"
+    assert m["remaining_term"] == "remainingTermToMaturityNumber"
+    assert m["default_flag"] is None, "zeroBalanceCode is not a 0/1 target"
+
+
+def test_an_ingested_book_is_not_labelled_synthetic(sandbox):
+    """The interface labels synthetic data on every data-bearing view. That
+    label must not ride along on someone's real loans."""
+    rep = _stage(_tape())
+    T.ingest(rep["token"], "acme_t7", "Acme", MAPPING,
+             dpd_state=4, ead_method="amortizing", oot_from="2023-06-01")
+    sandbox.append("acme_t7")
+    assert T.is_ingested("acme_t7") is True
+    assert T.is_ingested("consumer") is False
+
+
+def test_an_ingested_tape_is_never_generated_or_asserted_on(sandbox):
+    """An ingested tape joins PORTFOLIOS so it behaves like any other book in
+    the app. It must NOT join the generated set: it has no generative process,
+    so `make data` would try to regenerate someone's real loans, and the
+    generator suite would assert on them. Ingesting a tape once turned the
+    backend suite into 73 errors on this exact mechanism."""
+    from creditiq.data.portfolios import PORTFOLIOS, SYNTHETIC_KEYS
+
+    rep = _stage(_tape())
+    T.ingest(rep["token"], "acme_t8", "Acme", MAPPING,
+             dpd_state=4, ead_method="amortizing", oot_from="2023-06-01")
+    sandbox.append("acme_t8")
+
+    assert "acme_t8" in PORTFOLIOS, "an ingested book is a book everywhere else"
+    assert "acme_t8" not in SYNTHETIC_KEYS, "but it is not a GENERATED book"
+    assert set(SYNTHETIC_KEYS) == {"consumer", "mortgage", "cre"}

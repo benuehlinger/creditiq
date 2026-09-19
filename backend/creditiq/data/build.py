@@ -19,7 +19,7 @@ import pandas as pd
 
 from .assemble import assemble
 from .generate import generate
-from .portfolios import PORTFOLIOS
+from .portfolios import PORTFOLIOS, SYNTHETIC_KEYS
 from .spec import PortfolioSpec
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -158,7 +158,7 @@ def truth_doc() -> str:
          "default rate is an emergent property of the process, not a drawn quantity.",
          "", "Prepayment and maturity compete with default. The account stops at the",
          "first terminal event.", ""]
-    for spec in PORTFOLIOS.values():
+    for spec in (PORTFOLIOS[k] for k in SYNTHETIC_KEYS):
         L += [f"## {spec.label} (`{spec.key}`)", "",
               f"- Accounts: {spec.n_accounts:,}",
               f"- Target: {spec.target.description} (delinquency state {spec.target.dpd_state})",
@@ -235,7 +235,10 @@ def _atomic(path, write) -> None:
     os.replace(tmp, path)
 
 
-BUILD_TOTAL_STEPS = len(PORTFOLIOS) * 9 + 2
+# Only the generated books. An ingested tape is registered in PORTFOLIOS
+# alongside them, but it has no generative process to run and no truth to
+# document: regenerating it would overwrite someone's real loans.
+BUILD_TOTAL_STEPS = len(SYNTHETIC_KEYS) * 9 + 2
 
 
 def build(verbose: bool = True, progress=None) -> dict:
@@ -245,7 +248,8 @@ def build(verbose: bool = True, progress=None) -> dict:
     OUT.mkdir(parents=True, exist_ok=True)
     DOCS.mkdir(parents=True, exist_ok=True)
     report = {}
-    for key, spec in PORTFOLIOS.items():
+    for key in SYNTHETIC_KEYS:
+        spec = PORTFOLIOS[key]
         tick(f"Drawing the {spec.label} book: {spec.n_accounts:,} accounts")
         res = generate(spec, seed=SEEDS[key], progress=progress)
         tick(f"Assembling {spec.label} severities and outcomes")

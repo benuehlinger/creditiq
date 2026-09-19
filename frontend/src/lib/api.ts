@@ -112,6 +112,9 @@ export interface PortfolioInfo {
   key: PortfolioKey
   label: string
   accent_slot: number
+  /** Generated book, or someone's uploaded tape. Drives the honesty badge:
+   *  synthetic data is always labelled, and real loans never carry that label. */
+  source: 'synthetic' | 'ingested'
   n_accounts: number
   n_rows: number
   n_defaults: number

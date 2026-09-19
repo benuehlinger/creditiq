@@ -113,11 +113,46 @@ ALIASES: dict[str, list[str]] = {
     "workout_months": ["workout_period", "resolution_months", "months_to_resolve"],
 }
 
+# SEC Form ABS-EE, Reg AB II Schedule AL — the public standard every
+# securitized tape is filed in, so a buyer's diligence file often arrives in
+# exactly these names. Case and separators are normalized away, so the
+# camelCase the SEC files (`assetNumber`) matches the snake_case written here.
+#
+# There is deliberately NO default_flag alias. ABS-EE carries
+# `zeroBalanceCode`, which is neither 0/1 nor a hazard target: it is sticky,
+# repeating on every filing after the loan resolves, and it covers prepayment
+# and repurchase alongside charge-off. Turning it into a target means deciding
+# what counts as default and which month it fired, which is panel construction
+# and belongs upstream of this gate (docs/CECL-FORK.md).
+ABS_EE_ALIASES: dict[str, list[str]] = {
+    "account_id": ["asset_number"],
+    "performance_date": ["reporting_period_beginning_date",
+                         "reporting_period_ending_date"],
+    "current_balance": ["reporting_period_actual_end_balance_amount",
+                        "reporting_period_beginning_loan_balance_amount"],
+    "scheduled_payment": ["reporting_period_scheduled_payment_amount",
+                          "next_reporting_period_payment_amount_due"],
+    "interest_rate": ["reporting_period_interest_rate_percentage",
+                      "original_interest_rate_percentage"],
+    "remaining_term": ["remaining_term_to_maturity_number"],
+    "recovery_amount": ["recovered_amount", "liquidation_proceeds_amount"],
+    "exposure_at_default": ["charged_off_principal_amount"],
+}
+for _canon, _names in ABS_EE_ALIASES.items():
+    ALIASES.setdefault(_canon, []).extend(_names)
+
 
 def _read_table(path: Path) -> pd.DataFrame:
     if path.suffix.lower() in (".parquet", ".pq"):
         return pd.read_parquet(path)
     return pd.read_csv(path, low_memory=False)
+
+
+def _alias_key(s: str) -> str:
+    """Lowercase, letters and digits only. The one place naming convention is
+    normalized away; `.lower()` matters on the alias side too, or an alias
+    written with a capital would silently lose that letter entirely."""
+    return re.sub(r"[^a-z0-9]", "", s.lower())
 
 
 def suggest_mapping(columns: list[str]) -> dict[str, str | None]:
@@ -126,18 +161,22 @@ def suggest_mapping(columns: list[str]) -> dict[str, str | None]:
     Exact match first (case/space-insensitive), then the alias list. A seller
     column is suggested at most once, best claim wins in schema order.
     """
-    norm = {re.sub(r"[^a-z0-9]", "", c.lower()): c for c in columns}
+    # Case and separators are stripped on BOTH sides, so one alias covers every
+    # convention a seller might file in: loan_id, loanId, LoanId, LOAN_ID,
+    # loan-id and "Loan Id" all reduce to the same key. Only the VOCABULARY has
+    # to be listed — a name built from different words still needs its alias.
+    norm = {_alias_key(c): c for c in columns}
     taken: set[str] = set()
     out: dict[str, str | None] = {}
     for item in SCHEMA:
         name = item["name"]
         hit = None
-        key = re.sub(r"[^a-z0-9]", "", name)
+        key = _alias_key(name)
         if key in norm and norm[key] not in taken:
             hit = norm[key]
         else:
             for alias in ALIASES.get(name, []):
-                akey = re.sub(r"[^a-z0-9]", "", alias)
+                akey = _alias_key(alias)
                 if akey in norm and norm[akey] not in taken:
                     hit = norm[akey]
                     break
@@ -414,6 +453,13 @@ def register_all() -> None:
             _register(record, pd.read_parquet(apath))
         except Exception:                                               # noqa: BLE001
             continue          # a malformed registry entry never blocks boot
+
+
+def is_ingested(key: str) -> bool:
+    """Whether this book came from someone's uploaded tape rather than the
+    generator. The interface labels synthetic data on every data-bearing view,
+    and that label must not ride along on real loans."""
+    return (TAPES_DIR / f"{key}.json").exists()
 
 
 def records() -> list[dict]:

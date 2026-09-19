@@ -236,7 +236,8 @@ def _staged_path(token: str) -> Path:
 
 # ── ingest ───────────────────────────────────────────────────────────────────
 def ingest(token: str, key: str, label: str, mapping: dict[str, str],
-           dpd_state: int, ead_method: str, oot_from: str) -> dict:
+           default_definition: str, ead_method: str, oot_from: str,
+           dpd_state: int = 0, replace: bool = False) -> dict:
     """Validate the staged file as a panel and register it as a book.
 
     Refuses, with the reason, when: the key is taken or malformed, a required
@@ -251,8 +252,12 @@ def ingest(token: str, key: str, label: str, mapping: dict[str, str],
                          "letters, digits or underscore, starting with a letter")
     if key in RESERVED_KEYS:
         raise ValueError(f"{key!r} is reserved — pick another key")
-    if key in PORTFOLIOS:
+    if key in PORTFOLIOS and not (replace and is_ingested(key)):
         raise ValueError(f"a book named {key!r} already exists")
+    # Replacing validates the new file COMPLETELY before anything is written:
+    # the parquet files are keyed by book name, so the swap happens only once
+    # every check below has passed. A bad replacement file cannot destroy the
+    # book it was meant to update.
     if ead_method not in ("amortizing", "ccf"):
         raise ValueError("ead_method must be 'amortizing' or 'ccf'")
     label = (label or "").strip()
@@ -379,9 +384,14 @@ def ingest(token: str, key: str, label: str, mapping: dict[str, str],
 
     record = {
         "key": key, "label": label,
+        # The definition in the uploader's OWN words. The synthetic books
+        # need a `dpd_state` because their generator trips defaults on it; an
+        # ingested tape already carries the flag, so the number was never
+        # read — it only built a sentence ("tripping at delinquency state 4")
+        # that was false wherever the seller defines default some other way,
+        # which on a charge-off-based tape is always.
         "target": {"column": "default_flag",
-                   "description": f"Default under the seller's definition, "
-                                  f"tripping at delinquency state {dpd_state}",
+                   "description": default_definition.strip(),
                    "dpd_state": int(dpd_state), "label": "Default"},
         "ead_method": ead_method,
         "default_oot_from": str(oot.date()),
@@ -453,6 +463,120 @@ def register_all() -> None:
             _register(record, pd.read_parquet(apath))
         except Exception:                                               # noqa: BLE001
             continue          # a malformed registry entry never blocks boot
+
+
+def remap(key: str, changes: dict[str, str | None] | None = None,
+          label: str | None = None, default_definition: str | None = None,
+          ead_method: str | None = None, oot_from: str | None = None) -> dict:
+    """Correct an ingested book's mapping in place, without re-uploading.
+
+    Ingestion RENAMES mapped columns to their canonical names and lets every
+    other column ride along under its own name. Nothing is discarded, so the
+    original file is not needed to change a mapping: swapping
+    `current_balance` from one balance column to another is renaming the
+    first back to the seller's name and the second forward. Making someone
+    re-upload a 46MB file to fix one dropdown is not a constraint of the
+    data — it would have been a constraint of the implementation.
+
+    The three REQUIRED fields are the exception. `account_id`,
+    `performance_date` and `default_flag` define the grid and the target, and
+    the duplicate, date-parse and 0/1 checks all ran against them at
+    ingestion. Re-pointing one means re-running the gate, which is what a
+    replacement upload is for.
+    """
+    rec = load_record(key)
+    if rec is None:
+        raise ValueError(f"{key!r} is not an ingested book")
+    changes = {k: v for k, v in (changes or {}).items()}
+
+    panel = pd.read_parquet(TAPES_DIR / f"{key}_panel.parquet")
+    accounts = pd.read_parquet(TAPES_DIR / f"{key}_accounts.parquet")
+    # One frame to rename on; the static/dynamic split is re-derived after,
+    # because a remapped column may belong on the other side of it.
+    extra = [c for c in accounts.columns if c != "account_id"]
+    df = panel.merge(accounts, on="account_id", how="left") if extra else panel
+    mapping = dict(rec["mapping"])
+
+    for canon, new_orig in changes.items():
+        if canon in REQUIRED:
+            raise ValueError(
+                f"{canon} defines the panel grid and was validated at "
+                f"ingestion, so it cannot be re-pointed here. Replace the "
+                f"tape to change it.")
+        if canon not in {c["name"] for c in SCHEMA}:
+            raise ValueError(f"{canon!r} is not a canonical field")
+        if new_orig is not None and new_orig not in df.columns:
+            raise ValueError(f"this book has no column named {new_orig!r}")
+        current = mapping.get(canon)
+        if current == new_orig:
+            continue
+        # Put the outgoing column back under the seller's own name.
+        if current and canon in df.columns:
+            df = df.rename(columns={canon: current})
+            mapping.pop(canon, None)
+        if new_orig:
+            df = df.rename(columns={new_orig: canon})
+            mapping[canon] = new_orig
+
+    for col in ("origination_date",):
+        if col in df.columns and not pd.api.types.is_datetime64_any_dtype(df[col]):
+            parsed = pd.to_datetime(df[col], errors="coerce")
+            bad = int(parsed.isna().sum()) - int(df[col].isna().sum())
+            if bad > 0.02 * len(df):
+                raise ValueError(
+                    f"{col}: {bad:,} of {len(df):,} values did not parse as dates")
+            df[col] = parsed.dt.to_period("M").dt.to_timestamp()
+
+    _write_book(key, df)
+    rec["mapping"] = mapping
+    rec["fingerprint"] = _fingerprint(key)
+    if label:
+        rec["label"] = label
+    if default_definition:
+        rec["target"]["description"] = default_definition.strip()
+    if ead_method:
+        rec["ead_method"] = ead_method
+    if oot_from:
+        rec["default_oot_from"] = str(pd.Timestamp(oot_from).date())
+    (TAPES_DIR / f"{key}.json").write_text(json.dumps(rec, indent=2))
+    _register(rec, pd.read_parquet(TAPES_DIR / f"{key}_accounts.parquet"))
+    return rec
+
+
+def load_record(key: str) -> dict | None:
+    f = TAPES_DIR / f"{key}.json"
+    if not f.exists():
+        return None
+    try:
+        return json.loads(f.read_text())
+    except Exception:                                                   # noqa: BLE001
+        return None
+
+
+def _fingerprint(key: str) -> str:
+    return hashlib.sha256(
+        (TAPES_DIR / f"{key}_panel.parquet").read_bytes()
+        + (TAPES_DIR / f"{key}_accounts.parquet").read_bytes()).hexdigest()[:12]
+
+
+def _write_book(key: str, df: pd.DataFrame) -> None:
+    """Split into panel and accounts by MEASURED constancy, then write both."""
+    ids = df["account_id"]
+    sample_ids = ids.drop_duplicates().head(5000)
+    probe = df[ids.isin(sample_ids)]
+    static_cols = ["account_id"]
+    for c in df.columns:
+        if c in ("account_id", "performance_date", "default_flag"):
+            continue
+        if probe.groupby("account_id", observed=True)[c].nunique(dropna=False) \
+                .le(1).all():
+            static_cols.append(c)
+    accounts = (df.groupby("account_id", as_index=False, observed=True)[static_cols]
+                .first() if len(static_cols) > 1
+                else df[["account_id"]].drop_duplicates())
+    TAPES_DIR.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(TAPES_DIR / f"{key}_panel.parquet", index=False)
+    accounts.to_parquet(TAPES_DIR / f"{key}_accounts.parquet", index=False)
 
 
 def is_ingested(key: str) -> bool:

@@ -62,7 +62,7 @@ def test_suggested_mapping_finds_seller_names(sandbox):
 def test_ingest_registers_a_working_book(sandbox):
     rep = _stage(_tape())
     rec = T.ingest(rep["token"], "acme_t1", "Acme", MAPPING,
-                   dpd_state=4, ead_method="amortizing", oot_from="2023-06-01")
+                   default_definition="90+ days past due or charge-off", ead_method="amortizing", oot_from="2023-06-01")
     sandbox.append("acme_t1")
     assert "acme_t1" in PORTFOLIOS
     spec = PORTFOLIOS["acme_t1"]
@@ -85,7 +85,7 @@ def test_a_missing_required_column_is_refused_by_name(sandbox):
     with pytest.raises(ValueError, match="default_flag"):
         T.ingest(rep["token"], "acme_t2", "Acme",
                  {k: v for k, v in MAPPING.items() if k != "default_flag"},
-                 dpd_state=4, ead_method="amortizing", oot_from="2023-01-01")
+                 default_definition="90+ days past due or charge-off", ead_method="amortizing", oot_from="2023-01-01")
 
 
 def test_a_non_binary_default_flag_is_refused_not_recoded(sandbox):
@@ -94,7 +94,7 @@ def test_a_non_binary_default_flag_is_refused_not_recoded(sandbox):
     rep = _stage(df)
     with pytest.raises(ValueError, match="0/1"):
         T.ingest(rep["token"], "acme_t3", "Acme", MAPPING,
-                 dpd_state=4, ead_method="amortizing", oot_from="2023-01-01")
+                 default_definition="90+ days past due or charge-off", ead_method="amortizing", oot_from="2023-01-01")
 
 
 def test_duplicate_account_months_are_refused(sandbox):
@@ -103,13 +103,13 @@ def test_duplicate_account_months_are_refused(sandbox):
     rep = _stage(df)
     with pytest.raises(ValueError, match="duplicate account-month"):
         T.ingest(rep["token"], "acme_t4", "Acme", MAPPING,
-                 dpd_state=4, ead_method="amortizing", oot_from="2023-01-01")
+                 default_definition="90+ days past due or charge-off", ead_method="amortizing", oot_from="2023-01-01")
 
 
 def test_missing_lgd_warns_rather_than_refuses(sandbox):
     rep = _stage(_tape())
     rec = T.ingest(rep["token"], "acme_t5", "Acme", MAPPING,
-                   dpd_state=4, ead_method="amortizing", oot_from="2023-06-01")
+                   default_definition="90+ days past due or charge-off", ead_method="amortizing", oot_from="2023-06-01")
     sandbox.append("acme_t5")
     assert any("severity model" in w for w in rec["warnings"])
 
@@ -117,7 +117,7 @@ def test_missing_lgd_warns_rather_than_refuses(sandbox):
 def test_remove_unregisters_and_deletes(sandbox):
     rep = _stage(_tape())
     T.ingest(rep["token"], "acme_t6", "Acme", MAPPING,
-             dpd_state=4, ead_method="amortizing", oot_from="2023-06-01")
+             default_definition="90+ days past due or charge-off", ead_method="amortizing", oot_from="2023-06-01")
     assert T.remove("acme_t6") is True
     assert "acme_t6" not in PORTFOLIOS
     assert not (T.TAPES_DIR / "acme_t6_panel.parquet").exists()
@@ -172,7 +172,7 @@ def test_an_ingested_book_is_not_labelled_synthetic(sandbox):
     label must not ride along on someone's real loans."""
     rep = _stage(_tape())
     T.ingest(rep["token"], "acme_t7", "Acme", MAPPING,
-             dpd_state=4, ead_method="amortizing", oot_from="2023-06-01")
+             default_definition="90+ days past due or charge-off", ead_method="amortizing", oot_from="2023-06-01")
     sandbox.append("acme_t7")
     assert T.is_ingested("acme_t7") is True
     assert T.is_ingested("consumer") is False
@@ -188,7 +188,7 @@ def test_an_ingested_tape_is_never_generated_or_asserted_on(sandbox):
 
     rep = _stage(_tape())
     T.ingest(rep["token"], "acme_t8", "Acme", MAPPING,
-             dpd_state=4, ead_method="amortizing", oot_from="2023-06-01")
+             default_definition="90+ days past due or charge-off", ead_method="amortizing", oot_from="2023-06-01")
     sandbox.append("acme_t8")
 
     assert "acme_t8" in PORTFOLIOS, "an ingested book is a book everywhere else"
@@ -204,7 +204,7 @@ def test_start_from_scratch_archives_ingested_books(sandbox, tmp_path):
     untouched wherever they keep it."""
     rep = _stage(_tape())
     T.ingest(rep["token"], "acme_t9", "Acme", MAPPING,
-             dpd_state=4, ead_method="amortizing", oot_from="2023-06-01")
+             default_definition="90+ days past due or charge-off", ead_method="amortizing", oot_from="2023-06-01")
     assert "acme_t9" in PORTFOLIOS
 
     n = T.archive_all()
@@ -234,7 +234,7 @@ def test_rows_after_default_are_reported_not_refused(sandbox):
 
     rep = _stage(df)
     rec = T.ingest(rep["token"], "acme_t10", "Acme", MAPPING,
-                   dpd_state=4, ead_method="amortizing", oot_from="2023-06-01")
+                   default_definition="90+ days past due or charge-off", ead_method="amortizing", oot_from="2023-06-01")
     sandbox.append("acme_t10")
 
     import pandas as pd
@@ -248,3 +248,39 @@ def test_rows_after_default_are_reported_not_refused(sandbox):
     # 13 from the victim (months 12-24); the fixture's own scattered random
     # defaults leave trailing rows too, so the count is at least that.
     assert row["n_affected"] >= 13
+
+
+def test_a_mis_mapped_column_is_corrected_without_re_uploading(sandbox):
+    """Ingestion renames mapped columns and lets the rest ride along under
+    the seller's names, so nothing is discarded and a correction is a rename.
+    Forcing a re-upload of a large file to fix one dropdown would be a
+    limitation of the implementation, not of the data."""
+    df = _tape()
+    df["AltBalance"] = df["UPB"] * 2          # the column they MEANT to map
+    rep = _stage(df)
+    T.ingest(rep["token"], "acme_t11", "Acme", MAPPING,
+             default_definition="90+ days past due",
+             ead_method="amortizing", oot_from="2023-06-01")
+    sandbox.append("acme_t11")
+
+    before = pd.read_parquet(T.TAPES_DIR / "acme_t11_panel.parquet")
+    assert before["current_balance"].equals(before["current_balance"])
+    first_balance = float(before["current_balance"].iloc[0])
+
+    rec = T.remap("acme_t11", changes={"current_balance": "AltBalance"})
+    after = pd.read_parquet(T.TAPES_DIR / "acme_t11_panel.parquet")
+
+    # The new column now IS current_balance, and the old one is back under
+    # the seller's own name rather than lost.
+    assert rec["mapping"]["current_balance"] == "AltBalance"
+    assert float(after["current_balance"].iloc[0]) == first_balance * 2
+    assert "UPB" in after.columns
+    assert rec["fingerprint"] != "", "the data changed, so the fingerprint must"
+
+    # Metadata edits need no data change at all.
+    rec = T.remap("acme_t11", default_definition="charge-off")
+    assert PORTFOLIOS["acme_t11"].target.description == "charge-off"
+
+    # The three structural fields are not re-pointable here.
+    with pytest.raises(ValueError, match="grid"):
+        T.remap("acme_t11", changes={"account_id": "AltBalance"})

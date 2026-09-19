@@ -1,6 +1,6 @@
-import { useMemo } from 'react'
-import { useParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useMemo, useState } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, type ColumnProfile } from '../lib/api'
 import { Card, CardHead, Skeleton, StatTile, StatusPill } from '../components/ui'
 import { useUi } from '../lib/store'
@@ -300,12 +300,38 @@ function SampleRows({ pk }: { pk: string }) {
  *  Ingestion is a flow, not a place: once a tape is in, its mapping and the
  *  four answers used to live nowhere. This card is their record. A generated
  *  book states what it is instead, so neither kind is unexplained. */
+/** The panel grid and the target: validated at ingestion, so re-pointing one
+ *  means re-running that gate, which is what a replacement upload is. */
+const STRUCTURAL = ['account_id', 'performance_date', 'default_flag']
+const SCHEMA_ORDER = [
+  'account_id', 'performance_date', 'default_flag', 'current_balance',
+  'origination_date', 'months_on_book', 'scheduled_payment', 'interest_rate',
+  'remaining_term', 'committed_amount', 'lgd_realised', 'exposure_at_default',
+  'recovery_amount', 'workout_months',
+]
+
 function BookRecord({ pk, info }: {
   pk: string; info: import('../lib/api').PortfolioInfo
 }) {
+  const nav = useNavigate()
+  const qc = useQueryClient()
+  const [editing, setEditing] = useState(false)
   const tapes = useQuery({ queryKey: ['tapes'], queryFn: api.tapes,
                            staleTime: Infinity,
                            enabled: info.source === 'ingested' })
+  // What this book actually holds, which is what a correction may point at.
+  const cols = useQuery({ queryKey: ['sample', pk, 'cols'],
+                          queryFn: () => api.sample(pk, 1),
+                          staleTime: Infinity, enabled: editing })
+  const remap = useMutation({
+    mutationFn: (body: Parameters<typeof api.tapeRemap>[1]) =>
+      api.tapeRemap(pk, body),
+    onSuccess: () => {
+      // The stored data changed, so everything derived from it is stale.
+      ;['tapes', 'portfolios', 'health', 'sample', 'ts', 'screen']
+        .forEach((k) => qc.invalidateQueries({ queryKey: [k] }))
+    },
+  })
   if (info.source !== 'ingested') {
     return (
       <Card>
@@ -315,23 +341,48 @@ function BookRecord({ pk, info }: {
     )
   }
   const rec = tapes.data?.tapes.find((t) => t.key === pk)
+  // The dropdown offers the SELLER's column names, which is how the mapping
+  // records them — but a mapped column is stored under its canonical name,
+  // so the stored list has to be translated back before it can be matched
+  // against the mapping. Without this every dropdown read "not mapped".
+  const sellerColumns = useMemo(() => {
+    const back = Object.fromEntries(
+      Object.entries(rec?.mapping ?? {}).map(([canon, orig]) => [canon, orig]))
+    return (cols.data?.columns ?? []).map((c) => back[c] ?? c).sort()
+  }, [cols.data, rec])
   if (!rec) return null
   return (
     <Card>
       <CardHead title="How this book was loaded"
         subtitle={`Ingested ${rec.ingested_at.slice(0, 10)} \u00b7 fingerprint ${rec.fingerprint}`}
-        caption="The record of the upload: the four answers given at ingestion and how the seller's columns map onto the canonical schema. This is the book's provenance; it does not change unless the tape is re-ingested." />
+        caption="What was stated at ingestion, and how the seller's columns map onto the canonical schema. Every column of the upload is in this book — mapped ones under their canonical name, the rest under the seller's — so a mis-mapped column is corrected here, in place. The three structural fields need a replacement upload, because the duplicate, date and 0/1 checks ran against them."
+        right={
+          <div className="flex gap-2">
+            <button onClick={() => setEditing((v) => !v)}
+              className="rounded-ctl border border-hairline px-2.5 py-1 text-tiny text-ink-secondary hover:text-ink">
+              {editing ? 'Done' : 'Correct a mapping'}
+            </button>
+            <button onClick={() => nav(`/tapes?replace=${pk}`)}
+              title="Upload a new file for this book: a corrected structural column, or the next period's tape."
+              className="rounded-ctl border border-hairline px-2.5 py-1 text-tiny text-ink-secondary hover:text-ink">
+              Replace tape
+            </button>
+          </div>
+        } />
       <div className="grid gap-4 px-4 pb-4 md:grid-cols-[280px_minmax(0,1fr)]">
-        <dl className="space-y-1.5 text-xs">
-          {[['Default definition', `${info.target.description}`],
+        <dl className="space-y-2.5 text-xs">
+          {/* Label above value, both left-aligned: a right-aligned value
+              that wraps (a stated default definition is a sentence, not a
+              number) reads as ragged nonsense against its own label. */}
+          {[['Default definition', info.target.description],
             ['Exposure method', info.ead_method === 'ccf'
               ? 'Revolving commitments (CCF)' : 'Amortising loans'],
             ['Out-of-time window from', rec.default_oot_from],
-            ['Rows', num(rec.n_rows)], ['Accounts', num(rec.n_accounts)],
+            ['Size', `${num(rec.n_rows)} rows · ${num(rec.n_accounts)} accounts`],
           ].map(([k, v]) => (
-            <div key={k} className="flex justify-between gap-3">
-              <dt className="text-ink-muted">{k}</dt>
-              <dd className="text-right text-ink-secondary">{v}</dd>
+            <div key={k}>
+              <dt className="text-micro uppercase tracking-wide text-ink-muted">{k}</dt>
+              <dd className="mt-0.5 leading-relaxed text-ink-secondary">{v}</dd>
             </div>
           ))}
           {rec.warnings.length > 0 && (
@@ -349,15 +400,44 @@ function BookRecord({ pk, info }: {
           </p>
           <table className="w-full text-left text-micro">
             <tbody>
-              {Object.entries(rec.mapping).map(([canon, orig]) => (
-                <tr key={canon} className="border-t border-hairline">
-                  <td className="py-1 pr-3 font-mono text-ink">{canon}</td>
-                  <td className="py-1 pr-3 text-ink-muted">←</td>
-                  <td className="py-1 font-mono text-ink-secondary">{orig}</td>
-                </tr>
-              ))}
+              {SCHEMA_ORDER.filter((c) => editing || rec.mapping[c])
+                .map((canon) => {
+                const orig = rec.mapping[canon]
+                const structural = STRUCTURAL.includes(canon)
+                return (
+                  <tr key={canon} className="border-t border-hairline">
+                    <td className="py-1 pr-3 font-mono text-ink">{canon}</td>
+                    <td className="py-1 pr-3 text-ink-muted">←</td>
+                    <td className="py-1 font-mono text-ink-secondary">
+                      {!editing || structural ? (orig ?? <span className="text-ink-muted">not mapped</span>)
+                        : (
+                          <select value={orig ?? ''} disabled={remap.isPending}
+                            onChange={(e) => remap.mutate({
+                              changes: { [canon]: e.target.value || null } })}
+                            className="w-full rounded-ctl border border-hairline bg-surface px-1 py-0.5 font-mono text-micro">
+                            <option value="">not mapped</option>
+                            {sellerColumns.map((c) => (
+                              <option key={c} value={c}>{c}</option>
+                            ))}
+                          </select>
+                        )}
+                      {editing && structural && (
+                        <span className="ml-2 text-ink-muted"
+                              title="This field defines the panel grid and was validated at ingestion. Replace the tape to change it.">
+                          fixed
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
+          {remap.isError && (
+            <p className="mt-1.5 text-micro" style={{ color: 'var(--status-critical)' }}>
+              {String((remap.error as Error).message)}
+            </p>
+          )}
         </div>
       </div>
     </Card>

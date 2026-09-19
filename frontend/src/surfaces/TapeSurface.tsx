@@ -1,6 +1,6 @@
-import { useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, type TapeInspection } from '../lib/api'
 import { num } from '../lib/format'
 import { Card, CardHead, Field, Notice } from '../components/ui'
@@ -23,15 +23,39 @@ export default function TapeSurface() {
   const [label, setLabel] = useState('')
   const [key, setKey] = useState('')
   const [keyTouched, setKeyTouched] = useState(false)
-  const [dpd, setDpd] = useState(4)
+  const [definition, setDefinition] = useState('')
   const [ead, setEad] = useState<'amortizing' | 'ccf'>('amortizing')
   const [oot, setOot] = useState('2023-01-01')
+
+  // Replacing an existing book: the previous answers and mapping are carried
+  // in, so correcting one column or loading next quarter's file is a glance
+  // rather than the whole form again. The mapping still has to be confirmed
+  // against the NEW file's columns — a seller can change their headers.
+  const [params] = useSearchParams()
+  const replacing = params.get('replace')
+  const prior = useQuery({ queryKey: ['tapes'], queryFn: api.tapes,
+                           enabled: !!replacing })
+  const priorRec = prior.data?.tapes.find((t) => t.key === replacing)
+  useEffect(() => {
+    if (!priorRec || key) return
+    setKey(priorRec.key); setKeyTouched(true); setLabel(priorRec.label)
+    setDefinition(priorRec.target.description)
+    setEad(priorRec.ead_method === 'ccf' ? 'ccf' : 'amortizing')
+    setOot(priorRec.default_oot_from)
+  }, [priorRec, key])
 
   const inspect = useMutation({
     mutationFn: (f: File) => api.tapeInspect(f),
     onSuccess: (r) => {
       setReport(r)
-      setMapping(r.suggested_mapping)
+      // The prior mapping wins where the new file still has that column;
+      // suggestions fill the rest. A replacement is usually the same layout.
+      const have = new Set(r.columns.map((c) => c.name))
+      setMapping(priorRec
+        ? { ...r.suggested_mapping,
+            ...Object.fromEntries(Object.entries(priorRec.mapping)
+              .filter(([, orig]) => have.has(orig as string))) }
+        : r.suggested_mapping)
       const base = r.filename.replace(/\.[^.]+$/, '')
       setLabel(base.replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()))
       if (!keyTouched) setKey(slug(base))
@@ -41,7 +65,7 @@ export default function TapeSurface() {
   const ingest = useMutation({
     mutationFn: () => api.tapeIngest({
       token: report!.token, key, label, mapping,
-      dpd_state: dpd, ead_method: ead, oot_from: oot,
+      default_definition: definition.trim(), ead_method: ead, oot_from: oot,
     }),
     onSuccess: (rec) => {
       qc.invalidateQueries({ queryKey: ['portfolios'] })
@@ -182,9 +206,11 @@ export default function TapeSurface() {
                     onChange={(e) => { setKeyTouched(true); setKey(slug(e.target.value)) }}
                     className="w-full rounded-ctl border border-hairline bg-surface px-2 py-1.5 font-mono text-xs" />
                 </Field>
-                <Field label="Default definition trips at delinquency state">
-                  <input type="number" min={1} max={12} value={dpd}
-                    onChange={(e) => setDpd(+e.target.value)}
+                <Field label="What does default mean on this tape?"
+                  hint="In your own words. The app cannot read this from a column of ones and zeroes, and every figure it reports is measured against it.">
+                  <input value={definition}
+                    onChange={(e) => setDefinition(e.target.value)}
+                    placeholder="90+ days past due or charge-off"
                     className="w-full rounded-ctl border border-hairline bg-surface px-2 py-1.5 text-xs" />
                 </Field>
                 <Field label="Exposure method">
@@ -205,7 +231,8 @@ export default function TapeSurface() {
             <Card>
               <div className="space-y-2 px-4 py-4">
                 <button
-                  disabled={ingest.isPending || missing.length > 0 || !key || !label}
+                  disabled={ingest.isPending || missing.length > 0 || !key || !label
+                            || !definition.trim()}
                   title={missing.length
                     ? `Map ${missing.join(', ')} first. A panel cannot be modelled without them.`
                     : undefined}

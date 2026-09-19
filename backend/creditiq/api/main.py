@@ -2407,7 +2407,13 @@ class TapeIngestRequest(BaseModel):
     key: str
     label: str
     mapping: dict[str, str | None] = {}
-    dpd_state: int = 4
+    # What default MEANS on this tape, in the uploader's words. Required:
+    # it is the single most important fact about the target, and the app
+    # cannot infer it from a column of ones and zeroes.
+    default_definition: str
+    # Re-ingesting over an existing ingested book: a corrected mapping, or
+    # next period's file. Refused for the synthetic books.
+    replace: bool = False
     ead_method: str = "amortizing"
     oot_from: str = "2023-01-01"
 
@@ -2418,14 +2424,44 @@ def tapes_ingest(req: TapeIngestRequest):
         record = tapemod.ingest(
             token=req.token, key=req.key, label=req.label,
             mapping={k: v for k, v in req.mapping.items() if v},
-            dpd_state=req.dpd_state, ead_method=req.ead_method,
-            oot_from=req.oot_from)
+            default_definition=req.default_definition,
+            ead_method=req.ead_method, oot_from=req.oot_from,
+            replace=req.replace)
     except ValueError as e:
         raise HTTPException(400, str(e))
     # The new book is data the rest of the process has never seen.
     store.clear()
     rollupsvc.clear_cache()
     return _jsonable(record)
+
+
+class TapeRemapRequest(BaseModel):
+    """A correction to an ingested book, applied to the stored data."""
+    changes: dict[str, str | None] = {}
+    label: str | None = None
+    default_definition: str | None = None
+    ead_method: str | None = None
+    oot_from: str | None = None
+
+
+@app.patch("/api/tapes/{key}")
+def tapes_remap(key: str, req: TapeRemapRequest):
+    """Correct a mapping or an answer without re-uploading the file.
+
+    The original upload is not kept, but nothing in it was discarded either:
+    every column is in the stored book, mapped ones under their canonical
+    name and the rest under the seller's. So a mis-mapped column is a rename,
+    not a re-ingestion."""
+    try:
+        rec = tapemod.remap(
+            key, changes=req.changes, label=req.label,
+            default_definition=req.default_definition,
+            ead_method=req.ead_method, oot_from=req.oot_from)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    store.clear()
+    rollupsvc.clear_cache()
+    return _jsonable(rec)
 
 
 @app.delete("/api/tapes/{key}")

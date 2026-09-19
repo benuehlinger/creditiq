@@ -930,9 +930,21 @@ export const api = {
   },
   tapeIngest: (req: { token: string; key: string; label: string
                       mapping: Record<string, string | null>
-                      dpd_state: number; ead_method: string; oot_from: string }) =>
+                      default_definition: string; ead_method: string; oot_from: string }) =>
     post<TapeRecord>('/tapes/ingest', req, 180_000),
   tapes: () => get<{ tapes: TapeRecord[] }>('/tapes'),
+  tapeRemap: (key: string, body: {
+    changes?: Record<string, string | null>
+    label?: string; default_definition?: string
+    ead_method?: string; oot_from?: string }) =>
+    fetch(`/api/tapes/${key}`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(async (r) => {
+      const j = await r.json().catch(() => null)
+      if (!r.ok) throw new Error(errorText(j, r.statusText))
+      return j as TapeRecord
+    }),
   tapeDelete: (key: string) =>
     fetch(`/api/tapes/${key}`, { method: 'DELETE' }).then((r) => r.json()),
   dataHealth: (k: string) => get<DataHealth>(`/portfolios/${k}/health`),

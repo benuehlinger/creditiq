@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api, type PortfolioKey, type Treatment } from '../lib/api'
-import { Card, CardHead, Skeleton, StatusPill, Notice } from '../components/ui'
+import { Card, CardHead, Skeleton, StatusPill, Notice , QueryError} from '../components/ui'
 import BinningEditor from '../components/BinningEditor'
 import {
   DEFAULT_MAX_BINS, DEFAULT_N_KNOTS, columns, setVariable, toggleTerm, variable,
@@ -77,6 +77,7 @@ export default function VariableDetail({ portfolio, column }: {
   const shownBins = binning.data?.achieved_bins
     ?? (binning.data?.bins.filter((b) => !b.is_special).length || DEFAULT_MAX_BINS)
 
+  if (binning.isError) return <QueryError what="This variable" error={binning.error} retry={() => binning.refetch()} />
   if (!binning.data) return <Skeleton className="h-[600px]" />
 
   return (

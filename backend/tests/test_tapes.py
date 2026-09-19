@@ -284,3 +284,29 @@ def test_a_mis_mapped_column_is_corrected_without_re_uploading(sandbox):
     # The three structural fields are not re-pointable here.
     with pytest.raises(ValueError, match="grid"):
         T.remap("acme_t11", changes={"account_id": "AltBalance"})
+
+
+def test_the_mev_library_survives_a_tape_with_no_realised_losses(sandbox):
+    """The library ranks every macro term against BOTH targets. A tape with
+    no realised-LGD column has no severity target, and that took the whole
+    stage down with a 500 — including the PD side, which is why the user
+    opened it. The severity half reports as unavailable instead."""
+    from creditiq.analysis import mev_search
+
+    df = _tape().drop(columns=["LossSeverity"], errors="ignore")
+    rep = _stage(df)
+    mapping = {k: v for k, v in MAPPING.items()}
+    T.ingest(rep["token"], "acme_t12", "Acme", mapping,
+             default_definition="charge-off", ead_method="amortizing",
+             oot_from="2023-06-01")
+    sandbox.append("acme_t12")
+
+    from creditiq import store
+    assert "lgd_realised" not in store.analysis_frame("acme_t12").columns
+    # The point is that it RETURNS rather than raising KeyError on a column
+    # the tape never had. (This fixture is 24 months, too short a window for
+    # the macro correlations themselves to be estimated; the real Santander
+    # tape returns 650 terms through the same path.)
+    lib = mev_search.library("acme_t12")
+    assert "rows" in lib
+    assert lib["lgd_defaults"] == 0, "the severity side reports as empty"

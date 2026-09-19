@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, asMap, type SeverityFreq, type LgdBacktest, type LgdDiagnostics,
          type LgdFitResult, type LgdSpecPayload, type PortfolioKey } from '../lib/api'
-import { Card, CardHead, EmptyState, Skeleton, StatTile, StatusPill, ViewTabs } from '../components/ui'
+import { Card, CardHead, EmptyState, Skeleton, StatTile, StatusPill, ViewTabs , QueryError} from '../components/ui'
 import Eq from '../components/Eq'
 import { Check, Close } from '../components/icons'
 import SeverityOverTime from '../components/SeverityOverTime'
@@ -193,6 +193,7 @@ export default function LgdModelPane({ portfolio, spec, onOpenVariable }: {
       || cand.data?.numeric.find((c) => c.column === d)?.macro),
     [spec.drivers, cand.data])
 
+  if (cand.isError) return <QueryError what="The severity candidates" error={cand.error} retry={() => cand.refetch()} />
   if (cand.isLoading || !cand.data) return <Skeleton className="h-[560px]" />
 
   return (

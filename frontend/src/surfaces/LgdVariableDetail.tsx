@@ -4,7 +4,7 @@ import {
   api, asMap, type LgdSpecPayload, type LgdTreatment, type PortfolioKey,
   type SeverityCurve, type SeverityFreq, type SeverityLevel, type SeverityPoint,
 } from '../lib/api'
-import { Card, CardHead, Skeleton, StatTile } from '../components/ui'
+import { Card, CardHead, Skeleton, StatTile , QueryError} from '../components/ui'
 import SeverityOverTime, { severitySummary } from '../components/SeverityOverTime'
 import { Editor } from '../components/BinningEditor'
 import { chrome, deemphasis, ink, mode, sequential, series } from '../design/tokens'
@@ -40,6 +40,7 @@ export default function LgdVariableDetail({ portfolio, column }: {
     edit((x) => ({ ...x, treatments: {
       ...asMap<LgdTreatment>(x.treatments), [column]: t } }), `${column} to ${t}`)
 
+  if (screen.isError) return <QueryError what="This driver" error={screen.error} retry={() => screen.refetch()} />
   if (!screen.data) return <Skeleton className="h-[560px]" />
 
   return (
@@ -80,6 +81,7 @@ export function LgdTarget({ portfolio }: { portfolio: string }) {
     queryKey: ['lgd-sot', portfolio, sotFreq],
     queryFn: () => api.lgdSeverityOverTime(portfolio, sotFreq),
   })
+  if (dist.isError) return <QueryError what="The severity distribution" error={dist.error} retry={() => dist.refetch()} />
   if (!dist.data) return <Skeleton className="h-[560px]" />
   return (
     <div className="space-y-3">

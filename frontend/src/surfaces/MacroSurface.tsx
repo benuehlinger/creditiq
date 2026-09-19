@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api, type MacroCandidate, type PortfolioKey } from '../lib/api'
-import { Card, CardHead, Skeleton, StatTile } from '../components/ui'
+import { Card, CardHead, EmptyState, Skeleton, StatTile, QueryError } from '../components/ui'
 import { Check, Cross, Info } from '../components/icons'
 import EChart from '../charts/EChart'
 import { baseOption, crosshairTooltip, lineSeries } from '../charts/base'
@@ -91,6 +91,7 @@ export default function MacroSurface() {
     enabled: !!shown,
   })
 
+  if (lib.isError) return <QueryError what="The MEV library" error={lib.error} retry={() => lib.refetch()} />
   if (lib.isLoading || !lib.data) return <div className="p-4"><Skeleton className="h-[560px]" /></div>
   const d = lib.data
   const nStationary = d.rows.filter((c) => c.stationary === true).length
@@ -164,6 +165,18 @@ export default function MacroSurface() {
         <Card>
           <CardHead title="Candidates" subtitle={`Ranked by |correlation| with the ${target === 'pd' ? 'monthly default rate, on the log-odds scale' : 'monthly mean severity, on the logit scale'}`}
             caption="Significance uses an effective sample size, not the raw month count. Two smooth monthly series carry far less independent information than the observation count implies." />
+          {target === 'lgd' && d.lgd_defaults === 0 ? (
+            /* No severity target to rank against. An empty table with no
+               explanation reads as "no macro term matters here", which is a
+               finding; the truth is that nothing was measured. */
+            <EmptyState title="This tape carries no realised losses">
+              Severity is correlated per resolved default, and this book has
+              none: the upload mapped no realised-LGD column, so there is no
+              severity target to rank macro terms against. The PD side is
+              unaffected. A book like this runs on a declared severity
+              assumption, set on the LGD model stage.
+            </EmptyState>
+          ) : <>
           <SignLegend n={rows.filter((c) => signOk(c, target) == null).length}
                       total={rows.length} />
           <div className="thin-scroll max-h-[560px] overflow-auto">
@@ -249,6 +262,7 @@ export default function MacroSurface() {
             )}
 
           </div>
+          </>}
         </Card>
 
         <div className="space-y-3">

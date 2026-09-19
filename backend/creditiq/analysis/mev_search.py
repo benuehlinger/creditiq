@@ -178,6 +178,12 @@ def lgd_rows(portfolio: str) -> pd.DataFrame:
     """
     from .. import store
     df = store.analysis_frame(portfolio)
+    # A tape without realised losses has no severity target to rank against.
+    # Empty, so the LGD column of the library reads as unavailable rather
+    # than taking the whole screen down with it — the PD side is unaffected
+    # and is the reason the user opened this stage.
+    if "lgd_realised" not in df.columns:
+        return pd.DataFrame({"month": pd.to_datetime([]), "y": []})
     d = df.loc[df["default_flag"] == 1, ["performance_date", "lgd_realised"]].dropna()
     return pd.DataFrame({
         "month": pd.DatetimeIndex(d["performance_date"]).to_period("M").to_timestamp(),

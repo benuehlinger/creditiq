@@ -65,6 +65,13 @@ def _as_of_frame(df: pd.DataFrame, as_of: pd.Timestamp) -> pd.DataFrame:
     if d.empty:
         last = df["performance_date"].max()
         d = df.loc[df["performance_date"] == last]
+    # The generated books carry an explicit terminal_event, so a defaulted or
+    # prepaid account can be excluded by name. An ingested tape usually does
+    # not: the panel is required to STOP at the terminal event instead, which
+    # the integrity checks enforce, so an account still present on the
+    # reporting date is by construction still open.
+    if "terminal_event" not in d.columns:
+        return d.copy()
     return d.loc[d["terminal_event"].isin(["none", "censored"])].copy()
 
 
@@ -113,7 +120,7 @@ def project(spec: ModelSpec, fit_result, df: pd.DataFrame, mev_path: pd.DataFram
     # conditional PD from the fitted hazard, on the SCENARIO macro path
     des = D.build(proj, spec, woe_maps=fit_result.woe_maps, means=fit_result.means,
                   stds=fit_result.stds, mev_override=mev_path,
-                  basis_maps=fit_result.basis_maps)
+                  basis_maps=fit_result.basis_maps, columns=fit_result.columns)
     pd_t = predict(des.X, fit_result.beta).reshape(n, horizon_months)
 
     # LGD, also scenario-conditioned. Every macro column the severity model is
@@ -217,7 +224,18 @@ def _ifrs9(pd_t, lgd_t, ead, df_t, surv, book) -> dict:
 
     pd12 = 1.0 - np.prod(1.0 - pd_t[:, :k], axis=1)
     origination_pd = np.maximum(np.median(pd12), 1e-9)
-    stage = np.where(book["delinquency_bucket"].astype(str).to_numpy() != "Current", 3,
+    # Stage 3 needs a delinquency state, which an ingested tape may not carry.
+    # Without one, staging runs on the PD triggers alone and the trigger text
+    # says so — never a silent pretence that every account is current.
+    if "delinquency_bucket" in book.columns:
+        delinquent = book["delinquency_bucket"].astype(str).to_numpy() != "Current"
+        stage3_note = "stage 3 when the account is already delinquent."
+    else:
+        delinquent = np.zeros(n, dtype=bool)
+        stage3_note = ("this tape carries no delinquency state, so stage 3 by "
+                       "delinquency is unavailable and staging runs on the PD "
+                       "triggers alone.")
+    stage = np.where(delinquent, 3,
                      np.where((pd12 > SICR_MULTIPLE * origination_pd)
                               | (pd12 > SICR_ABSOLUTE), 2, 1))
     ecl_staged = np.where(stage == 1, loss_12, loss_full)
@@ -225,7 +243,7 @@ def _ifrs9(pd_t, lgd_t, ead, df_t, surv, book) -> dict:
     return {
         "trigger": (f"Stage 2 when the 12-month PD exceeds {SICR_MULTIPLE:.0f}x the "
                     f"portfolio median at origination or {SICR_ABSOLUTE:.2%} outright; "
-                    f"stage 3 when the account is already delinquent."),
+                    f"{stage3_note}"),
         "total_ecl": float(ecl_staged.sum()),
         "stages": [{
             "stage": int(s), "n": int((stage == s).sum()),

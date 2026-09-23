@@ -4,6 +4,7 @@ import { useLoadVersion } from '../lib/loadVersion'
 import { usd } from '../lib/format'
 import { api, type PortfolioKey } from '../lib/api'
 import { useUi } from '../lib/store'
+import { lgdSpecified } from '../lib/spec'
 import { useModelIdentity, useProgress } from '../lib/progress'
 import { StatusPill } from './ui'
 import { ratio } from '../lib/format'
@@ -27,6 +28,7 @@ export default function ModelBand({ portfolio }: { portfolio: string }) {
   const fitted = useUi((s) => s.fitted[pk])
   const lgd = useUi((s) => s.fittedLgd[pk])
   const loaded = useUi((s) => s.loaded[pk])
+  const origin = useUi((s) => s.origin[pk])
   const ident = useModelIdentity(portfolio)
   const progress = useProgress(portfolio)
 
@@ -98,7 +100,8 @@ export default function ModelBand({ portfolio }: { portfolio: string }) {
             <button onClick={() => setOpen((o) => !o)}
               title="Switch to another saved model on this book, on this screen"
               className="group inline-flex items-baseline gap-2 text-left text-2xl font-semibold leading-none text-ink hover:text-accent">
-              {provisional ? 'Working draft' : loaded?.name ?? ident.name ?? 'Unnamed'}
+              {provisional ? 'Working draft'
+                : loaded?.name ?? ident.name ?? origin?.name ?? 'Unnamed'}
               <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor"
                    strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden
                    className="self-center opacity-40 group-hover:opacity-100">
@@ -167,7 +170,11 @@ export default function ModelBand({ portfolio }: { portfolio: string }) {
               <>
                 <span className="font-mono text-ink-muted">{loaded?.hash ?? ident.hash ?? '—'}</span>
                 {loaded && progress.mode === 'edited' && <> · edited since opened</>}
-                {!loaded && !ident.complete && <> · a Model ID needs both halves fitted</>}
+                {!loaded && !ident.complete && (
+                  <> · {ident.pdName && !ident.lgdName ? 'PD half only — LGD not fitted'
+                    : ident.lgdName && !ident.pdName ? 'LGD half only — PD not fitted'
+                      : 'neither half fitted yet'}</>
+                )}
               </>
             )}
           </p>
@@ -179,7 +186,11 @@ export default function ModelBand({ portfolio }: { portfolio: string }) {
           {fitted ? (
             <>
               <div className="mt-1 flex items-baseline gap-2">
-                <span className="font-mono text-base text-ink">{fitted.pdHash ?? fitted.hash}</span>
+                {/* Name first, hash second: the collated Model name above is
+                    this name and the LGD cell's, and the cells are where the
+                    reader learns which half each name belongs to. */}
+                <span className="text-base font-medium text-ink">{ident.pdName ?? fitted.name}</span>
+                <span className="font-mono text-micro text-ink-muted">{fitted.pdHash ?? fitted.hash}</span>
                 {progress.pdStale
                   ? <StatusPill severity="warning">out of date</StatusPill>
                   : pdSev && <StatusPill severity={pdSev}>{pdWord}</StatusPill>}
@@ -203,7 +214,12 @@ export default function ModelBand({ portfolio }: { portfolio: string }) {
           {lgdFitted ? (
             <>
               <div className="mt-1 flex items-baseline gap-2">
-                <span className="font-mono text-base text-ink">{lgd!.hash}</span>
+                {(ident.lgdName ?? lgd!.name)
+                  ? <>
+                      <span className="text-base font-medium text-ink">{ident.lgdName ?? lgd!.name}</span>
+                      <span className="font-mono text-micro text-ink-muted">{lgd!.hash}</span>
+                    </>
+                  : <span className="font-mono text-base text-ink">{lgd!.hash}</span>}
                 {progress.lgdStale
                   ? <StatusPill severity="warning">out of date</StatusPill>
                   : lgdSev && <StatusPill severity={lgdSev}>{lgdWord}</StatusPill>}
@@ -211,12 +227,16 @@ export default function ModelBand({ portfolio }: { portfolio: string }) {
               <p className="mt-1.5 tnum text-xs text-ink-secondary">
                 {lgd!.rmse != null
                   ? <>RMSE {lgd!.rmse.toFixed(3)} · bias {(lgd!.bias ?? 0) >= 0 ? '+' : ''}{(lgd!.bias ?? 0).toFixed(3)} · mean {(lgd!.meanLgd * 100).toFixed(1)}%</>
-                  : <>{lgd!.spec.drivers.length + lgd!.spec.categoricals.length} drivers · mean {(lgd!.meanLgd * 100).toFixed(1)}%</>}
+                  : lgd!.spec.assumed_lgd != null
+                    ? <>declared, not estimated · mean {(lgd!.meanLgd * 100).toFixed(1)}%</>
+                    : <>{lgd!.spec.drivers.length + lgd!.spec.categoricals.length} drivers · mean {(lgd!.meanLgd * 100).toFixed(1)}%</>}
               </p>
             </>
-          ) : lgd?.spec && (lgd.spec.drivers.length || lgd.spec.categoricals.length) ? (
+          ) : lgdSpecified(lgd?.spec) ? (
             <p className="mt-1.5 text-xs text-ink-muted">
-              {lgd.spec.drivers.length + lgd.spec.categoricals.length} drivers selected · not fitted
+              {lgd!.spec.assumed_lgd != null
+                ? <>severity assumed at {Math.round(lgd!.spec.assumed_lgd * 100)}%</>
+                : <>{lgd!.spec.drivers.length + lgd!.spec.categoricals.length} drivers selected · not fitted</>}
             </p>
           ) : (
             <p className="mt-1.5 text-xs text-ink-muted">not fitted</p>

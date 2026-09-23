@@ -31,7 +31,10 @@ def test_every_design_column_belongs_to_exactly_one_term():
                      [VariableSpec("fico_orig", treatment="spline"),
                       VariableSpec("revolving_utilization", treatment="bins")],
                      mevs=[MevSpec("unemployment_rate"),
-                           MevSpec("prime_rate", transform="yoy", lag_months=6)])
+                           MevSpec("prime_rate", transform="yoy", lag_months=6)],
+                     # legacy flag: exercises the replay path for versions saved
+                     # while the automatic baseline existed
+                     seasoning_spline=True)
     des = D.build(df, spec)
     assert len(des.terms) == len(des.columns)
     assert des.terms[0] is None, "the intercept belongs to no term"

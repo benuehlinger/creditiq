@@ -74,6 +74,10 @@ export default function ModelPane({ portfolio, onOpenVariable }: {
     enabled: !!fitted?.hash,
     staleTime: Infinity,
     retry: false,
+    // Switching models keeps the previous result on screen while the next
+    // one loads — the same no-flicker rule the candidate views follow — and
+    // the .swap-live transition below carries the change.
+    placeholderData: (prev) => prev,
   })
   const result = cached.data ?? null
   const setResult = (r: FitResponse | null) => {
@@ -130,8 +134,12 @@ export default function ModelPane({ portfolio, onOpenVariable }: {
   // no-op and a fault.
   const [outcome, setOutcome] = useState<string | null>(null)
 
+  // The phase the server reports while the fit runs, so the bar says where it
+  // actually is. Cleared on each new run.
+  const [phase, setPhase] = useState<string | undefined>(undefined)
+
   const fit = useMutation({
-    mutationFn: () => api.fit(request),
+    mutationFn: () => { setPhase(undefined); return api.fit(request, setPhase) },
     onSuccess: (r) => {
       const prev = result
       setOutcome(!prev ? `Fitted ${r.hash}.`
@@ -226,17 +234,6 @@ export default function ModelPane({ portfolio, onOpenVariable }: {
               className="ml-2 rounded-ctl border border-hairline bg-sunken px-2 py-1 text-xs text-ink" />
           </label>
 
-          {/* The account-age baseline is the analyst's call, made here where
-              the other fit choices are made — never applied silently. */}
-          <label className="flex cursor-pointer items-center gap-2 text-tiny"
-            title="A curve on months on book capturing how default risk varies with loan age. With it off, selected variables that correlate with age absorb the age pattern. Selecting months_on_book as a variable replaces it either way.">
-            <input type="checkbox" checked={spec.seasoningSpline ?? true}
-              onChange={(e) => editPd(pk,
-                (x) => ({ ...x, seasoningSpline: e.target.checked }),
-                `the account-age baseline ${e.target.checked ? 'on' : 'off'}`)} />
-            <span className="text-ink-muted">Account-age baseline</span>
-          </label>
-
           {stale && (
             <span className="ml-auto flex items-center gap-1.5 text-tiny"
                   style={{ color: 'var(--status-warning)' }}
@@ -270,7 +267,7 @@ export default function ModelPane({ portfolio, onOpenVariable }: {
       </Card>
 
       {(fit.isPending || justFitted) && (
-        <FitProgress done={!fit.isPending}
+        <FitProgress done={!fit.isPending} phase={phase}
           phases={PD_PHASES(result?.n_full, result?.timings)} />
       )}
 
@@ -297,14 +294,19 @@ export default function ModelPane({ portfolio, onOpenVariable }: {
             { key: 'backtest', label: 'Backtesting' },
           ]} />
 
-          {tab === 'spec' && <SpecificationCard r={result} onOpenVariable={onOpenVariable} />}
-          {tab === 'diagnostics' && <FitDiagnostics r={result} />}
-          {tab === 'backtest' && (
-            <>
-              <Verdict r={result} screen={screen.data?.rows} />
-              <BacktestPanel r={result} portfolio={portfolio} request={fitted?.request} />
-            </>
-          )}
+          {/* Keyed on the model hash: a switch plays one .swap-live breath
+              over content that never blanks, because the query holds the
+              previous result until the next one arrives. */}
+          <div key={result.hash} className="swap-live space-y-3">
+            {tab === 'spec' && <SpecificationCard r={result} onOpenVariable={onOpenVariable} />}
+            {tab === 'diagnostics' && <FitDiagnostics r={result} />}
+            {tab === 'backtest' && (
+              <>
+                <Verdict r={result} screen={screen.data?.rows} />
+                <BacktestPanel r={result} portfolio={portfolio} request={fitted?.request} />
+              </>
+            )}
+          </div>
         </>
       )}
 

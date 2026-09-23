@@ -21,7 +21,17 @@ def test_candidates_only_offer_columns_that_exist_on_defaulted_rows():
     c = candidates(store.analysis_frame("cre"), "cre", monthly_panel())
     assert c["n_defaults"] > 0
     assert all(r["filled"] >= 0.5 for r in c["numeric"])
-    assert all(2 <= r["levels"] <= 12 for r in c["categorical"])
+    # The 12-level cap blocks wide identity-like categoricals (a 144-level
+    # metro). Cohort labels (vintage, origination year) are exempt: they are
+    # offered as categoricals PRECISELY so they can never enter as a linear
+    # term, and their levels bin down at fit time.
+    from creditiq.analysis.screening import is_cohort_label
+    import pandas as pd
+    for r in c["categorical"]:
+        if is_cohort_label(pd.Series([], name=r["column"], dtype=float)) \
+                or "vintage" in r["column"]:
+            continue
+        assert 2 <= r["levels"] <= 12, r["column"]
 
 
 def test_the_macro_block_is_reachable():
@@ -83,12 +93,17 @@ def test_the_lgd_specification_changes_the_model_id():
     assert len({pd_only.hash(), with_a.hash(), with_b.hash()}) == 3
 
 
-def test_a_half_built_model_is_not_given_a_name():
+def test_a_half_built_model_names_the_half_that_exists():
+    """USER-DIRECTED (2026-09-16, see DECISIONS): each half carries its own
+    name from its own hash, and the pair is the two names collated — never a
+    third minted name. A half-built model therefore IS named (the half that
+    exists), and the response still says which half is missing."""
     r = client.post("/api/model/identity",
                     json={"portfolio": "cre", "variables": [{"column": "dscr_reported"}]})
     body = r.json()
     assert body["complete"] is False
-    assert body["name"] is None
+    assert body["name"] == body["pd_name"] and body["pd_name"]
+    assert body["lgd_name"] is None
     assert "LGD drivers" in body["missing"]
 
 
@@ -172,3 +187,34 @@ def test_a_specification_saved_in_the_older_list_form_still_loads():
     r = client.post("/api/lgd/fit", json=legacy)
     assert r.status_code == 200, r.json()
     assert any(c.startswith("cltv_basis") for c in r.json()["columns"])
+
+
+def test_a_declared_severity_scores_exactly_that_value_everywhere():
+    """An assumed model is not a fit: an intercept-only model whose intercept
+    is the logit of the declared value, flowing through the same scoring
+    machinery as a fitted model. Every account, every month, exactly the
+    declared number."""
+    import numpy as np
+    import pandas as pd
+    from creditiq.models import lgd as LGD
+    from creditiq.models.spec import LgdSpec
+
+    spec = LgdSpec(portfolio="consumer", assumed_lgd=0.55)
+    m = LGD.assumed_model(spec)
+    df = pd.DataFrame({"performance_date": pd.to_datetime(["2024-01-01"] * 7)})
+    pred = m.predict(LGD.design_for(df, m))
+    assert np.allclose(pred, 0.55)
+    assert m.n_defaults == 0, "nothing was estimated and the record says so"
+
+    # The assumption is identity: a different value is a different model, and
+    # a spec without one keeps the hash it always had (adding the key
+    # unconditionally would have renamed every saved model).
+    assert spec.hash() != LgdSpec(portfolio="consumer").hash()
+    assert spec.hash() != LgdSpec(portfolio="consumer", assumed_lgd=0.45).hash()
+    assert LgdSpec.from_dict(spec.to_dict()).hash() == spec.hash()
+
+    from creditiq.models.naming import lgd_display
+    assert lgd_display(spec) == "assumed 55%"
+
+    with __import__("pytest").raises(ValueError, match="between 0 and 1"):
+        LGD.assumed_model(LgdSpec(portfolio="consumer", assumed_lgd=1.2))

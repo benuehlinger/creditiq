@@ -38,6 +38,11 @@ export function baseOption(): EChartsOption {
       splitLine: { lineStyle: { color: c.grid, width: marks.gridWidth, type: 'solid' } },
     },
     tooltip: {
+      // The colours below are read at build time; the class lets the
+      // stylesheet override them with the CURRENT theme's variables, so a
+      // chart built before the theme attribute landed does not keep a white
+      // tooltip on a dark page.
+      className: 'chart-tip',
       backgroundColor: s.raised,
       borderColor: c.border,
       borderWidth: 1,
@@ -115,7 +120,6 @@ export function crosshairTooltip(
 ) {
   const m = mode()
   const c = chrome(m)
-  const k = ink(m)
   return {
     trigger: 'axis' as const,
     axisPointer: {
@@ -124,6 +128,9 @@ export function crosshairTooltip(
       snap: true,
     },
     formatter: (params: any) => {
+      // Ink is resolved when the tooltip is SHOWN, not when the option was
+      // built, so a theme switch after the chart mounted still reads.
+      const k = ink(mode())
       const arr = Array.isArray(params) ? params : [params]
       if (!arr.length) return ''
       const head = formatAxis ? formatAxis(arr[0].axisValue) : arr[0].axisValue

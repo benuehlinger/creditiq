@@ -8,6 +8,7 @@ import Legend from '../charts/Legend'
 import { baseOption, crosshairTooltip, gridFor } from '../charts/base'
 import { ink, mode, ordinal } from '../design/tokens'
 import { useUi } from '../lib/store'
+import { monthLong } from '../lib/format'
 
 /**
  * The macro terms of a specification, as the projection consumes them.
@@ -75,7 +76,8 @@ function useMevCharts(terms: string[]) {
       const option = {
         ...baseOption(),
         grid: gridFor({ left: 42, right: 6, top: 8, bottom: 20 }),
-        tooltip: crosshairTooltip((v) => fmt(v), (d) => String(d).slice(0, 7)),
+        // A time axis hands the tooltip a timestamp, not a date string.
+        tooltip: crosshairTooltip((v) => fmt(v), (d) => monthLong(d)),
         xAxis: { ...(baseOption().xAxis as object), type: 'time' as const,
                  // A year per gridline, never repeated: at full row width the
                  // default density printed the same year three times over.
@@ -87,13 +89,16 @@ function useMevCharts(terms: string[]) {
                  axisLabel: { color: k.muted, fontSize: 9, formatter: (v: number) => fmt(v) } },
         series: [
           { type: 'line' as const, name: 'History', symbol: 'none', z: 1,
-            lineStyle: { color: k.muted, width: 1.25 },
+            color: k.muted, lineStyle: { color: k.muted, width: 1.25 },
             data: s.history.map((p) => [p.date, p.value] as [string, number]) },
+          // `color` at series level is what the tooltip marker reads; a colour
+          // set only on the stroke left the marker on the default palette,
+          // green and yellow beside blue lines.
           { type: 'line' as const, name: 'Supervisory Baseline', symbol: 'none', z: 2,
-            lineStyle: { color: ordinal(0, 2), width: 1.75 },
+            color: ordinal(0, 2), lineStyle: { color: ordinal(0, 2), width: 1.75 },
             data: branch(s.baseline) },
           { type: 'line' as const, name: 'Supervisory Severely Adverse', symbol: 'none', z: 3,
-            lineStyle: { color: ordinal(1, 2), width: 1.75 },
+            color: ordinal(1, 2), lineStyle: { color: ordinal(1, 2), width: 1.75 },
             // The seam, marked once per chart on the branch drawn last.
             markLine: lastHist ? {
               symbol: 'none', silent: true, label: { show: false },
@@ -158,9 +163,9 @@ export function MevPathRows({ terms, books = [], membership = {} }: {
              style={{ gridTemplateColumns: cols }}>
           <span>Macro term</span>
           {books.map((b) => (
-            <span key={b.key} className="flex flex-col items-center gap-1" title={b.label}>
+            <span key={b.key} className="flex min-w-0 flex-col items-center gap-1" title={b.label}>
               <span className="h-2 w-2 rounded-full" style={{ background: b.color }} />
-              {b.short}
+              <span className="w-full truncate text-center">{b.short}</span>
             </span>
           ))}
           <span>History and the two branches</span>
@@ -216,7 +221,7 @@ export default function StressedMevs({ terms, subtitle }: {
     <Card>
       <CardHead title="Macro paths in this projection"
         subtitle={subtitle}
-        caption="Each macro term of the fitted specification, exactly as the model consumes it: history to the projection date, then the two Federal Reserve branches the projection walks. The gap that opens at the dashed seam is the stress."
+        caption="Each macro term as the model consumes it: history to the projection date, then the two Federal Reserve branches. The divergence after the seam is the stress."
         right={<MevLegend />} />
       {/* The same row-per-term table the roll-up uses, without its book
           columns. Rows are the answer to "look right at any count": a grid of

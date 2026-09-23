@@ -22,20 +22,52 @@ def _row(**kw):
 def test_composite_rank_matches_a_hand_computed_example():
     r1 = _row(auc_oot=0.75, auc_in=0.76, max_vif=1.0)
     r2 = _row(auc_oot=0.70, auc_in=0.80, all_significant=False,
-              stress={"monotone": False}, core_shifted=True, max_vif=5.0)
+              stress={"monotone": False}, core_shifted=True, max_vif=20.0)
     r3 = _row(auc_oot=0.72, auc_in=0.73, stress={"monotone": False},
               max_vif=2.0)
     rows = [r2, r3, r1]                    # deliberately out of order
     S.composite_rank(rows)
 
-    # By hand, with span = 0.75 - 0.70 = 0.05:
-    #   r1: .40(1) + .15 + .15 + .10 + .10(1/1) + .10(1 - .01/.10) = 0.99
-    #   r2: .40(0) + 0 + 0 + 0 + .10(1/5) + .10(1 - min(.10/.10,1)) = 0.02
-    #   r3: .40(.4) + .15 + 0 + .10 + .10(1/2) + .10(.9) = 0.55
+    # By hand, with span = 0.75 - 0.70 = 0.05 and the VIF flag line at 5:
+    #   r1: .30(1) + .15 + .15 + .10 + .20(1) + .10(1 - .01/.10)  =  0.99
+    #   r2: .30(0) + 0 + 0 + 0 + .20(-1) + .10(1 - min(.10/.10,1)) = -0.20
+    #   r3: .30(.4) + .15 + 0 + .10 + .20(1) + .10(.9)            =  0.66
     assert r1["score"] == pytest.approx(0.99, abs=1e-9)
-    assert r2["score"] == pytest.approx(0.02, abs=1e-9)
-    assert r3["score"] == pytest.approx(0.55, abs=1e-9)
+    assert r2["score"] == pytest.approx(-0.20, abs=1e-9)
+    assert r3["score"] == pytest.approx(0.66, abs=1e-9)
     assert (r1["auto_rank"], r3["auto_rank"], r2["auto_rank"]) == (1, 2, 3)
+
+
+def test_vif_credit_spans_full_credit_to_penalty():
+    """Full credit to the flag line, zero at twice it, floored at -1."""
+    assert S._vif_credit(1.0, 5.0) == pytest.approx(1.0)
+    assert S._vif_credit(5.0, 5.0) == pytest.approx(1.0)
+    assert S._vif_credit(7.5, 5.0) == pytest.approx(0.5)
+    assert S._vif_credit(10.0, 5.0) == pytest.approx(0.0)
+    assert S._vif_credit(15.0, 5.0) == pytest.approx(-0.5)
+    assert S._vif_credit(20.0, 5.0) == pytest.approx(-1.0)
+    assert S._vif_credit(22.0, 5.0) == pytest.approx(-1.0)   # floored
+
+
+def test_a_severely_collinear_model_cannot_win_on_discrimination_alone():
+    """The whole point of the penalty: best-in-field out-of-time AUC does not
+    buy a VIF-22 model the top of the board over a clean one that is worst in
+    field on AUC and identical everywhere else."""
+    clean = _row(auc_oot=0.70, auc_in=0.70, max_vif=1.0)
+    collinear = _row(auc_oot=0.80, auc_in=0.80, max_vif=22.0)
+    S.composite_rank([collinear, clean])
+
+    assert clean["score"] > collinear["score"]
+    assert clean["auto_rank"] == 1
+
+
+def test_the_vif_penalty_tracks_the_configured_flag_line():
+    """A reviewer who loosens max_vif to 10 moves the penalty with it."""
+    row = _row(max_vif=10.0)
+    S.composite_rank([row], max_vif=10.0)
+    strict = _row(max_vif=10.0)
+    S.composite_rank([strict], max_vif=5.0)
+    assert row["score"] > strict["score"]
 
 
 def test_filtered_rows_are_never_ranked():
@@ -133,13 +165,22 @@ def test_run_search_end_to_end_small():
     assert all(1 <= r["n_mevs"] <= 3 for r in payload["rows"])
     ranked = [r for r in payload["rows"] if r["auto_rank"]]
     assert ranked, "at least one ranked row"
-    finalists = [r for r in payload["rows"] if r["finalist"]]
-    assert len(finalists) == 1
-    f = finalists[0]
-    assert f["auto_rank"] == 1
-    assert f["full"]["errors_oot"] is None or "rmse_pp" in f["full"]["errors_oot"]
+    # NO automatic finalist pass. It was the one stage that left the thinned
+    # screening frame and re-fitted the top rows on the full panel — fifteen
+    # minutes on a 22-million-row tape, for models nobody had chosen. Every
+    # figure the board ranks on is computed for every row on the lean path,
+    # and opening a row as a draft refits on full data anyway.
+    assert not any(r["finalist"] for r in payload["rows"])
+    for r in payload["rows"]:
+        assert r["auc_oot"] is not None or r["filtered"], (
+            "ranking inputs must exist for every row without a full fit")
+    # The top row is ranked on the same statistics as every other row.
+    top = min(ranked, key=lambda r: r["auto_rank"])
+    assert top["auto_rank"] == 1
+    assert top["score"] is not None and top["max_vif"] is not None
+
     # progress was verbose: stages present, labels name what is being fitted
     stages = {s[0] for s in seen}
-    assert stages >= {1, 2, 3, 4}
+    assert stages >= {1, 2, 3}
+    assert 4 not in stages, "the full-panel refit stage is gone"
     assert any("screening" in s[4] for s in seen)
-    assert any("full fit" in s[4] for s in seen)

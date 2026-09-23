@@ -4,7 +4,7 @@ import {
   api, asMap, type LgdSpecPayload, type LgdTreatment, type PortfolioKey,
   type SeverityCurve, type SeverityFreq, type SeverityLevel, type SeverityPoint,
 } from '../lib/api'
-import { Card, CardHead, Skeleton, StatTile } from '../components/ui'
+import { Card, CardHead, Skeleton, StatTile , QueryError} from '../components/ui'
 import SeverityOverTime, { severitySummary } from '../components/SeverityOverTime'
 import { Editor } from '../components/BinningEditor'
 import { chrome, deemphasis, ink, mode, sequential, series } from '../design/tokens'
@@ -40,6 +40,7 @@ export default function LgdVariableDetail({ portfolio, column }: {
     edit((x) => ({ ...x, treatments: {
       ...asMap<LgdTreatment>(x.treatments), [column]: t } }), `${column} to ${t}`)
 
+  if (screen.isError) return <QueryError what="This driver" error={screen.error} retry={() => screen.refetch()} />
   if (!screen.data) return <Skeleton className="h-[560px]" />
 
   return (
@@ -80,6 +81,7 @@ export function LgdTarget({ portfolio }: { portfolio: string }) {
     queryKey: ['lgd-sot', portfolio, sotFreq],
     queryFn: () => api.lgdSeverityOverTime(portfolio, sotFreq),
   })
+  if (dist.isError) return <QueryError what="The severity distribution" error={dist.error} retry={() => dist.refetch()} />
   if (!dist.data) return <Skeleton className="h-[560px]" />
   return (
     <div className="space-y-3">
@@ -136,7 +138,7 @@ function DriverDistribution({ data }: { data: SeverityCurve }) {
       <CardHead
         title="Driver distribution"
         subtitle={`${macroTermLabel(data.column)} on ${num(data.n_defaults)} defaults · median ${d.median?.toPrecision(4)} · ${d.distinct} distinct values`}
-        caption="The driver's own spread among defaults, before any relationship with severity. A driver that barely varies on this population cannot separate it, whatever the bucket means suggest."
+        caption="The driver's marginal distribution among defaults. A driver with little variation on this population cannot separate it."
       />
       <div className="flex px-4 pb-1 pt-3">
         <div className="relative mr-2 w-10 shrink-0" style={{ height: 96 }}>
@@ -551,7 +553,7 @@ function SeverityDistribution({ d }: { d: import('../lib/api').LgdDistribution }
       <CardHead
         title="Distribution of realised severity"
         subtitle={`${num(d.n_defaults)} defaults · mean ${pct(d.mean_lgd * 100, 1)} · median ${pct(d.median_lgd * 100, 1)}`}
-        caption="Realised severity is a proportion with mass at both ends: some defaults resolve with no loss, fewer lose the full balance. The model estimates the conditional mean and does not treat those points separately."
+        caption="Realised severity is a proportion with point mass at both ends. The model estimates the conditional mean; the endpoints are not modelled separately."
       />
       <div className="flex px-4 pb-1 pt-3">
         {/* y-axis: counts, so a bar height can be read rather than compared */}

@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, VERSION_QUERIES } from '../lib/api'
 import type { PortfolioKey } from '../lib/api'
 import { Card, CardHead, EmptyState, Skeleton, StatusPill } from '../components/ui'
 import { useUi } from '../lib/store'
+import LineageCanvas from '../components/LineageCanvas'
 import { columns } from '../lib/spec'
 import { useLoadVersion } from '../lib/loadVersion'
 import { useProgress } from '../lib/progress'
@@ -97,6 +98,7 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 
 export default function VersionsSurface() {
   const { portfolio = 'consumer' } = useParams()
+  const nav = useNavigate()
   const qc = useQueryClient()
   const picked = columns(useUi((s) => s.pdSpec[portfolio as PortfolioKey]))
   const pk = portfolio as PortfolioKey
@@ -104,7 +106,12 @@ export default function VersionsSurface() {
   const fittedLgd = useUi((s) => s.fittedLgd[pk])
   const loaded = useUi((s) => s.loaded[pk])
   const setLoaded = useUi((s) => s.setLoaded)
+  const forkNote = useUi((s) => s.forkNote[pk])
+  const setForkNote = useUi((s) => s.setForkNote)
+  const origin = useUi((s) => s.origin[pk])
   const setFitted = useUi((s) => s.setFitted)
+  const projected = useUi((s) => s.projected?.[pk] ?? null)
+  const setProjected = useUi((s) => s.setProjected)
   // The tray can drift after a fit. One state machine decides this, so the
   // panel, the navigation and this surface cannot disagree about it.
   const progress = useProgress(portfolio)
@@ -131,23 +138,51 @@ export default function VersionsSurface() {
       if (!fitted) throw new Error('Fit a model first. There is nothing to save.')
       if (!fittedLgd) {
         throw new Error(
-          'Fit an LGD model first. A Model ID covers the PD specification and the ' +
-          'LGD specification together, because both of them produced the loss number.')
+          'Fit an LGD model first, or declare an assumed severity on a book whose ' +
+          'tape carries no realised losses. A Model ID covers the PD specification ' +
+          'and the severity specification together, because both of them produced ' +
+          'the loss number.')
       }
       // `replaces` supersedes the open version: it inherits its status, tags and
       // starred flag, and the superseded file is removed. Without it both remain
       // and the new one records the other as its parent.
-      const base = loaded?.hash ?? fitted.request.parent_hash ?? null
+      // Confirming a fork clears `loaded` so the edit lands on a draft — the
+      // parent at that point lives only in the fork note. Without reading it
+      // here a fork saved right after its parent showed up as a second root.
+      const base = loaded?.hash
+        ?? (forkNote?.fromKind === 'version' ? forkNote.fromHash : null)
+        ?? fitted.request.parent_hash ?? null
       return api.saveVersion({
         ...fitted.request,
         lgd: fittedLgd.spec,
         with_ecl: true,
         parent_hash: saveMode === 'replace' ? null : base,
         replaces: saveMode === 'replace' ? base : null,
+        // Structured, not prose: the lineage graph reads these fields to
+        // label the edge and explain the branch. Captured at the fork gate
+        // when the departure happened, never reconstructed at save time.
+        fork: forkNote
+          ? { reason_code: forkNote.reasonCode,
+              justification: forkNote.justification,
+              change: forkNote.change,
+              from_hash: forkNote.fromHash,
+              from_name: forkNote.from,
+              from_kind: forkNote.fromKind,
+              at: forkNote.at }
+          : undefined,
+        // Where this specification entered the workspace. A version that came
+        // off a leaderboard is a root WITH a story, not an unexplained one.
+        origin: origin
+          ? { name: origin.name, hash: origin.hash,
+              rank: origin.rank, config_hash: origin.configHash }
+          : undefined,
       })
     },
     onSuccess: (v) => {
       VERSION_QUERIES.forEach((k) => qc.invalidateQueries({ queryKey: [k] }))
+      // The note is now part of the saved record; holding it further would
+      // stamp the same rationale onto an unrelated later save.
+      setForkNote(pk, null)
       // The model on screen IS the version that was just written. Without this
       // the state machine still saw an unsaved draft, so the call to action
       // stayed "Save this model" after every save — a loop with no exit, since
@@ -159,6 +194,13 @@ export default function VersionsSurface() {
       // different made the machine read a freshly saved model as DRIFTED, and
       // the call to action jumped straight to "Refit and compare".
       if (fitted && fittedLgd) {
+        // The projection marker was stamped with the pre-save identity. A
+        // projection of exactly this model must follow the fit record onto
+        // the saved hash, or the save itself turns the Scenarios stage
+        // orange and asks for a projection that was just run.
+        if (projected === `${fitted.hash}:${fittedLgd.hash}`) {
+          setProjected(pk, `${v.hash}:${fittedLgd.hash}`)
+        }
         setFitted(pk, { ...fitted, hash: v.hash,
                         request: { ...fitted.request, lgd: fittedLgd.spec } })
       }
@@ -167,6 +209,8 @@ export default function VersionsSurface() {
     },
   })
   const load = useLoadVersion(portfolio)
+  // The lineage's hot-load: open in place, then optionally go to a stage.
+  const loadStay = useLoadVersion(portfolio, { stay: true })
 
   // The model bar's call to action, clicked while this surface is already on
   // screen. It performs the default save — a new version — exactly as the
@@ -245,14 +289,15 @@ export default function VersionsSurface() {
       <Card>
         <div className="flex flex-wrap items-center gap-3 px-4 py-3">
           <div className="min-w-0 text-xs text-ink-secondary">
-            {versions.length} saved version{versions.length === 1 ? '' : 's'} ·
-            {' '}each is a JSON file holding the full specification
+            {versions.length} saved version{versions.length === 1 ? '' : 's'}
             {fitted && (
               <div className="mt-0.5 text-tiny text-ink-muted">
                 {fittedLgd?.spec
                   ? <>Current specification: PD {plural(fitted.request.variables.length, 'variable')},
                       {' '}{plural(fitted.request.mevs.length, 'macro term')} · LGD
-                      {' '}{plural(fittedLgd.spec.drivers.length + fittedLgd.spec.categoricals.length, 'driver')}
+                      {' '}{fittedLgd.spec.assumed_lgd != null
+                        ? `assumed ${Math.round(fittedLgd.spec.assumed_lgd * 100)}%`
+                        : plural(fittedLgd.spec.drivers.length + fittedLgd.spec.categoricals.length, 'driver')}
                       {loaded && <> · opened from <span className="text-ink">{loaded.name}</span></>}</>
                   : <>PD fitted ({fitted.request.variables.length} variables). A Model ID covers
                       the PD and LGD specifications together, so the LGD model is required
@@ -282,7 +327,7 @@ export default function VersionsSurface() {
                 progress.pdStale ? 'The PD fit no longer matches the selected variables. Refit before saving.'
                 : progress.lgdStale ? 'No LGD drivers are selected. Refit before saving.'
                 : !fitted ? 'Fit a PD model first'
-                : !fittedLgd?.spec ? 'Fit an LGD model first. A Model ID covers both'
+                : !fittedLgd?.spec ? 'Fit an LGD model first, or declare an assumed severity. A Model ID covers both halves'
                 : progress.mode === 'clean' ? `Nothing has changed since ${loaded!.name} was opened.`
                 : loaded ? `Keep ${loaded.name} and save this as a separate version, recording ${loaded.name} as its parent.`
                 : 'Save this specification as a version'}>
@@ -297,7 +342,7 @@ export default function VersionsSurface() {
         </div>
         {stale && (
           <div className="border-t border-hairline px-4 py-2">
-            <StatusPill severity="warning">Selection changed since the fit</StatusPill>
+            <StatusPill severity="warning">Specification changed since the fit</StatusPill>
             <span className="ml-2 text-tiny text-ink-secondary">
               {picked.length === 0
                 ? <>No variables are selected, so there is no specification to save.
@@ -316,15 +361,13 @@ export default function VersionsSurface() {
 
       {versions.length === 0 ? (
         <Card><EmptyState title="No versions saved yet">
-Fit a model, then save it here. A version records the data, the target, the
-          sample design, every variable with its binning map, the estimator, the macro
-          specification and the LGD specification. It can be exported and re-run to the same
-          numbers.
+Fit a model, then save it here. A version records the complete specification
+          and reproduces the same numbers when re-run.
         </EmptyState></Card>
       ) : (
         <Card>
           <CardHead title="Versions" subtitle={`${portfolio} · select 2 to 4 to compare`}
-            caption="The name is derived from the configuration hash, so an identical specification always produces an identical name. An accidental duplicate is visible immediately." />
+            caption="Names derive from the configuration hash: identical specifications always carry identical names." />
           <div className="thin-scroll overflow-auto">
             <table className="w-full text-left text-xs">
               <thead className="sticky top-0 bg-surface">
@@ -449,7 +492,21 @@ Fit a model, then save it here. A version records the data, the target, the
       )}
 
       {cmp.data && selected.length >= 2 && <CompareView cmp={cmp.data} />}
-      {lineage.data && lineage.data.nodes.length > 1 && <Lineage data={lineage.data} />}
+      {lineage.data && lineage.data.nodes.length > 0 && (
+        <Card>
+          <CardHead title="Lineage"
+            subtitle={`${lineage.data.nodes.length} version${lineage.data.nodes.length === 1 ? '' : 's'}`
+              + ` · ${lineage.data.edges.length} fork${lineage.data.edges.length === 1 ? '' : 's'}`}
+            caption="Every model on this book and its derivation. Edges carry the recorded rationale; roots state the originating search rank." />
+          <div className="px-4 pb-4">
+            <LineageCanvas data={lineage.data}
+              onOpen={(hash, dest) => {
+                if (loaded?.hash !== hash) loadStay.mutate(hash)
+                if (dest) nav(`/${portfolio}/${dest}`)
+              }} />
+          </div>
+        </Card>
+      )}
     </div>
   )
 }
@@ -577,54 +634,3 @@ function CompareView({ cmp }: { cmp: import('../lib/api').CompareResult }) {
   )
 }
 
-function Lineage({ data }: { data: { nodes: any[]; edges: any[] } }) {
-  const byHash = new Map(data.nodes.map((n) => [n.hash, n]))
-  const depth = new Map<string, number>()
-  const parent = new Map<string, string>()
-  data.edges.forEach((e) => parent.set(e.to, e.from))
-  const d = (h: string): number => {
-    if (depth.has(h)) return depth.get(h)!
-    const p = parent.get(h)
-    const v = p && byHash.has(p) ? d(p) + 1 : 0
-    depth.set(h, v)
-    return v
-  }
-  data.nodes.forEach((n) => d(n.hash))
-  const maxDepth = Math.max(...[...depth.values()], 0)
-
-  return (
-    <Card>
-      <CardHead title="Lineage"
-        subtitle={`${data.nodes.length} versions · ${data.edges.length} forks`}
-        caption="The parent relationship between specifications. Each version records the model it was derived from." />
-      <div className="thin-scroll overflow-x-auto px-4 py-3">
-        <div className="flex gap-6">
-          {Array.from({ length: maxDepth + 1 }, (_, level) => (
-            <div key={level} className="flex min-w-[180px] flex-col gap-2">
-              <div className="text-micro uppercase tracking-wider text-ink-muted">
-                {level === 0 ? 'origin' : `fork ${level}`}
-              </div>
-              {data.nodes.filter((n) => depth.get(n.hash) === level).map((n) => (
-                <div key={n.hash}
-                  className="rounded-card border px-3 py-2"
-                  style={{ borderColor: n.status === 'champion' ? 'var(--accent)' : 'var(--chrome-border)' }}>
-                  <div className="flex items-center gap-1.5">
-                    {n.starred && <span>★</span>}
-                    <span className="text-xs font-medium text-ink">{n.name}</span>
-                  </div>
-                  <div className="mt-0.5 flex items-center gap-2 text-micro text-ink-muted">
-                    <span>{n.n_variables} vars</span>
-                    {n.auc != null && <span className="tnum">AUC {n.auc.toFixed(3)}</span>}
-                  </div>
-                  {n.status === 'champion' && (
-                    <div className="mt-1"><StatusPill severity="good">champion</StatusPill></div>
-                  )}
-                </div>
-              ))}
-            </div>
-          ))}
-        </div>
-      </div>
-    </Card>
-  )
-}

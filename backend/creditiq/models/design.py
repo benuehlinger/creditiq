@@ -114,6 +114,10 @@ class Design:
     # so "the variance inflation of interest_rate" is only well defined against
     # this mapping. Recorded here rather than recovered by parsing column names.
     terms: list[str | None] = field(default_factory=list)
+    #: Columns that held a single value on these rows and were dropped. Named
+    #: so a caller can say WHICH variable contributed nothing rather than
+    #: reporting a shape error from deep in the linear algebra.
+    dropped: list[str] = field(default_factory=list)
 
     def term_groups(self) -> dict[str, list[int]]:
         out: dict[str, list[int]] = {}
@@ -275,8 +279,18 @@ def build(df: pd.DataFrame, spec: ModelSpec,
           means: np.ndarray | None = None,
           stds: np.ndarray | None = None,
           mev_override: pd.DataFrame | None = None,
-          basis_maps: dict[str, dict] | None = None) -> Design:
+          basis_maps: dict[str, dict] | None = None,
+          columns: list[str] | None = None) -> Design:
     """Build the design matrix.
+
+    `columns` is the fitted column list when scoring with a fit's `means` and
+    `stds`. The frame being scored can emit a column the fit never saw (a
+    vintage or category that first appears after the out-of-time boundary)
+    or lack one the fit estimated; scoring then broadcast a 93-column matrix
+    against 91 coefficients. The design is aligned to the fitted columns: an
+    unseen column is left out, so a row carrying that level scores at the
+    reference; a fitted column absent here is all zeros, which is what a
+    dummy for a level nobody in the frame holds is.
 
     When a variable has no stored edges the binning is fitted on an
     event-preserving sample rather than the full panel. Optimal binning is a
@@ -348,8 +362,10 @@ def build(df: pd.DataFrame, spec: ModelSpec,
             names.append(v.column)
         own(v.column)
 
-    # The automatic seasoning spline is on months_on_book. If the analyst has
-    # ALSO selected months_on_book explicitly, adding both puts two bases of the
+    # Legacy only: the automatic seasoning spline was removed (nothing enters a
+    # specification automatically), but versions saved while it existed carry
+    # seasoning_spline=True and must replay to the same numbers. If such a spec
+    # ALSO selects months_on_book explicitly, adding both puts two bases of the
     # same variable into the design — exact collinearity. The ridge does not
     # error; it silently splits the effect in half across duplicated columns, and
     # every coefficient comes out at exactly half its true value.
@@ -405,24 +421,49 @@ def build(df: pd.DataFrame, spec: ModelSpec,
                            drop_first=True, dtype=float)
         blocks.append(d.to_numpy()); names += list(d.columns)
 
+    own("vintage")                   # anything still untagged is the vintage block
     X = np.column_stack(blocks) if blocks else np.zeros((len(df), 0))
     # Drop any column with no variation. A dead column contributes nothing, and
     # its standard error comes back as the reciprocal of the ridge — 31,622 —
     # which looks like a numerical failure on the specification card.
+    #
+    # `terms` is filtered IN LOCKSTEP. It was not, so a dropped column left a
+    # stale entry behind and `term_groups()` handed the variance-inflation
+    # routine a column index past the end of the matrix: "IndexError: index 2
+    # is out of bounds for axis 1 with size 2", with nothing naming the
+    # variable. A column dies when it holds one value — or none at all, which
+    # is what an empty column on a narrow fitting window looks like.
+    dropped: list[str] = []
     if means is None:
-        alive = X.std(axis=0) > 1e-12
+        alive = np.asarray(X.std(axis=0) > 1e-12)
         if not alive.all():
+            dropped = [n for n, a in zip(names, alive) if not a]
             X = X[:, alive]
             names = [n for n, a in zip(names, alive) if a]
+            terms = [t for t, a in zip(terms, alive) if a]
     if means is None:
         means = X.mean(axis=0)
         stds = X.std(axis=0)
         stds[stds < 1e-12] = 1.0
+    elif columns is not None:
+        fitted = [c for c in columns if c != "intercept"]
+        if fitted != names:
+            pos = {n: i for i, n in enumerate(names)}
+            term_of = dict(zip(names, terms))
+            X = np.column_stack([
+                X[:, pos[c]] if c in pos else np.zeros(len(df))
+                for c in fitted]) if fitted else np.zeros((len(df), 0))
+            terms = [term_of.get(c, c.split(":")[0] if ":" in c else None)
+                     for c in fitted]
+            names = list(fitted)
+    if len(means) != len(names):
+        raise ValueError(
+            f"{len(names)} design columns but {len(means)} fitted statistics; "
+            "pass the fitted `columns` when scoring with a fit's means")
     X = (X - means) / stds
     X = np.column_stack([np.ones(len(df)), X]).astype(np.float32, copy=False)
-    own("vintage")                   # anything still untagged is the vintage block
     return Design(X=X, columns=["intercept", *names], y=y,
                   dates=df["performance_date"].to_numpy(),
                   accounts=df["account_id"].to_numpy(),
                   woe_maps=maps, means=means, stds=stds, basis_maps=bases,
-                  terms=[None, *terms])
+                  terms=[None, *terms], dropped=dropped)

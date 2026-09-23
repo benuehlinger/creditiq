@@ -232,3 +232,30 @@ export function ViewTabs<T extends string>({ value, onChange, tabs, className = 
     </div>
   )
 }
+
+/** A query that failed, said out loud.
+ *
+ *  A guard of the form `if (isLoading || !data) return <Skeleton/>` renders a
+ *  skeleton FOREVER when the request errors: loading is over, data is still
+ *  undefined, and the user watches a placeholder pulse with no way to learn
+ *  what went wrong. Every such guard should reach here first. */
+export function QueryError({ error, retry, what }: {
+  error: unknown; retry?: () => void; what: string
+}) {
+  const msg = error instanceof Error ? error.message : String(error ?? 'unknown')
+  return (
+    <div className="p-4">
+      <Notice severity="critical" label={`${what} could not be loaded`}
+              detail={msg}>
+        The server refused this request. Nothing on screen is stale: it was
+        never drawn.
+        {retry && (
+          <button onClick={retry}
+            className="ml-2 underline decoration-hairline hover:text-ink">
+            Try again
+          </button>
+        )}
+      </Notice>
+    </div>
+  )
+}

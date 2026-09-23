@@ -73,7 +73,33 @@ def spline_basis(v: np.ndarray, knots, fitted: dict | None = None
         return B, [f"basis{i + 1}" for i in range(B.shape[1])], fitted
 
     B, names = raw(v, knots)
-    keep = B.std(axis=0) > 1e-9              # a knot beyond the data's range is dead
+    # A knot earns its column only when the data straddles it.
+    #
+    # The column at knot k holds max(value - k, 0): flat at zero below the
+    # knot, rising above it, and the FLAT part is what lets the line change
+    # slope there. Two ways for that to fail, and only one was caught:
+    #
+    #   nothing above k  -> the column is all zeros. Dead. Caught by the
+    #                       variance test below, and harmless.
+    #   nothing below k  -> the column equals (value - k) on every row: the
+    #                       value line, shifted. It varies, so it passed the
+    #                       variance test, and it duplicated the value column
+    #                       exactly.
+    #
+    # The second case is normal on a securitized tape. A trust stops buying
+    # loans when it prices, so by the time it is read the youngest loan is
+    # already months old and every knot below that age is a duplicate. One
+    # real auto tape handed in seven columns of which only five were
+    # distinct, which sent the fit down a rank-deficient path that then
+    # rebuilt the basis wrongly at scoring time and returned a monthly
+    # default probability of exactly 1.000 for every surviving account.
+    #
+    # Requiring data on BOTH sides removes the duplicates at the source. The
+    # three generated books are unaffected: their loans start at age zero, so
+    # every knot already had data beneath it.
+    straddled = np.array([bool((v < k).any() and (v > k).any()) for k in knots])
+    keep = B.std(axis=0) > 1e-9
+    keep[1:] &= straddled
     live_knots = [k for k, kp in zip(knots, keep[1:]) if kp]
     B = B[:, keep]
     names = [n for n, k in zip(names, keep) if k]

@@ -181,3 +181,37 @@ def test_cancel_stops_between_fits():
     cfg = _cfg(["fico_orig", "dti"])
     with pytest.raises(S.Cancelled):
         S.build_cores(cfg, cancel=ev)
+
+
+# ── the VIF cap on entry ─────────────────────────────────────────────────────
+def test_the_stepwise_core_refuses_a_collinear_entrant(monkeypatch):
+    """Two noisy measurements of the same driver: the second genuinely
+    improves the criterion (averaging reduces measurement error) but is
+    refused entry, because it would push the worst term VIF over the
+    reviewer's threshold. The refusal is reported in the trace by name —
+    the core must not be born collinear, and the block must not be silent."""
+    df, _ = store.screening_frame("consumer")
+    rng = np.random.default_rng(11)
+    fico = df["fico_orig"].to_numpy(float)
+    noise = 0.3 * fico.std()
+    df = df.assign(zz_fico_a=fico + rng.normal(0.0, noise, len(fico)),
+                   zz_fico_b=fico + rng.normal(0.0, noise, len(fico)))
+    cfg = _cfg(["zz_fico_a", "zz_fico_b", "revolving_utilization"],
+               treatments={"zz_fico_a": "continuous",
+                           "zz_fico_b": "continuous",
+                           "revolving_utilization": "continuous"},
+               max_vif=5.0)
+    fit_df = df[df["performance_date"] < pd.Timestamp(cfg.oot_from)]
+    monkeypatch.setattr(S, "_frames", lambda c: (fit_df, df))
+
+    cores = S.build_cores(cfg)
+    stepwise = next(c for c in cores if c.name == "stepwise")
+
+    twins = {"zz_fico_a", "zz_fico_b"}
+    kept = twins & set(stepwise.columns)
+    assert len(kept) == 1, "exactly one of the twin measurements may enter"
+    blocked_col = (twins - kept).pop()
+    blocks = [s for s in stepwise.steps if s["action"] == "vif_block"]
+    assert [s["column"] for s in blocks] == [blocked_col]
+    assert blocks[0]["vif"] > 5.0
+    assert blocks[0]["cap"] == 5.0

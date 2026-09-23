@@ -162,7 +162,7 @@ export default function FitDiagnostics({ r }: { r: FitResponse }) {
             subtitle={`Hosmer-Lemeshow ${cal.hl_statistic.toFixed(1)} on ${cal.hl_dof} d.f., p = ${cal.hl_p_value.toFixed(4)}`}
             caption="Predicted against observed, by decile of predicted probability. Points on the dashed line are perfectly calibrated."
             right={<span className="cursor-help" title={cal.hl_note}>
-              <StatusPill severity="warning">read the table, not the p-value</StatusPill>
+              <StatusPill severity="warning">p-value unreliable at this sample size</StatusPill>
             </span>} />
           <EChart option={calib} height={220} ariaLabel="Calibration curve"
             table={{ columns: ['Decile', 'Rows', 'Predicted (%/yr)', 'Observed (%/yr)', 'Events'],

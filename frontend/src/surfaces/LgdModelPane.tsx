@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, asMap, type SeverityFreq, type LgdBacktest, type LgdDiagnostics,
          type LgdFitResult, type LgdSpecPayload, type PortfolioKey } from '../lib/api'
-import { Card, CardHead, EmptyState, Skeleton, StatTile, StatusPill, ViewTabs } from '../components/ui'
+import { Card, CardHead, EmptyState, Skeleton, StatTile, StatusPill, ViewTabs , QueryError} from '../components/ui'
 import Eq from '../components/Eq'
 import { Check, Close } from '../components/icons'
 import SeverityOverTime from '../components/SeverityOverTime'
@@ -65,6 +65,9 @@ export default function LgdModelPane({ portfolio, spec, onOpenVariable }: {
     staleTime: Infinity,
     gcTime: 30 * 60_000,
     retry: 1,
+    // No flicker on a model switch: the previous severity fit stays on
+    // screen while the next loads, and .swap-live carries the change.
+    placeholderData: (prev) => prev,
   })
   // The store's metrics ALWAYS follow the fit on screen. The old guard only
   // refreshed when rmse was missing, so metrics recorded against a previous
@@ -165,6 +168,7 @@ export default function LgdModelPane({ portfolio, spec, onOpenVariable }: {
     queryKey: ['lgdsens', portfolio, res?.hash],
     queryFn: () => api.lgdSensitivity(portfolio, spec),
     enabled: !!res && res.macro_drivers.length > 0,
+    placeholderData: (prev) => prev,
   })
 
   const [tab, setTab] = useState<'spec' | 'diagnostics' | 'backtest'>('spec')
@@ -177,13 +181,19 @@ export default function LgdModelPane({ portfolio, spec, onOpenVariable }: {
     queryKey: ['lgdbacktest', portfolio, res?.hash, ootFrom, btFreq],
     queryFn: () => api.lgdBacktest(portfolio, spec, ootFrom, btFreq),
     enabled: !!res && tab === 'backtest',
+    placeholderData: (prev) => prev,
   })
 
   const nSelected = spec.drivers.length + spec.categoricals.length
   const hasMacro = useMemo(
-    () => spec.drivers.some((d) => cand.data?.numeric.find((c) => c.column === d)?.macro),
+    // A driver named `key@transform@lag` is a shortlisted macro term — the
+    // "@" is the app-wide marker — and the candidates endpoint does not list
+    // those, so the name is checked before the lookup.
+    () => spec.drivers.some((d) => d.includes('@')
+      || cand.data?.numeric.find((c) => c.column === d)?.macro),
     [spec.drivers, cand.data])
 
+  if (cand.isError) return <QueryError what="The severity candidates" error={cand.error} retry={() => cand.refetch()} />
   if (cand.isLoading || !cand.data) return <Skeleton className="h-[560px]" />
 
   return (
@@ -283,6 +293,9 @@ export default function LgdModelPane({ portfolio, spec, onOpenVariable }: {
               { key: 'backtest', label: 'Backtesting' },
             ]} />
 
+            {/* Keyed on the fit hash: one .swap-live breath per model switch,
+                over content the queries never blank. */}
+            <div key={res.hash} className="swap-live space-y-3">
             {tab === 'spec' && (
               <>
                 <Coefficients rows={res.coefficients} spec={spec}
@@ -297,6 +310,7 @@ export default function LgdModelPane({ portfolio, spec, onOpenVariable }: {
                         ootFrom={ootFrom} onOot={setOotFrom}
                         freq={btFreq} onFreq={setBtFreq} />
             )}
+            </div>
           </div>
         )}
     </div>
@@ -315,7 +329,7 @@ function Coefficients({ rows, spec, references, onOpenVariable }: {
       <CardHead
         title="Fitted specification"
         subtitle={`${rows.length} terms · robust standard errors`}
-        caption="Each coefficient is the change in the logit of predicted severity for a one standard deviation change in that term. Standard errors use the sandwich estimator, because the quasi-likelihood variance assumption does not hold for a proportion."
+        caption="Coefficients are the change in the logit of predicted severity per one standard deviation of the term; standard errors are robust (sandwich)."
         right={<span className="text-micro text-ink-muted">*** p&lt;0.001 · ** p&lt;0.01 · * p&lt;0.05</span>}
       />
       <div className="overflow-x-auto">
@@ -514,7 +528,7 @@ function FitDiagnostics({ d }: { d: LgdDiagnostics }) {
         <CardHead
           title="Link test"
           subtitle="RESET-style specification check"
-          caption="The fitted linear predictor and its square are re-fitted as the only two terms. A significant coefficient on the square indicates the link does not describe the conditional mean, usually because a driver needs a non-linear form. Specified with the estimator by Papke and Wooldridge."
+          caption="RESET-type check: the fitted linear predictor and its square re-fitted as the only two terms. A significant square term indicates the conditional mean is misspecified, typically a driver requiring a non-linear form."
         />
         <div className="flex flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3 text-xs">
           <StatusPill severity={link.ok === false ? 'warning' : 'good'}>
@@ -633,7 +647,7 @@ function Backtest({ data, loading, ootFrom, onOot, freq, onFreq }: {
         <CardHead
           title="Out of time"
           subtitle="Refit on defaults before the boundary, scored on the ones after it"
-          caption="Severity is estimated on defaulted rows only, so an out-of-time split leaves a small test set and every statistic from it carries a wide interval. Counts are reported beside the numbers."
+          caption="Severity is estimated on defaulted rows only, so out-of-time statistics rest on small counts and carry wide intervals."
           right={
             <label className="flex items-center gap-1.5 text-tiny text-ink-muted">
               from

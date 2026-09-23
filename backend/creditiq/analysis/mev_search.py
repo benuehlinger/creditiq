@@ -149,6 +149,18 @@ def _adf(x: pd.Series) -> dict:
     return {"p": float(p), "statistic": float(stat), "stationary": bool(p < ADF_ALPHA)}
 
 
+# Memoized: both target builders aggregate the FULL panel, and every candidate
+# chart on the MEV surface called them again — fifteen seconds a click on a
+# 22-million-row tape, to redraw an overlay that had not changed. Cleared with
+# the store's other derived caches when the panel is rebuilt.
+# A month enters the monthly default-rate series only when it carries at
+# least this many account-months; a rate on fewer rows is too noisy to
+# correlate a macro term against. Reported to the surface so a small book
+# says why it has no series rather than showing an empty window.
+MIN_MONTH_ROWS = 500
+
+
+@lru_cache(maxsize=8)
 def pd_target(portfolio: str) -> pd.Series:
     """Monthly default rate on the log-odds scale.
 
@@ -161,11 +173,12 @@ def pd_target(portfolio: str) -> pd.Series:
     df = store.analysis_frame(portfolio)
     g = df.groupby(pd.Grouper(key="performance_date", freq="MS"))[
         PORTFOLIOS[portfolio].target.column].agg(["size", "sum"])
-    g = g[g["size"] >= 500]
+    g = g[g["size"] >= MIN_MONTH_ROWS]
     p = ((g["sum"] + 0.5) / (g["size"] + 1.0)).clip(1e-6, 1 - 1e-6)
     return np.log(p / (1 - p)).rename("pd_log_odds")
 
 
+@lru_cache(maxsize=8)
 def lgd_rows(portfolio: str) -> pd.DataFrame:
     """Every defaulted row with the month it defaulted in.
 
@@ -178,6 +191,12 @@ def lgd_rows(portfolio: str) -> pd.DataFrame:
     """
     from .. import store
     df = store.analysis_frame(portfolio)
+    # A tape without realised losses has no severity target to rank against.
+    # Empty, so the LGD column of the library reads as unavailable rather
+    # than taking the whole screen down with it — the PD side is unaffected
+    # and is the reason the user opened this stage.
+    if "lgd_realised" not in df.columns:
+        return pd.DataFrame({"month": pd.to_datetime([]), "y": []})
     d = df.loc[df["default_flag"] == 1, ["performance_date", "lgd_realised"]].dropna()
     return pd.DataFrame({
         "month": pd.DatetimeIndex(d["performance_date"]).to_period("M").to_timestamp(),
@@ -301,6 +320,7 @@ def library(portfolio: str) -> dict:
         "lags": list(LAGS),
         "adf_alpha": ADF_ALPHA,
         "pd_months": int(len(y_pd)),
+        "min_month_rows": MIN_MONTH_ROWS,
         "lgd_defaults": int(len(lgd_obs)),
         "lgd_months": int(lgd_obs["month"].nunique()),
         "rows": rows,
@@ -341,9 +361,11 @@ def series_for(portfolio: str, column: str) -> dict:
 
 def clear() -> None:
     library.cache_clear()
+    pd_target.cache_clear()
+    lgd_rows.cache_clear()
 
 
 # The library ranks candidates against targets built from the panel, so it is
 # stale the moment the panel is rebuilt.
 from .. import store as _store  # noqa: E402
-_store.register_dependent_cache(library.cache_clear)
+_store.register_dependent_cache(clear)

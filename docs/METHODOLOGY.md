@@ -15,11 +15,14 @@ the conditional probability that the account defaults in **that** month, given i
 has survived to it.
 
 ```
-logit( PD_i(t) ) = a + f(age_it) + B'x_i + G'z_t
+logit( PD_i(t) ) = a + B'x_i + G'z_t
 ```
 
-`f(age)` is a seasoning spline, `x_i` are borrower attributes, `z_t` are
-macroeconomic variables at that performance date.
+`x_i` are borrower attributes, `z_t` are macroeconomic variables at that
+performance date. Every term is selected by the analyst; nothing enters a
+specification automatically. Loan age (`months_on_book`) is offered as a
+candidate like any other driver — with spline treatment where the seasoning
+hump matters — and appears in the coefficient table when selected.
 
 This frame is chosen because lifetime expected credit loss needs a **term
 structure** of conditional probabilities. A model fitted on "did this account
@@ -452,6 +455,18 @@ verbatim expert core. Cyclical drivers (current LTV, utilization, delinquency)
 are warned, not filtered: they can absorb the macro signal and weaken or flip
 the scenario terms.
 
+The VIF cap is part of the stepwise entry rule, not a post-hoc filter: a
+candidate that improves the criterion but would push any term's VIF over the
+configured `max_vif` threshold does not enter, and the refusal is recorded in
+the construction trace with the offending VIF (`vif_block`). The rationale is
+inheritance: every enumerated model shares its core, so a core carrying two
+near-copies of the same information (an origination score and the rate priced
+off it, say) taints the entire enumeration at once. Preventing the entry is
+cheaper and cleaner than penalising every descendant afterwards. The expert
+core is exempt — its value is exactly that a person chose it — and the
+composite's collinearity term remains as the backstop for collinearity that
+first appears when the macro terms join.
+
 **Stage 2 — macro terms, from the Macro surface's shortlist.** The search
 takes its macro terms verbatim from the shortlist built on the Macro surface,
 where the transformation library (every transform and lag of every
@@ -482,10 +497,24 @@ board reports whether peak PD orders by scenario severity, the severe peak,
 and the smoothness of the severe path (largest absolute second difference).
 
 **Composite rank.** A stated-weight score over lean statistics available for
-every row: out-of-time AUC rescaled over the board (0.40), all coefficients
-significant (0.15), stress monotone (0.15), no core shift (0.10), inverse
-worst term VIF (0.10), and the in-sample-to-out-of-time AUC gap (0.10). It
-orders the board; it decides nothing. Finalists (top N, default 10) receive
+every row: out-of-time AUC rescaled over the board (0.30), all coefficients
+significant (0.15), stress monotone (0.15), no core shift (0.10), worst term
+VIF (0.20), and the in-sample-to-out-of-time AUC gap (0.10). It orders the
+board; it decides nothing.
+
+Five of the six are merit credits on [0, 1] — absent, they score zero. The
+collinearity term is the exception and runs on [-1, 1]: full credit at or
+under the configured flag line (default 5), ramping to zero at twice it (10,
+the conventional indefensible threshold), then negative to a floor of -1 at
+four times it (20). Severe collinearity is treated as a defect rather than an
+absence of merit because these coefficients are extrapolated into scenario
+space, where a barely-identified coefficient produces an indefensible stress
+response. The consequence is deliberate: a model whose worst VIF is 20 or
+more gives up 0.40 of score against a clean one — more than out-of-time
+discrimination can award — so it must beat the field on the validator checks,
+not just on AUC, to hold a place near the top. The penalty is anchored to the
+`max_vif` rule the reviewer set, so loosening the flag line loosens the
+penalty with it rather than leaving a second hidden threshold behind. Finalists (top N, default 10) receive
 the full fit, backtest and error decomposition; the composite is not
 re-scored on those, so every row's score means the same thing.
 
@@ -493,3 +522,44 @@ re-scored on those, so every row's score means the same thing.
 overwrites it. A rejection, or a rank away from the automated order, requires
 a written justification. Every action is appended to an audit trail
 (reviewer, timestamp, field, before, after) exportable as CSV.
+
+## The severity search
+
+The LGD selection pipeline mirrors the PD pipeline stage for stage — cores,
+screen, enumerate, rank — on the resolved-default frame, so the leaderboard,
+provenance view and review flow serve both targets unchanged. The model is
+the fractional-logit severity fit; every combination is fitted in full
+(severity data is thin, so fits are cheap) and rows are named from the
+LgdSpec hash — the severity half's own name, the same one a saved pairing
+displays.
+
+The headline statistic is out-of-time MAE in loss points. MAE deliberately:
+realised severity is bimodal, with mass at full recovery and full loss, so
+RMSE lets a handful of tail outcomes dominate, and MAPE is rejected outright
+because dividing by near-zero actuals explodes on exactly the full
+recoveries a model predicts well. RMSE and deviance R-squared are reported
+as columns; Spearman rank correlation and the link test join the finalist
+panel.
+
+Driver entry into the severity stepwise core is decided by the ROBUST WALD
+p-value of the candidate beside the drivers already selected (threshold
+`entry_threshold`, default 0.01), not by an information criterion. The
+fractional-logit objective is a quasi-likelihood: a valid estimation target
+but not a likelihood, so AIC/BIC computed from it sit on an uncalibrated
+scale, while the sandwich standard errors are exactly the part of the model
+that supports inference. Every candidate that ends the search outside the
+core is recorded in the construction trace with the conditional p-value that
+kept it out — on a book where one driver carries the severity story
+(collateral on a mortgage book), a one-driver core is reported as a finding
+with evidence, never left as a mystery.
+
+The composite keeps the PD weights: out-of-time MAE min-max inverted over
+the board (0.30), all coefficients significant (0.15), stress monotone
+(0.15) — with the direction FLIPPED: the severe scenario must push peak
+severity UP — no core shift (0.10), the worst-term VIF credit on [-1, 1]
+(0.20), and the in-time-to-out-of-time MAE gap (0.10, ramping to zero at
+five loss points). The stepwise severity core applies the same VIF entry cap
+as the PD core, with refusals reported in the trace by name. Out-of-time
+error is reported only when at least 20 defaults resolved after the
+boundary; fewer is the honest state of the data and the row says so rather
+than printing a number with a meaningless interval.

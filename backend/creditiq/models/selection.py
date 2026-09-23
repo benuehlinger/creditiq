@@ -17,8 +17,8 @@ p-value calls almost anything significant, and the effective sample size of a
 rare-event model is set by the rarer outcome. A p-value rule remains available
 because some reviewers ask for one.
 
-**Stage 2 — macro terms, from the Macro surface's shortlist.** The search does
-NOT sweep the transformation library; that sweep is the Macro surface's whole
+**Stage 2 — macro terms, from the MEV surface's shortlist.** The search does
+NOT sweep the transformation library; that sweep is the MEV surface's whole
 job, and re-running it here would ignore the choice the analyst made there.
 The shortlisted terms are screened one at a time against each core (right
 sign, loose p, with removals reported by reason, never silent), and the
@@ -130,9 +130,9 @@ class SelectionConfig:
     cores: list[str] = field(default_factory=lambda: ["stepwise", "strong"])
     expert_core: list[str] | None = None
     # The macro terms the search may use, as `key@transform@lag` — the SAME
-    # form the Macro surface's shortlist and the PD specification carry. The
+    # form the MEV surface's shortlist and the PD specification carry. The
     # search does not sweep the transformation library; that sweep is the
-    # Macro surface's whole job, and re-running it here would ignore the
+    # MEV surface's whole job, and re-running it here would ignore the
     # choice the analyst just made there. Combinations of one to three are
     # enumerated from exactly this list.
     mev_terms: list[str] = field(default_factory=list)
@@ -220,6 +220,18 @@ def _frames(cfg: SelectionConfig) -> tuple[pd.DataFrame, pd.DataFrame]:
 
 def _lean_fit(fit_df: pd.DataFrame, spec: ModelSpec) -> Lean:
     des = D.build(fit_df, spec)
+    if des.dropped:
+        # A candidate that holds one value — or none — on the fitting window
+        # cannot be estimated, and the failure used to surface as an index
+        # error from the variance-inflation routine with no variable named.
+        # Say which column, and on how many rows, so the fix is obvious.
+        raise ValueError(
+            f"{', '.join(des.dropped)} "
+            f"{'hold' if len(des.dropped) > 1 else 'holds'} a single value on "
+            f"the {len(fit_df):,} rows before the out-of-time date "
+            f"({spec.sample.oot_from}), so it cannot be estimated. Move the "
+            "out-of-time date later to widen the fitting window, or drop the "
+            "variable from the candidates.")
     res = F.fit(des, spec)
     return Lean(fit=res, ll=res.log_likelihood, k=len(res.columns),
                 n_events=res.n_events_train, design=des)
@@ -301,11 +313,32 @@ def build_cores(cfg: SelectionConfig, progress=None, cancel=None) -> list[Core]:
     cores: list[Core] = []
     steps: list[dict] = []
 
-    # Forward stepwise. The null model is the account-age baseline alone, so a
-    # candidate has to explain something age does not.
+    # Forward stepwise from the intercept-only null model.
+    #
+    # The VIF cap is part of the entry rule, not a post-hoc filter: a candidate
+    # that improves the criterion but pushes any term's VIF over the reviewer's
+    # threshold does not enter. Without it the search happily builds a core
+    # carrying two copies of the same information (a score and the rate priced
+    # off it, say), and every model enumerated on that core inherits the
+    # collinearity at once. Prevention here is cheaper than penalising 81
+    # descendants later. Blocked candidates are reported in the trace by name
+    # — a removal with a reason, never silent.
+    vif_cap = rules.max_vif if rules.max_vif and rules.max_vif > 0 else None
+    vif_blocked: dict[str, float] = {}
     selected: list[str] = []
     current = fit_columns(selected)
-    remaining = list(by_col)
+    # A candidate that holds one value on the fitting window (before the
+    # out-of-time date) cannot be estimated by any fit, so it never enters
+    # the pass. It is set aside by name, with the row count, rather than
+    # aborting the whole run — that is the reader's cue to widen the window
+    # or drop the column. Nothing else about the candidate set changes.
+    remaining: list[str] = []
+    for col in by_col:
+        if col in fit_df.columns and fit_df[col].nunique(dropna=True) < 2:
+            steps.append({"action": "unfit", "column": col,
+                          "n_rows": int(len(fit_df)), "oot_from": cfg.oot_from})
+        else:
+            remaining.append(col)
     n_fits = 0
     passnum = 0
     while remaining:
@@ -319,6 +352,12 @@ def build_cores(cfg: SelectionConfig, progress=None, cancel=None) -> list[Core]:
                  f"building the stepwise core (pass {passnum}): testing {col}")
             cand = fit_columns(selected + [col])
             passes, score = _entry_score(cand, current, rules)
+            if passes and vif_cap is not None:
+                worst_vif = max((c.term_vif for c in cand.fit.coefficients
+                                 if c.term_vif is not None), default=None)
+                if worst_vif is not None and worst_vif > vif_cap:
+                    vif_blocked[col] = float(worst_vif)
+                    continue
             if passes and (best is None or score < best[0]):
                 best = (score, col, cand)
         if best is None:
@@ -326,9 +365,13 @@ def build_cores(cfg: SelectionConfig, progress=None, cancel=None) -> list[Core]:
         score, col, cand = best
         selected.append(col)
         remaining.remove(col)
+        vif_blocked.pop(col, None)
         steps.append({"action": "enter", "column": col, "score": score,
                       "metric": rules.entry_metric})
         current = cand
+    for col, v in sorted(vif_blocked.items()):
+        steps.append({"action": "vif_block", "column": col,
+                      "vif": v, "cap": vif_cap})
 
     # Backward elimination, and the LR drop per term that the strong core uses.
     drops: dict[str, float] = {}
@@ -496,7 +539,7 @@ def mev_family(key: str) -> str:
 def mev_variants(cfg: SelectionConfig) -> list[MevSpec]:
     """The macro terms the analyst handed the search, parsed and deduplicated.
 
-    These come from the Macro surface's shortlist (`key@transform@lag`), where
+    These come from the MEV surface's shortlist (`key@transform@lag`), where
     the transformation library was already swept, filtered for stationarity
     and sign, and narrowed by a human. The search's job is combinations, not
     rediscovery.
@@ -689,7 +732,8 @@ def joint_fit_rows(cfg: SelectionConfig, cores: list[Core],
                            woe_maps=core.lean.fit.woe_maps,
                            means=core.lean.fit.means,
                            stds=core.lean.fit.stds,
-                           basis_maps=core.lean.fit.basis_maps)
+                           basis_maps=core.lean.fit.basis_maps,
+                           columns=core.lean.fit.columns)
         bank_all = MevBank(full_df, stats=bank.stats)
         for combo in combos.get(core.name, []):
             step += 1
@@ -761,7 +805,10 @@ def joint_fit_rows(cfg: SelectionConfig, cores: list[Core],
             shifts = _core_shift(core, lean, rules.core_shift_pct)
 
             row = {
-                "hash": h, "name": friendly_name(h),
+                # Named from the PD HALF's hash, not the row's pair hash, so
+                # the workbench — which names every PD half the same way —
+                # calls this model what the leaderboard called it.
+                "hash": h, "name": friendly_name(spec.pd_hash()),
                 "spec": spec.to_dict(),
                 "lineage": [{"core": core.name, "method": "stepwise+mev_enum"}],
                 "n_predictors": len(core.variables) + len(combo),
@@ -900,20 +947,49 @@ def stress_check(cfg: SelectionConfig, rows: list[dict],
 
 # ── ranking and finalists ────────────────────────────────────────────────────
 # The composite is deliberately simple and stated in full in METHODOLOGY.md:
-# normalised out-of-time discrimination carries the most weight, then the
-# checks a validator applies first. It orders the board; it decides nothing.
+# normalised out-of-time discrimination carries the most weight of the merit
+# terms, then the checks a validator applies first. It orders the board; it
+# decides nothing.
 COMPOSITE_WEIGHTS = {
-    "auc_oot": 0.40, "all_significant": 0.15, "stress_monotone": 0.15,
-    "no_core_shift": 0.10, "vif": 0.10, "oot_gap": 0.10,
+    "auc_oot": 0.30, "all_significant": 0.15, "stress_monotone": 0.15,
+    "no_core_shift": 0.10, "vif": 0.20, "oot_gap": 0.10,
 }
 
+VIF_FLAG_DEFAULT = 5.0
 
-def composite_rank(rows: list[dict]) -> None:
+
+def _vif_credit(vif: float, flag: float) -> float:
+    """The collinearity term, on [-1, 1] — the only component that can go
+    negative.
+
+    Every other component is a merit credit: absent, it scores zero. Severe
+    collinearity is not an absence of merit, it is a defect. These coefficients
+    are extrapolated into scenario space, so a worst-term VIF of 20 — standard
+    error inflated more than fourfold, the coefficient barely identified — is
+    not a model that merely earns no credit here; it is one that has to beat
+    the field elsewhere to deserve a place on the board at all.
+
+    Full credit at or under the flag line, ramping to zero at twice it (the
+    conventional indefensible threshold), then negative to a floor of -1 at
+    four times it.
+    """
+    if vif <= flag:
+        return 1.0
+    if vif <= 2.0 * flag:
+        return (2.0 * flag - vif) / flag
+    return max(-1.0, -(vif - 2.0 * flag) / (2.0 * flag))
+
+
+def composite_rank(rows: list[dict], max_vif: float | None = None) -> None:
     """Score and rank every unfiltered row in place. Lean metrics only, so the
-    score means the same thing for every row whether or not it was a finalist."""
+    score means the same thing for every row whether or not it was a finalist.
+
+    `max_vif` is the configured flag line, so the collinearity penalty tracks
+    the threshold the reviewer set rather than a second hidden one."""
     live = [r for r in rows if not r["filtered"]]
     if not live:
         return
+    flag = max_vif if max_vif and max_vif > 0 else VIF_FLAG_DEFAULT
     aucs = [r["auc_oot"] if r["auc_oot"] is not None else r["auc_in"]
             for r in live]
     lo, hi = min(aucs), max(aucs)
@@ -927,7 +1003,7 @@ def composite_rank(rows: list[dict]) -> None:
             + COMPOSITE_WEIGHTS["all_significant"] * float(r["all_significant"])
             + COMPOSITE_WEIGHTS["stress_monotone"] * float(stress_ok)
             + COMPOSITE_WEIGHTS["no_core_shift"] * float(not r["core_shifted"])
-            + COMPOSITE_WEIGHTS["vif"] * min(1.0, 1.0 / vif)
+            + COMPOSITE_WEIGHTS["vif"] * _vif_credit(vif, flag)
             + COMPOSITE_WEIGHTS["oot_gap"] * max(0.0, 1.0 - gap / 0.10))
     live.sort(key=lambda r: -r["score"])
     for i, r in enumerate(live, 1):
@@ -972,7 +1048,10 @@ def run_finalists(cfg: SelectionConfig, rows: list[dict],
 
 
 # ── the whole search ─────────────────────────────────────────────────────────
-N_STAGES = 4
+# Three stages: cores, macro combinations, ranking. The fourth used to be a
+# full re-fit of the top rows on the unthinned panel; see the note at the end
+# of `search` for why it is gone.
+N_STAGES = 3
 
 
 def combo_bound(cfg: SelectionConfig) -> int:
@@ -1038,7 +1117,7 @@ def run_search(cfg: SelectionConfig, progress=None, cancel=None,
     if not mev_variants(cfg):
         raise ValueError(
             "no macro terms were given to the search. Shortlist terms on the "
-            "Macro surface and include them in the setup; every emitted "
+            "MEV surface and include them in the setup; every emitted "
             "model must carry one")
     cores = build_cores(cfg, progress=stage(1), cancel=cancel)
     if not cores:
@@ -1054,10 +1133,10 @@ def run_search(cfg: SelectionConfig, progress=None, cancel=None,
             "no shortlisted term survived the screen on any core. Every "
             "emitted model must carry a macro term, so there is nothing to "
             "enumerate. Loosen the screen p-value or revisit the shortlist "
-            "on the Macro surface")
+            "on the MEV surface")
     rows = joint_fit_rows(cfg, cores, combos, progress=stage(3), cancel=cancel)
     stress_check(cfg, rows, progress=stage(3), cancel=cancel)
-    composite_rank(rows)
+    composite_rank(rows, max_vif=cfg.rules.max_vif)
 
     payload = {
         "config": cfg.to_dict(),
@@ -1077,5 +1156,24 @@ def run_search(cfg: SelectionConfig, progress=None, cancel=None,
     }
     if checkpoint:
         checkpoint(payload)
-    run_finalists(cfg, rows, progress=stage(4), cancel=cancel)
+    # No automatic finalist stage.
+    #
+    # It used to take the top rows and give each a real service.run on the
+    # FULL panel, which is the one part of the search that leaves the
+    # screening frame. On a 22-million-row tape that was five fits at three
+    # minutes each: fifteen minutes, on top of a search that had already
+    # finished, for models nobody had chosen yet.
+    #
+    # Nothing the board RANKS on came from it. Out-of-time AUC, significance,
+    # collinearity, sign checks, core stability and the stress direction are
+    # all computed on the thinned frame for every row. The finalist pass only
+    # pre-computed the backtest and decile capture shown in the detail pane of
+    # the top few — and opening any row as a draft refits on full data anyway,
+    # discarding that work.
+    #
+    # `run_finalists` is kept for an on-demand caller: full statistics for the
+    # ONE model somebody asks about is a reasonable three minutes, where five
+    # speculative ones were not.
+    for r in rows:
+        r.setdefault("finalist", False)
     return payload

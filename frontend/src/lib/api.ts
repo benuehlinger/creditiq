@@ -32,7 +32,17 @@ export function errorText(body: unknown, fallback: string): string {
  *  leaves its promise pending forever, and any mutation waiting on it stays
  *  "in progress" with no way to finish. Every projection and fit goes through
  *  here, so the worst case is an error after `timeoutMs`, never a spinner that
- *  never stops. The caller then shows the error and offers a retry. */
+ *  never stops. The caller then shows the error and offers a retry.
+ *
+ *  Two budgets, because the endpoints differ by two orders of magnitude. The
+ *  default covers anything that reads a cache or a small summary. `ESTIMATE_MS`
+ *  covers the endpoints that actually estimate a model: on the synthetic panels
+ *  a fit is seconds, but on an ingested tape of 22 million account-months it is
+ *  three to five minutes, and the 45s default failed EVERY fit on that book.
+ *  Aborting also loses the work — the request is what drives the computation,
+ *  so the retry starts over rather than collecting a finished result. */
+const ESTIMATE_MS = 900_000
+
 async function post<T>(path: string, body: unknown, timeoutMs = 45_000): Promise<T> {
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), timeoutMs)
@@ -54,22 +64,40 @@ async function post<T>(path: string, body: unknown, timeoutMs = 45_000): Promise
   }
 }
 
-async function get<T>(path: string, params?: Record<string, string | number | undefined>): Promise<T> {
+/** GET with a hard timeout, for the same reason POST has one: a request that
+ *  stalls against a wedged server otherwise never resolves, and with
+ *  staleTime Infinity the query showing a skeleton never re-asks. Generous by
+ *  default because a first visit to a surface computes its panel lazily. */
+async function get<T>(path: string, params?: Record<string, string | number | undefined>,
+                      timeoutMs = 120_000): Promise<T> {
   const q = params
     ? '?' + new URLSearchParams(
         Object.entries(params).filter(([, v]) => v !== undefined && v !== '')
           .map(([k, v]) => [k, String(v)]),
       ).toString()
     : ''
-  const r = await fetch(`${base}${path}${q}`)
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText} at ${path}`)
-  return r.json() as Promise<T>
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs)
+  try {
+    const r = await fetch(`${base}${path}${q}`, { signal: ctrl.signal })
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText} at ${path}`)
+    return await (r.json() as Promise<T>)
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') {
+      throw new Error(`The server did not answer ${path} within ${Math.round(timeoutMs / 1000)}s.`)
+    }
+    throw e
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 export const PORTFOLIO_KEYS = ['consumer', 'mortgage', 'cre'] as const
-export type PortfolioKey = (typeof PORTFOLIO_KEYS)[number]
+/** A book key. The three synthetic books are compiled in; ingested tapes add
+ *  more at runtime, so this is a shape check, not a member check. */
+export type PortfolioKey = string
 export const isPortfolioKey = (k: string | undefined): k is PortfolioKey =>
-  !!k && (PORTFOLIO_KEYS as readonly string[]).includes(k)
+  !!k && /^[a-z][a-z0-9_]{1,23}$/.test(k)
 
 export interface DataInitStatus {
   ready: boolean
@@ -79,15 +107,53 @@ export interface DataInitStatus {
   elapsed_s: number; eta_s: number | null; error: string
 }
 
+export interface TapeSchemaItem {
+  name: string; role: string; required: boolean; about: string
+}
+
+export interface TapeInspection {
+  token: string
+  filename: string
+  n_rows: number
+  n_columns: number
+  columns: { name: string; dtype: string; n_unique: number; sample: string[] }[]
+  schema: TapeSchemaItem[]
+  suggested_mapping: Record<string, string | null>
+  missing_required: string[]
+}
+
+export interface TapeRecord {
+  key: string; label: string
+  target: { column: string; description: string; dpd_state: number; label: string }
+  /** How the uploader calculated the LGD they supplied. Blank when none was. */
+  lgd_definition?: string
+  ead_method: string
+  default_oot_from: string
+  mapping: Record<string, string>
+  fingerprint: string
+  ingested_at: string
+  n_rows: number; n_accounts: number
+  warnings: string[]
+}
+
 export interface PortfolioInfo {
   key: PortfolioKey
   label: string
   accent_slot: number
+  /** Generated book, or someone's uploaded tape. Drives the honesty badge:
+   *  synthetic data is always labelled, and real loans never carry that label. */
+  source: 'synthetic' | 'ingested'
+  /** Whether the tape carries realised losses. Without them the LGD stage
+   *  offers a declared assumption instead of a fitted model. */
+  has_severity: boolean
   n_accounts: number
   n_rows: number
   n_defaults: number
   annual_default_rate_pct: number
   window: [string, string]
+  /** The out-of-time boundary this book proposes: its own, stated at
+   *  ingestion, or the compiled default on a synthetic book. */
+  oot_from: string
   target: { column: string; label: string; description: string }
   ead_method: 'amortizing' | 'ccf'
   ead_note: string
@@ -118,6 +184,45 @@ export interface ColumnProfile {
   n_outliers?: number
   top_levels?: { level: string; count: number; pct: number }[]
   note?: string | null
+}
+
+/** Equal-width bars, with the event rate read on the same axis. */
+export interface Histogram {
+  edges: number[]
+  counts: number[]
+  events?: number[]
+  /** null where the bar holds too few rows for a rate to mean anything. */
+  rates?: (number | null)[]
+  below: number; above: number
+  window: [number, number]
+}
+
+/** One column on its own, before any target. */
+export interface Univariate {
+  column: string
+  kind: 'numeric' | 'categorical'
+  n: number; n_missing: number; missing_pct: number; n_unique: number
+  sampled?: boolean
+  findings: { severity: 'good' | 'warning' | 'serious' | 'critical'
+              label: string; detail: string }[]
+  // numeric
+  mean?: number; std?: number; median?: number; min?: number; max?: number
+  percentiles?: Record<string, number>
+  iqr?: number; cv?: number | null
+  skew?: number; kurtosis_excess?: number; skew_note?: string
+  mode?: number; mode_share_pct?: number
+  zero_pct?: number; negative_pct?: number
+  n_outliers?: number; outlier_fence?: [number, number]
+  log1p_skew?: number
+  range?: number; mad?: number; integral?: boolean
+  p99_over_p50?: number | null
+  top_values?: { value: number; count: number; pct: number }[]
+  histogram?: Histogram
+  histogram_trimmed?: Histogram
+  // categorical
+  levels?: { level: string; count: number; pct: number }[]
+  concentration_hhi?: number; top_level_pct?: number
+  n_levels_under_1pct?: number; pct_in_thin_levels?: number
 }
 
 export interface DataHealth {
@@ -449,12 +554,34 @@ export interface MacroLibrary {
   lags: number[]
   adf_alpha: number
   pd_months: number; lgd_defaults: number; lgd_months: number
+  min_month_rows?: number
   rows: MacroCandidate[]
 }
 
 export interface MacroSeries {
   column: string; key: string; transform: string; lag_months: number
   points: { month: string; value: number | null; pd: number | null; lgd: number | null }[]
+}
+
+/** A submitted fit, as the server reports it back. `done` means the model is
+ *  in the cache under `hash` and can be read from /models/{hash}. */
+export interface FitJob {
+  hash: string
+  state: 'running' | 'done' | 'error' | 'unknown'
+  phase: string
+  elapsed_s: number
+  error: string
+}
+
+/** A submitted ECL projection. Unlike a fit there is nowhere else to read the
+ *  answer from, so `result` carries the payload once the job is done. */
+export interface EclJob {
+  hash: string
+  state: 'running' | 'done' | 'error' | 'unknown'
+  phase: string
+  elapsed_s: number
+  error: string
+  result?: EclResponse
 }
 
 export interface FitRequest {
@@ -566,6 +693,56 @@ export function asMap<T>(v: unknown): Record<string, T> {
  *  cannot omit one. */
 export const VERSION_QUERIES = ['versions', 'lineage', 'rollup', 'compare'] as const
 
+/** Why one specification became another. Captured at the fork gate when the
+ *  edit was made, so the graph can explain a branch rather than just draw it. */
+export interface ForkRecord {
+  reason_code?: string
+  justification?: string
+  /** The gate's label for the edit that tripped it. Superseded by `changes`,
+   *  kept for records written before the full list was measured. */
+  change?: string
+  /** Every difference from the parent specification, measured at save. */
+  changes?: string[]
+  from_hash?: string
+  from_name?: string
+  from_kind?: 'version' | 'selection'
+  at?: string
+}
+
+/** Where a specification entered the workspace, when it came off a search
+ *  leaderboard rather than being built by hand. */
+export interface OriginRecord {
+  name?: string
+  hash?: string
+  rank?: number | null
+  config_hash?: string
+}
+
+export interface LineageNode {
+  hash: string
+  name: string
+  status: string
+  created_at: string
+  starred: boolean
+  auc: number | null
+  ecl?: number | null
+  notes?: string
+  n_variables: number
+  fork?: ForkRecord
+  origin?: OriginRecord
+}
+
+export interface LineageEdge {
+  from: string
+  to: string
+  reason_code?: string | null
+  justification?: string | null
+  changes?: string[]
+  change?: string | null
+}
+
+export interface LineageGraph { nodes: LineageNode[]; edges: LineageEdge[] }
+
 export function wireLgdSpec(spec: LgdSpecPayload): LgdSpecPayload {
   return {
     ...spec,
@@ -578,6 +755,9 @@ export function wireLgdSpec(spec: LgdSpecPayload): LgdSpecPayload {
 export interface LgdSpecPayload {
   drivers: string[]
   categoricals: string[]
+  /** A declared flat severity for a tape with no realised losses. When set,
+   *  the severity half is this number, stated - no drivers, no fit. */
+  assumed_lgd?: number | null
   treatments?: Record<string, LgdTreatment>
   edges?: Record<string, number[]>
   knots?: Record<string, number[]>
@@ -745,7 +925,10 @@ export interface ModelIdentity {
   hash: string
   complete: boolean
   missing: string[]
+  /** The halves collated (`pd · lgd`), or whichever half exists alone. */
   name: string | null
+  pd_name: string | null
+  lgd_name: string | null
   pd_variables: string[]
   lgd_drivers: string[]
   lgd_categoricals: string[]
@@ -805,6 +988,8 @@ export interface RollUpResponse {
     by_scenario: Record<string, { ecl: number; ecl_bps: number; pd_12m: number; lgd: number }>
   /** The macro terms this book's model carries, canonical `key@transform@lag`. */
   mev_terms?: string[]
+  /** The severity half's macro terms, same canonical form. */
+  lgd_mev_terms?: string[]
     capped: boolean; extrapolation_flags: string[]; sign_flips: string[]
   }[]
   totals: Record<string, { ecl: number; exposure: number; ecl_bps: number
@@ -823,20 +1008,71 @@ export interface RollUpResponse {
 }
 
 export const api = {
+  // A short timeout on purpose: health is the liveness probe. Everything else
+  // may legitimately take a while; this one answering slowly IS the finding.
   health: () => get<{ status: string; portfolios: PortfolioKey[]; mev_series_resolved: number
                       data_fingerprint?: string
-                      mev_series_failed: number; mev_cache_built_at: string }>('/health'),
+                      mev_series_failed: number; mev_cache_built_at: string }>('/health', undefined, 8_000),
   /** Whether the synthetic panels exist, and generation progress if running. */
   dataStatus: () => get<DataInitStatus>('/data/status'),
   dataGenerate: () => post<{ state: string; total?: number }>('/data/generate', {}),
   /** Fire-and-forget: warm one book's frame server-side while the user reads. */
   prepare: (k: string) => post<{ status: string }>(`/portfolios/${k}/prepare`, {}),
   portfolios: () => get<PortfolioInfo[]>('/portfolios'),
+
+  // ── loan tape ingestion ────────────────────────────────────────────────
+  tapeSchema: () => get<{ schema: TapeSchemaItem[]; required: string[] }>('/tapes/schema'),
+  tapeInspect: async (file: File): Promise<TapeInspection> => {
+    const body = new FormData()
+    body.append('file', file)
+    const r = await fetch('/api/tapes/inspect', { method: 'POST', body })
+    if (!r.ok) throw new Error(errorText(await r.json().catch(() => null), r.statusText))
+    return r.json()
+  },
+  tapeIngest: (req: { token: string; key: string; label: string
+                      mapping: Record<string, string | null>
+                      default_definition: string; lgd_definition?: string
+                      ead_method: string; oot_from: string }) =>
+    post<TapeRecord>('/tapes/ingest', req, 180_000),
+  tapes: () => get<{ tapes: TapeRecord[] }>('/tapes'),
+  tapeRemap: (key: string, body: {
+    changes?: Record<string, string | null>
+    label?: string; default_definition?: string
+    ead_method?: string; oot_from?: string }) =>
+    fetch(`/api/tapes/${key}`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(async (r) => {
+      const j = await r.json().catch(() => null)
+      if (!r.ok) throw new Error(errorText(j, r.statusText))
+      return j as TapeRecord
+    }),
+  /** The running ingest's current stage; short timeout because it must never
+   *  queue behind the ingest work it is reporting on. */
+  tapeIngestProgress: (token: string) =>
+    get<{ stage: string | null; elapsed_s: number | null }>(
+      `/tapes/ingest-progress/${token}`, undefined, 5_000),
+  /** The book's drawn balance banded along any column, for the roll-up's
+   *  concentration card. Numeric columns come back in round bands. */
+  concentration: (key: string, column: string) =>
+    get<{ portfolio: string; column: string; kind: 'numeric' | 'categorical'
+          bands: { band: string; exposure: number; share: number }[] }>(
+      `/portfolios/${key}/concentration`, { column }),
+  /** What a book's first load is doing. Polled while the Panel waits, so a
+   *  large tape narrates itself instead of showing bare skeletons. */
+  warmStatus: (key: string) =>
+    get<{ portfolio: string; stage: string; label: string
+          stages: { key: string; label: string }[]
+          elapsed_s: number | null; error: string }>(
+      `/portfolios/${key}/warm-status`, undefined, 8_000),
+  tapeDelete: (key: string) =>
+    fetch(`/api/tapes/${key}`, { method: 'DELETE' }).then((r) => r.json()),
   dataHealth: (k: string) => get<DataHealth>(`/portfolios/${k}/health`),
   timeseries: (k: string, by?: string) => get<TimeseriesPoint[]>(`/portfolios/${k}/timeseries`, { by }),
-  sample: (k: string, limit = 200, offset = 0) =>
+  sample: (k: string, limit = 200, offset = 0, structure = false) =>
     get<{ total: number; columns: string[]; rows: Record<string, unknown>[] }>(
-      `/portfolios/${k}/sample`, { limit, offset }),
+      `/portfolios/${k}/sample`, { limit, offset,
+                                   structure: structure ? 'true' : undefined }),
   mevCatalog: () => get<{ why_restricted: string; built_at: string
                           variables: MevVariable[]; by_portfolio: Record<string, string[]> }>('/mev/catalog'),
   mevSeries: (keys: string[], start?: string, end?: string) =>
@@ -854,6 +1090,8 @@ export const api = {
       floors: Record<string, number>; sample_note: string; null_note: string
       bands: { upto: number | null; label: string }[]
     }>(`/portfolios/${k}/screen`),
+  univariate: (k: string, column: string) =>
+    get<Univariate>(`/portfolios/${k}/univariate/${encodeURIComponent(column)}`),
   binning: (k: string, col: string, edges?: number[], maxBins = 8, nKnots = 4) =>
     get<BinningResult>(`/portfolios/${k}/binning/${encodeURIComponent(col)}`, {
       max_bins: maxBins, n_knots: nKnots,
@@ -913,19 +1151,75 @@ export const api = {
   /** The friendly name for any hash, for a half restored from a record that
    *  stored the hash only. */
   nameFor: (hash: string) => get<{ hash: string; name: string }>(`/name/${hash}`),
-  fit: (req: FitRequest): Promise<FitResponse> => post('/fit', req),
+  /** Fit a specification: submit, poll, collect.
+   *
+   *  Not one request. A fit on the generated panels takes seconds, but on an
+   *  ingested tape of twenty million account-months it takes minutes, and a
+   *  request held open that long dies to the client timeout, to any proxy in
+   *  front of the server, and to closing the tab — and the abort DISCARDS the
+   *  work, because the request is what drives the computation.
+   *
+   *  So the server starts the fit on a thread and answers with its hash; this
+   *  polls until the job reports done, then reads the finished model from the
+   *  cache under that hash. Nothing is lost if the poll is interrupted: the
+   *  fit keeps running, and asking again joins it rather than restarting it.
+   *
+   *  `onPhase` receives the phase the server is actually in, so the progress
+   *  bar reports rather than guesses. */
+  fit: async (req: FitRequest,
+              onPhase?: (phase: string) => void): Promise<FitResponse> => {
+    const started = await post<FitJob>('/fit/start', req)
+    const deadline = Date.now() + ESTIMATE_MS
+    let s = started
+    while (s.state === 'running') {
+      if (Date.now() > deadline) {
+        throw new Error(`The fit has been running for ${Math.round(ESTIMATE_MS / 60_000)} `
+          + 'minutes and is still going. It has not been cancelled — reopen this '
+          + 'stage to pick it up.')
+      }
+      await new Promise((r) => setTimeout(r, 1000))
+      s = await get<FitJob>(`/fit/status/${started.hash}`)
+      if (s.phase) onPhase?.(s.phase)
+    }
+    if (s.state === 'error') throw new Error(s.error || 'The fit failed.')
+    return get<FitResponse>(`/models/${started.hash}`)
+  },
   /** Report an already-fitted model's backtest at another frequency. No refit —
    *  the scored account-months are held on the cached run. */
   recohort: (req: FitRequest, freq: 'MS' | 'QS' | 'YS') =>
     post<Pick<FitResponse['backtest'], 'cohorts' | 'rank_order' | 'score_psi'>
-      & { period_freq: string }>('/backtest/recohort', { ...req, freq }),
+      & { period_freq: string }>('/backtest/recohort', { ...req, freq }, ESTIMATE_MS),
   segmentBacktest: (portfolio: string, hash: string, column: string) =>
     fetch(`/api/segment-backtest?portfolio=${portfolio}&hash_=${hash}&column=${column}`,
           { method: 'POST' }).then((r) => r.json()) as Promise<{
       column: string
       segments: FitResponse['backtest']['segments']
     }>,
-  ecl: (req: EclRequest): Promise<EclResponse> => post('/ecl', req),
+  /** Project ECL: submit, poll, collect — for the same reasons as `fit`.
+   *
+   *  The projection ran past two minutes on a twenty-two-million-row tape,
+   *  well beyond any sensible request timeout, and an abort threw the work
+   *  away. Unlike a fit there is no hash to read the answer back from, so the
+   *  job carries the payload and the status call returns it when done. */
+  ecl: async (req: EclRequest,
+              onPhase?: (phase: string) => void): Promise<EclResponse> => {
+    const started = await post<EclJob>('/ecl/start', req)
+    const deadline = Date.now() + ESTIMATE_MS
+    let s = started
+    while (s.state === 'running') {
+      if (Date.now() > deadline) {
+        throw new Error(`The projection has been running for `
+          + `${Math.round(ESTIMATE_MS / 60_000)} minutes and is still going. `
+          + 'It has not been cancelled — reopen this stage to pick it up.')
+      }
+      await new Promise((r) => setTimeout(r, 1000))
+      s = await get<EclJob>(`/ecl/status/${started.hash}`)
+      if (s.phase) onPhase?.(s.phase)
+    }
+    if (s.state === 'error') throw new Error(s.error || 'The projection failed.')
+    if (!s.result) throw new Error('The projection finished with no result.')
+    return s.result
+  },
   editableScenario: (name: string, keys: string[]) =>
     fetch(`/api/scenarios/${name}/editable?keys=${keys.join(',')}`).then((r) => r.json()) as
       Promise<{ scenario: string; published: boolean; note: string
@@ -933,6 +1227,8 @@ export const api = {
   versions: (portfolio?: string) =>
     get<VersionRecord[]>('/versions', { portfolio }),
   saveVersion: async (req: EclRequest & { notes?: string; tags?: string[]
+                                          fork?: Record<string, unknown>
+                                          origin?: Record<string, unknown>
                                           with_ecl?: boolean; replaces?: string | null }) => {
     const r = await fetch('/api/versions', {
       method: 'POST', headers: { 'content-type': 'application/json' },
@@ -954,8 +1250,12 @@ export const api = {
       `/portfolios/${k}/lgd/knots/${encodeURIComponent(col)}`, { n_knots: nKnots }),
   lgdDistribution: (k: string) => get<LgdDistribution>(`/portfolios/${k}/lgd/distribution`),
   lgdCandidates: (k: string) => get<LgdCandidates>(`/portfolios/${k}/lgd/candidates`),
+  lgdAssume: (portfolio: string, value: number) =>
+    post<{ hash: string; name: string; mean_lgd: number; note: string
+           spec: LgdSpecPayload & { portfolio: string } }>(
+      '/lgd/assume', { portfolio, value }),
   lgdFit: (portfolio: string, spec: LgdSpecPayload): Promise<LgdFitResult> =>
-    post('/lgd/fit', { portfolio, ...wireLgdSpec(spec) }),
+    post('/lgd/fit', { portfolio, ...wireLgdSpec(spec) }, ESTIMATE_MS),
   lgdBacktest: async (portfolio: string, spec: LgdSpecPayload,
                       ootFrom = '2022-01-01',
                       freq: SeverityFreq = 'MS'): Promise<LgdBacktest> => {
@@ -988,9 +1288,7 @@ export const api = {
   compareVersions: (hashes: string[]) =>
     get<CompareResult>('/versions/compare', { hashes: hashes.join(',') }),
   lineage: (portfolio: string) =>
-    get<{ nodes: { hash: string; name: string; status: string; created_at: string
-                   starred: boolean; auc: number | null; n_variables: number }[]
-          edges: { from: string; to: string }[] }>('/versions/lineage', { portfolio }),
+    get<LineageGraph>('/versions/lineage', { portfolio }),
   patchVersion: (hash: string, params: Record<string, string | boolean>) =>
     fetch(`/api/versions/${hash}?` + new URLSearchParams(
       Object.entries(params).map(([k, v]) => [k, String(v)])).toString(),
@@ -1027,8 +1325,28 @@ export const api = {
   selectionCancel: (k: string) => post<{ state: string }>(`/selection/${k}/cancel`, {}),
   selectionResults: (k: string, config: string) =>
     get<SelectionResults>(`/selection/${k}/results`, { config }),
+  // ── the severity search ────────────────────────────────────────────────
+  resetServerWorkspace: () =>
+    post<{ versions: number; selection_reviews: number
+           selection_configs: number; archive: string | null }>(
+      '/workspace/reset', {}),
+
+  lgdSelectionDefaults: (k: string) =>
+    get<LgdSelectionDefaults>(`/lgd-selection/${k}/defaults`),
+  lgdSelectionRun: (k: string, config: LgdSelectionConfigPayload) =>
+    post<{ state: string; config_hash: string }>(
+      `/lgd-selection/${k}/run`, { config }),
+  lgdSelectionStatus: (k: string) =>
+    get<SelectionStatus>(`/lgd-selection/${k}/status`),
+  lgdSelectionCancel: (k: string) =>
+    post<{ state: string }>(`/lgd-selection/${k}/cancel`, {}),
+  lgdSelectionResults: (k: string, config: string) =>
+    get<LgdSelectionResults>(`/lgd-selection/${k}/results`, { config }),
+
   selectionConfigs: (k: string) =>
     get<{ configs: SelectionConfigListing[] }>(`/selection/${k}/configs`),
+  selectionConfigSave: (k: string, config: SelectionConfigPayload, name: string) =>
+    post<{ id: string; name: string }>(`/selection/${k}/configs`, { config, name }),
   selectionConfig: (k: string, id: string) =>
     get<{ id: string; name: string; saved_at: string
           config: SelectionConfigPayload }>(`/selection/${k}/configs/${id}`),
@@ -1084,7 +1402,7 @@ export interface SelectionConfigPayload {
   candidates: SelectionCandidatePayload[]
   cores?: string[]
   expert_core?: string[] | null
-  /** Macro terms as `key@transform@lag`, taken from the Macro surface's
+  /** Macro terms as `key@transform@lag`, taken from the MEV surface's
    *  shortlist. The search enumerates combinations of these; it never sweeps
    *  the transformation library itself. */
   mev_terms?: string[]
@@ -1095,6 +1413,10 @@ export interface SelectionConfigPayload {
 }
 
 export interface SelectionDefaults {
+  oot_from?: string
+  window?: [string, string]
+  /** Set when the boundary leaves too little history before it to fit on. */
+  fit_window_note?: string
   portfolio: string
   candidates: {
     column: string; kind: string; iv: number | null; iv_band: string | null
@@ -1206,6 +1528,86 @@ export interface SelectionResults {
 
 export interface SelectionConfigListing {
   id: string; portfolio: string; name: string; saved_at: string
+}
+
+// ── the severity search (LGD selection) ─────────────────────────────────────
+export interface LgdLeaderboardRow {
+  hash: string
+  name: string
+  spec: Record<string, unknown>
+  lineage: { core: string; method: string }[]
+  n_predictors: number
+  n_core: number
+  core_columns: string[]
+  mevs: { key: string; transform: string; lag_months: number; label: string }[]
+  n_mevs: number
+  coefficients: { name: string; estimate: number; std_error: number | null
+                  p_value: number | null; term: string
+                  term_vif: number | null }[]
+  max_p: number | null
+  all_significant: boolean
+  max_vif: number | null
+  core_shifts: { column: string; before: number; after: number
+                 flipped: boolean; shift_pct: number }[]
+  core_shifted: boolean
+  mae_in: number
+  mae_oot: number | null
+  rmse_oot: number | null
+  deviance_r2: number | null
+  mean_lgd: number
+  stress: { usable: boolean; monotone?: boolean
+            anchor_severity?: number; peak_stressed_severity?: number } | null
+  score: number | null
+  auto_rank: number | null
+  filtered: boolean
+  filter_reason: string | null
+  finalist: boolean
+  full?: { deviance_r2: number | null; spearman: number | null
+           link_test_ok: boolean | null
+           backtest: Record<string, unknown> }
+}
+
+export interface LgdSelectionResults {
+  target: 'lgd'
+  config: Record<string, unknown>
+  config_hash: string
+  portfolio: string
+  generated_at: string
+  scenarios: string[]
+  cores: { name: string; columns: string[]; warnings: string[]
+           steps: Record<string, unknown>[] }[]
+  survivors: Record<string, string[]>
+  screened_out: { core: string; label: string; reason: string }[]
+  n_combos: number
+  n_rows: number
+  n_filtered: number
+  n_train: number
+  n_test: number
+  rows: LgdLeaderboardRow[]
+  current: boolean
+}
+
+export interface LgdSelectionDefaults {
+  window?: [string, string]
+  /** Set when the boundary leaves too little history before it to fit on. */
+  fit_window_note?: string
+  candidates: {
+    numeric: { column: string; filled: number; kind: string; macro: boolean }[]
+    categorical: { column: string; filled: number; kind: string
+                   levels: number; macro: boolean }[]
+    n_defaults: number
+  }
+  rules: Record<string, unknown>
+  oot_from: string
+}
+
+export interface LgdSelectionConfigPayload {
+  candidates: string[]
+  mev_terms: string[]
+  cores?: string[]
+  expert_core?: string[] | null
+  rules?: Record<string, unknown>
+  oot_from?: string
 }
 
 export interface SelectionReviewRow {

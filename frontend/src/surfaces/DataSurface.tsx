@@ -1,8 +1,9 @@
-import { useMemo } from 'react'
-import { useParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useMemo, useState } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, type ColumnProfile } from '../lib/api'
-import { Card, CardHead, Skeleton, StatTile, StatusPill } from '../components/ui'
+import { blessFingerprintChange } from '../lib/fingerprint'
+import { Card, CardHead, QueryError, Skeleton, StatTile, StatusPill } from '../components/ui'
 import { useUi } from '../lib/store'
 import EChart from '../charts/EChart'
 import { baseOption, crosshairTooltip, lineSeries, markLineAt, xName, gridFor } from '../charts/base'
@@ -15,7 +16,7 @@ import { accent, ink, mode, status } from '../design/tokens'
  *  not narrate the chart, and it does not explain how the demonstration panel
  *  was produced: neither is information the reader can act on. The marked month
  *  differs per book because the cycle that drives each one differs. */
-const STORY: Record<string, { caption: string; mark: [string, string] }> = {
+const STORY: Record<string, { caption: string; mark: [string, string] | null }> = {
   consumer: {
     caption:
       'Monthly default rate by performance date. Default is 90+ days past due '
@@ -32,7 +33,7 @@ const STORY: Record<string, { caption: string; mark: [string, string] }> = {
     caption:
       'Monthly default rate by performance date. Default is nonaccrual or a '
       + 'downgrade to a default grade. The rate rises from 2022 with the '
-      + 'commercial property cycle. Property type is available on the Explore stage.',
+      + 'commercial property cycle. Property type is available on the PD model stage.',
     mark: ['2022-06-01', 'CRE index peak'],
   },
 }
@@ -46,7 +47,15 @@ export default function DataSurface() {
 
   const info = pf.data?.find((p) => p.key === portfolio)
 
-  const story = STORY[portfolio] ?? STORY.consumer
+  // Ingested books have no scripted story: the caption states the definition
+  // the uploader gave, and nothing is marked because no month is known to
+  // matter. Falling back to a synthetic book's caption would misstate the
+  // default definition.
+  const story = STORY[portfolio] ?? {
+    caption: `Monthly default rate by performance date. `
+      + `${info?.target.description ?? 'Default as defined at upload'}.`,
+    mark: null,
+  }
 
   const rateOption = useMemo(() => {
     if (!ts.data) return null
@@ -60,7 +69,11 @@ export default function DataSurface() {
         ...(baseOption().xAxis as object),
         ...xName('Reporting month'),
         type: 'time' as const,
-        axisLabel: { color: k.muted, fontSize: 11, formatter: '{yyyy}' },
+        // Level-aware labels: a year at a year boundary, month and year at the
+        // half-year ticks a short tape gets. A year-only template printed
+        // every year twice on a four-year book.
+        axisLabel: { color: k.muted, fontSize: 11,
+                     formatter: { year: '{yyyy}', month: "{MMM} '{yy}" } },
       },
       yAxis: {
         ...(baseOption().yAxis as object),
@@ -74,7 +87,9 @@ export default function DataSurface() {
       series: [
         {
           ...lineSeries({ name: 'Realized default rate', data: pts, color: accent(), area: true }),
-          markLine: markLineAt(story.mark[0], story.mark[1], status.serious),
+          ...(story.mark
+            ? { markLine: markLineAt(story.mark[0], story.mark[1], status.serious) }
+            : {}),
         },
       ],
     }
@@ -82,14 +97,19 @@ export default function DataSurface() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ts.data, theme, story])
 
-  if (!info || health.isLoading) {
+  // A failed request must say so. Guarding on `!info` alone rendered the
+  // skeletons forever after a transient failure: with staleTime Infinity and
+  // no focus refetch, nothing ever retried, and the page pulsed indefinitely.
+  if (pf.isError || health.isError || ts.isError) {
+    const failed = pf.isError ? pf : health.isError ? health : ts
     return (
-      <div className="space-y-3 p-4">
-        <Skeleton className="h-20" />
-        <Skeleton className="h-64" />
-        <Skeleton className="h-96" />
-      </div>
+      <QueryError what="This book's panel" error={failed.error}
+        retry={() => { pf.refetch(); health.refetch(); ts.refetch() }} />
     )
+  }
+
+  if (!info || health.isLoading) {
+    return <FirstLoad pk={portfolio} />
   }
 
   const failing = health.data?.issues.filter((i) => !i.passed) ?? []
@@ -142,7 +162,7 @@ export default function DataSurface() {
           <CardHead
             title="Panel integrity"
             subtitle={`${health.data?.n_rows.toLocaleString()} rows · ${health.data?.n_columns} columns`}
-            caption="Structural checks on the panel: duplicate keys, gaps in the observation grid, rows after a terminal event, and target definition consistency. A model will fit despite these failures."
+            caption="Duplicate keys, observation-grid gaps, rows after a terminal event, and target definition consistency. Failures do not block fitting; they qualify it."
             methodology="data-health"
             right={
               <StatusPill severity={failing.some((f) => f.severity === 'critical') ? 'critical'
@@ -178,6 +198,12 @@ export default function DataSurface() {
           <ColumnTable columns={health.data?.columns ?? []} />
         </Card>
       </div>
+
+      {/* ── the rows themselves ── */}
+      <SampleRows pk={portfolio} />
+
+      {/* ── how this book came to be: permanent, not a one-time flow ── */}
+      <BookRecord pk={portfolio} info={info} />
     </div>
   )
 }
@@ -233,6 +259,262 @@ function ColumnTable({ columns }: { columns: ColumnProfile[] }) {
           ))}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+
+/** Raw rows, exactly as the panel holds them.
+ *
+ *  Analysts do not trust a dataset they have never seen a row of, and until
+ *  now nothing in the app showed one. Read-only: browsing is honest and
+ *  cheap; editing is the CECL product's job. */
+function SampleRows({ pk }: { pk: string }) {
+  const q = useQuery({ queryKey: ['sample', pk],
+                       queryFn: () => api.sample(pk, 15, 0, true),
+                       staleTime: Infinity })
+  if (!q.data) return null
+  return (
+    <Card>
+      <CardHead title="Data structure"
+        subtitle={`Three accounts of ${num(q.data.total)} account-months · grouped by account, sorted by month`}
+        caption="One row per account per month, each account's history in order. Column names are as stored: canonical where mapped, the seller's otherwise. Read-only." />
+      <div className="thin-scroll overflow-x-auto px-4 pb-4">
+        <table className="w-full text-left text-micro">
+          <thead className="text-tiny text-ink-muted">
+            <tr>{q.data.columns.map((c) => (
+              <th key={c} className="whitespace-nowrap py-1 pr-4 font-mono font-medium">{c}</th>
+            ))}</tr>
+          </thead>
+          <tbody>
+            {q.data.rows.map((r, i) => (
+              <tr key={i}
+                className={i > 0 && r.account_id !== q.data!.rows[i - 1].account_id
+                  ? 'border-t-2 border-ink-muted/40' : 'border-t border-hairline'}>
+                {q.data!.columns.map((c) => (
+                  <td key={c} className="whitespace-nowrap py-1 pr-4 tnum text-ink-secondary">
+                    {r[c] == null ? '\u2014' : String(r[c])}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  )
+}
+
+/** Where this book came from, permanently visible.
+ *
+ *  Ingestion is a flow, not a place: once a tape is in, its mapping and the
+ *  four answers used to live nowhere. This card is their record. A generated
+ *  book states what it is instead, so neither kind is unexplained. */
+/** The panel grid and the target: validated at ingestion, so re-pointing one
+ *  means re-running that gate, which is what a replacement upload is. */
+const STRUCTURAL = ['account_id', 'performance_date', 'default_flag']
+const SCHEMA_ORDER = [
+  'account_id', 'performance_date', 'default_flag', 'current_balance',
+  'origination_date', 'months_on_book', 'scheduled_payment', 'interest_rate',
+  'remaining_term', 'committed_amount', 'lgd_realised', 'exposure_at_default',
+  'recovery_amount', 'workout_months',
+]
+
+function BookRecord({ pk, info }: {
+  pk: string; info: import('../lib/api').PortfolioInfo
+}) {
+  const nav = useNavigate()
+  const qc = useQueryClient()
+  const [editing, setEditing] = useState(false)
+  const tapes = useQuery({ queryKey: ['tapes'], queryFn: api.tapes,
+                           staleTime: Infinity,
+                           enabled: info.source === 'ingested' })
+  // What this book actually holds, which is what a correction may point at.
+  const cols = useQuery({ queryKey: ['sample', pk, 'cols'],
+                          queryFn: () => api.sample(pk, 1),
+                          staleTime: Infinity, enabled: editing })
+  const remap = useMutation({
+    mutationFn: (body: Parameters<typeof api.tapeRemap>[1]) =>
+      api.tapeRemap(pk, body),
+    onSuccess: () => {
+      // The stored data changed, so everything derived from it is stale.
+      // This tab caused the change; the shell adopts the new fingerprint
+      // rather than reloading mid-correction.
+      blessFingerprintChange()
+      ;['tapes', 'portfolios', 'health', 'sample', 'ts', 'screen']
+        .forEach((k) => qc.invalidateQueries({ queryKey: [k] }))
+    },
+  })
+  // A generated book has no loading record to show. Its target definition is
+  // on the default-rate chart and its exposure treatment is on the model's
+  // own specification, so a card restating both was duplication.
+  if (info.source !== 'ingested') return null
+  const rec = tapes.data?.tapes.find((t) => t.key === pk)
+  // The dropdown offers the SELLER's column names, which is how the mapping
+  // records them — but a mapped column is stored under its canonical name,
+  // so the stored list has to be translated back before it can be matched
+  // against the mapping. Without this every dropdown read "not mapped".
+  const sellerColumns = useMemo(() => {
+    const back = Object.fromEntries(
+      Object.entries(rec?.mapping ?? {}).map(([canon, orig]) => [canon, orig]))
+    return (cols.data?.columns ?? []).map((c) => back[c] ?? c).sort()
+  }, [cols.data, rec])
+  if (!rec) return null
+  return (
+    <Card>
+      <CardHead title="How this book was loaded"
+        subtitle={`Ingested ${rec.ingested_at.slice(0, 10)} \u00b7 fingerprint ${rec.fingerprint}`}
+        caption="The declarations made at ingestion, and the column mapping onto the canonical schema. A mis-mapped column is corrected here in place; the three structural fields require a replacement upload because the integrity checks ran against them."
+        right={
+          <div className="flex gap-2">
+            <button onClick={() => setEditing((v) => !v)}
+              className="rounded-ctl border border-hairline px-2.5 py-1 text-tiny text-ink-secondary hover:text-ink">
+              {editing ? 'Done' : 'Correct a mapping'}
+            </button>
+            <button onClick={() => nav(`/tapes?replace=${pk}`)}
+              title="Upload a new file for this book: a corrected structural column, or the next period's tape."
+              className="rounded-ctl border border-hairline px-2.5 py-1 text-tiny text-ink-secondary hover:text-ink">
+              Replace tape
+            </button>
+          </div>
+        } />
+      <div className="grid gap-4 px-4 pb-4 md:grid-cols-[280px_minmax(0,1fr)]">
+        <dl className="space-y-2.5 text-xs">
+          {/* Label above value, both left-aligned: a right-aligned value
+              that wraps (a stated default definition is a sentence, not a
+              number) reads as ragged nonsense against its own label. */}
+          {[['Default definition', info.target.description],
+            ...(rec.lgd_definition
+              ? [['LGD definition', rec.lgd_definition]] : []),
+            ['Exposure method', info.ead_method === 'ccf'
+              ? 'Revolving commitments (CCF)' : 'Amortising loans'],
+            ['Out-of-time window from', rec.default_oot_from],
+            ['Size', `${num(rec.n_rows)} rows · ${num(rec.n_accounts)} accounts`],
+          ].map(([k, v]) => (
+            <div key={k}>
+              <dt className="text-micro uppercase tracking-wide text-ink-muted">{k}</dt>
+              <dd className="mt-0.5 leading-relaxed text-ink-secondary">{v}</dd>
+            </div>
+          ))}
+          {rec.warnings.length > 0 && (
+            <div className="pt-1.5">
+              {rec.warnings.map((w) => (
+                <p key={w} className="text-micro leading-relaxed"
+                   style={{ color: 'var(--status-warning)' }}>{w}</p>
+              ))}
+            </div>
+          )}
+        </dl>
+        <div>
+          <p className="mb-1.5 text-micro font-medium uppercase tracking-wide text-ink-muted">
+            Column mapping, as confirmed at upload
+          </p>
+          <table className="w-full text-left text-micro">
+            <tbody>
+              {SCHEMA_ORDER.filter((c) => editing || rec.mapping[c])
+                .map((canon) => {
+                const orig = rec.mapping[canon]
+                const structural = STRUCTURAL.includes(canon)
+                return (
+                  <tr key={canon} className="border-t border-hairline">
+                    <td className="py-1 pr-3 font-mono text-ink">{canon}</td>
+                    <td className="py-1 pr-3 text-ink-muted">←</td>
+                    <td className="py-1 font-mono text-ink-secondary">
+                      {!editing || structural ? (orig ?? <span className="text-ink-muted">not mapped</span>)
+                        : (
+                          <select value={orig ?? ''} disabled={remap.isPending}
+                            onChange={(e) => remap.mutate({
+                              changes: { [canon]: e.target.value || null } })}
+                            className="w-full rounded-ctl border border-hairline bg-surface px-1 py-0.5 font-mono text-micro">
+                            <option value="">not mapped</option>
+                            {sellerColumns.map((c) => (
+                              <option key={c} value={c}>{c}</option>
+                            ))}
+                          </select>
+                        )}
+                      {editing && structural && (
+                        <span className="ml-2 text-ink-muted"
+                              title="This field defines the panel grid and was validated at ingestion. Replace the tape to change it.">
+                          fixed
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+          {remap.isError && (
+            <p className="mt-1.5 text-micro" style={{ color: 'var(--status-critical)' }}>
+              {String((remap.error as Error).message)}
+            </p>
+          )}
+        </div>
+      </div>
+    </Card>
+  )
+}
+
+/** What a book's first visit is doing, said out loud.
+ *
+ *  Reading a 22 million row tape, joining its account attributes and screening
+ *  its columns takes the better part of a minute. The page used to show three
+ *  pulsing skeletons for all of it, which is indistinguishable from a hang —
+ *  the server narrates the stages, so the page reports them. */
+function FirstLoad({ pk }: { pk: string }) {
+  const warm = useQuery({
+    queryKey: ['warm', pk],
+    queryFn: () => api.warmStatus(pk),
+    refetchInterval: 700, gcTime: 0, staleTime: 0,
+  })
+  const w = warm.data
+  const at = w?.stages.findIndex((s) => s.key === w.stage) ?? -1
+  return (
+    <div className="space-y-3 p-4">
+      <Card>
+        <div className="px-4 py-3">
+          <div className="flex items-baseline justify-between gap-3">
+            <span className="text-sm font-medium text-ink">
+              {w?.error ? 'This book could not be opened'
+                : `${w?.label || 'Opening the book'} …`}
+            </span>
+            {w?.elapsed_s != null && !w.error && (
+              <span className="tnum text-tiny text-ink-muted">
+                {Math.round(w.elapsed_s)}s
+              </span>
+            )}
+          </div>
+          {w?.error ? (
+            <p className="mt-1.5 text-xs" style={{ color: 'var(--status-critical)' }}>
+              {w.error}
+            </p>
+          ) : (
+            <>
+              <div className="mt-2 h-1 overflow-hidden rounded-full bg-sunken">
+                <div className="h-1 rounded-full bg-accent transition-all duration-500"
+                     style={{ width: `${Math.max(6, ((at + 1) / ((w?.stages.length ?? 3) + 1)) * 100)}%` }} />
+              </div>
+              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-tiny">
+                {(w?.stages ?? []).map((s, i) => (
+                  <span key={s.key} className="flex items-center gap-1.5"
+                        style={{ color: i < at ? 'var(--ink-secondary)'
+                          : i === at ? 'var(--accent)' : 'var(--ink-muted)' }}>
+                    <span className="h-1.5 w-1.5 rounded-full"
+                          style={{ background: i <= at ? 'currentColor' : 'var(--chrome-axis)' }} />
+                    {s.label}
+                  </span>
+                ))}
+              </div>
+              <p className="mt-2 text-tiny text-ink-muted">
+                The panel is read once per book and held, so this is paid on the
+                first visit only.
+              </p>
+            </>
+          )}
+        </div>
+      </Card>
+      <Skeleton className="h-64" />
+      <Skeleton className="h-96" />
     </div>
   )
 }

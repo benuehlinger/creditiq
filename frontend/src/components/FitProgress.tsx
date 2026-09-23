@@ -43,10 +43,12 @@ export const ECL_PHASES = (n: number | undefined, t?: Record<string, number>): P
   const s = (k: string, d: number) => Math.max(0.15, t?.[k] ?? d)
   const accts = n ? n.toLocaleString() + ' open accounts' : 'every open account'
   return [
-    { key: 'prepare',     label: 'Preparing the PD model',                    seconds: s('pd_model', 2.5) },
-    { key: 'design',      label: 'Preparing the LGD model',                   seconds: s('lgd_model', 0.8) },
-    { key: 'score',       label: `Projecting ${accts} over the horizon`,       seconds: s('projection', 3.0) },
-    { key: 'backtest',    label: 'Building the attribution bridge',            seconds: 0.4 },
+    // Keys match the phase names the server reports, so a polled projection
+    // can say which one it is actually in.
+    { key: 'pd_model',    label: 'Preparing the PD model',                    seconds: s('pd_model', 2.5) },
+    { key: 'lgd_model',   label: 'Preparing the LGD model',                   seconds: s('lgd_model', 0.8) },
+    { key: 'projection',  label: `Projecting ${accts} over the horizon`,       seconds: s('projection', 3.0) },
+    { key: 'bridge',      label: 'Building the attribution bridge',            seconds: 0.4 },
   ]
 }
 
@@ -69,8 +71,16 @@ export function Busy({ children }: { children: React.ReactNode }) {
   )
 }
 
-export default function FitProgress({ phases, done = false, doneLabel = 'Fitted' }: {
+export default function FitProgress({ phases, done = false, doneLabel = 'Fitted',
+                                      phase }: {
   phases: Phase[]; done?: boolean; doneLabel?: string
+  /** The phase the SERVER says it is in, where the caller polls a job and can
+   *  know. Given one, the bar reports; without one it falls back to pacing
+   *  itself off the previous run's timings, which is all a single blocking
+   *  request allows. The difference shows on a long fit: paced, the bar sat at
+   *  92% for two minutes with "Backtesting" on screen while the server was
+   *  still estimating. */
+  phase?: string
 }) {
   const total = phases.reduce((a, p) => a + p.seconds, 0)
   const started = useRef(performance.now())
@@ -86,11 +96,20 @@ export default function FitProgress({ phases, done = false, doneLabel = 'Fitted'
   // Progress eases toward 92% of the estimate and holds: the response, not
   // the clock, decides when it is finished.
   const raw = Math.min(elapsed / total, 1)
-  const eased = done ? 1 : Math.min(0.92, 1 - Math.pow(1 - raw, 1.6))
+  let eased = done ? 1 : Math.min(0.92, 1 - Math.pow(1 - raw, 1.6))
   let acc = 0, current = phases.length - 1
   for (let i = 0; i < phases.length; i++) {
     acc += phases[i].seconds
     if (elapsed < acc) { current = i; break }
+  }
+
+  // A reported phase overrides the clock. The width then counts phases
+  // finished rather than seconds elapsed, so it can never run ahead of the
+  // server or stall behind it.
+  const reported = phase ? phases.findIndex((p) => p.key === phase) : -1
+  if (reported >= 0 && !done) {
+    current = reported
+    eased = Math.min(0.92, (reported + 0.5) / phases.length)
   }
   if (done) current = phases.length
 

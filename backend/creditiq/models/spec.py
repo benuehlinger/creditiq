@@ -17,6 +17,27 @@ import json
 from dataclasses import asdict, dataclass, field
 from typing import Literal
 
+
+def _hash_normalize(o):
+    """Collapse the int/float distinction before hashing.
+
+    A specification round-trips through the browser, and JavaScript has one
+    number type: 0.0 serialises as 0, 1.0 as 1. Hashing the raw values gave
+    the SAME specification two different hashes depending on whether it had
+    crossed the wire — the leaderboard named a model one thing and the
+    workbench, re-hashing the round-tripped spec, named it another. Every
+    integral float becomes an int here, on every path, so the hash sees one
+    canonical number. (bool is untouched: isinstance(True, int) is True, but
+    True.is_integer() is not consulted — bools are not floats.)
+    """
+    if isinstance(o, dict):
+        return {k: _hash_normalize(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_hash_normalize(x) for x in o]
+    if isinstance(o, float) and o.is_integer():
+        return int(o)
+    return o
+
 Estimator = Literal["logistic", "logistic_l1", "logistic_l2", "gbm"]
 
 # Discretizing and encoding are DIFFERENT decisions, and fusing them was the
@@ -221,6 +242,11 @@ class LgdSpec:
     knots: tuple[tuple[str, tuple[float, ...]], ...] = ()
     n_knots: int = 3
     max_bins: int = 5
+    # A DECLARED flat severity, for a book whose tape carries no realised
+    # losses. When set, the severity half is this number, stated: no drivers,
+    # no fit, no stress response. It is part of the specification, so it is
+    # part of the hash — changing the assumption is changing the model.
+    assumed_lgd: float | None = None
     @staticmethod
     def default_for(portfolio: str) -> "LgdSpec":
         return LgdSpec(portfolio=portfolio,
@@ -257,12 +283,15 @@ class LgdSpec:
         validation, so no treatment other than the default could ever be
         applied. A mapping on the wire is a mapping.
         """
-        return {"portfolio": self.portfolio, "drivers": list(self.drivers),
-                "categoricals": list(self.categoricals),
-                "treatments": dict(self.treatments),
-                "edges": {c: list(v) for c, v in self.edges},
-                "knots": {c: list(v) for c, v in self.knots},
-                "n_knots": self.n_knots, "max_bins": self.max_bins}
+        out = {"portfolio": self.portfolio, "drivers": list(self.drivers),
+               "categoricals": list(self.categoricals),
+               "treatments": dict(self.treatments),
+               "edges": {c: list(v) for c, v in self.edges},
+               "knots": {c: list(v) for c, v in self.knots},
+               "n_knots": self.n_knots, "max_bins": self.max_bins}
+        if self.assumed_lgd is not None:
+            out["assumed_lgd"] = float(self.assumed_lgd)
+        return out
 
     @staticmethod
     def _pairs(v) -> tuple:
@@ -285,7 +314,9 @@ class LgdSpec:
             treatments=LgdSpec._pairs(d.get("treatments")),
             edges=tuple((c, tuple(v)) for c, v in LgdSpec._pairs(d.get("edges"))),
             knots=tuple((c, tuple(v)) for c, v in LgdSpec._pairs(d.get("knots"))),
-            n_knots=int(d.get("n_knots", 3)), max_bins=int(d.get("max_bins", 5)))
+            n_knots=int(d.get("n_knots", 3)), max_bins=int(d.get("max_bins", 5)),
+            assumed_lgd=(float(d["assumed_lgd"])
+                         if d.get("assumed_lgd") is not None else None))
 
     def hash(self) -> str:
         """Order-insensitive: reordering the driver list is not a different model.
@@ -297,7 +328,28 @@ class LgdSpec:
                    "edges": sorted((c, list(v)) for c, v in self.edges),
                    "knots": sorted((c, list(v)) for c, v in self.knots),
                    "n_knots": self.n_knots, "max_bins": self.max_bins}
-        return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]
+        # Only when set: adding the key unconditionally would change every
+        # existing hash, which renames every saved model on every machine.
+        if self.assumed_lgd is not None:
+            payload["assumed_lgd"] = self.assumed_lgd
+        return hashlib.sha256(json.dumps(_hash_normalize(payload),
+                                         sort_keys=True).encode()).hexdigest()[:12]
+
+    @property
+    def is_specified(self) -> bool:
+        """Whether this is a complete severity half.
+
+        TWO ways to be complete: fitted drivers, or a declared flat
+        assumption. The assumption is not a fallback — it is the severity
+        half of a book whose tape carries no realised losses, chosen
+        deliberately and recorded in the hash.
+
+        This lives here because the rule was written out by hand at three
+        separate gates (naming, saving, the severity backtest) and only one
+        learned about assumptions; the other two went on refusing to name a
+        model the interface had already let the user build."""
+        return bool(self.drivers or self.categoricals
+                    or self.assumed_lgd is not None)
 
     @property
     def macro_drivers(self) -> list[str]:
@@ -313,7 +365,11 @@ class ModelSpec:
     mevs: list[MevSpec] = field(default_factory=list)
     estimator: Estimator = "logistic"
     regularization: float = 1.0
-    seasoning_spline: bool = True
+    # Nothing enters a specification automatically (user rule, 2026-09-20).
+    # The flag remains only so versions saved while the automatic account-age
+    # baseline existed replay to the same numbers. Age enters a new model the
+    # same way as any other driver: months_on_book, selected by the analyst.
+    seasoning_spline: bool = False
     vintage_effect: bool = False
     sample: SampleSpec = field(default_factory=SampleSpec)
     # The severity half. A Model is a PD specification AND an LGD specification:
@@ -347,7 +403,8 @@ class ModelSpec:
         }
 
     def hash(self) -> str:
-        blob = json.dumps(self.canonical(), sort_keys=True, separators=(",", ":"))
+        blob = json.dumps(_hash_normalize(self.canonical()),
+                          sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
     def pd_hash(self) -> str:
@@ -369,7 +426,7 @@ class ModelSpec:
         So each half gets a visible identity. `hash()` remains the identity of
         the pair, which is what is named, promoted and quoted.
         """
-        c = self.canonical()
+        c = _hash_normalize(self.canonical())
         blob = json.dumps({k: v for k, v in c.items() if k != "lgd"},
                           sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(blob.encode()).hexdigest()[:12]

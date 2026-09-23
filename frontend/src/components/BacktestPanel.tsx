@@ -292,7 +292,7 @@ export default function BacktestPanel({ r, portfolio, request }: {
       <Card>
         <CardHead title="Backtest error"
           subtitle={`${bt.cohorts.length} ${periodAxis.replace('Performance ', '').toLowerCase()}ly cohorts · annualised default rate, percentage points`}
-          caption="Bias is mean predicted minus actual, so positive is over-prediction. Coverage is the share of cohorts whose prediction fell inside the 95% credible band of the realised rate; a calibrated model shows about 95%, and a run of misses in one direction matters more than the count." />
+          caption="Bias is mean predicted minus actual; positive is over-prediction. Coverage is the share of cohorts whose prediction fell inside the 95% credible band of the realised rate, approximately 95% for a calibrated model." />
         <ErrorTable errors={bt.errors} />
         <div className="grid grid-cols-2 divide-x divide-hairline border-t border-hairline">
           <StatTile label="AUC range across cohorts"
@@ -339,7 +339,7 @@ export default function BacktestPanel({ r, portfolio, request }: {
         <Card>
           <CardHead title="Score distribution stability"
             subtitle="Population stability index per period, against the panel's first 12 months"
-            caption="Compares each period's distribution of predicted scores with the reference window's — not individual scores, which move as accounts age; the question is whether the MIX of risk being scored still resembles the book the model was fitted on. A fitted model is evidence only on populations like its development sample, and a distribution shift is visible immediately, months before outcomes are. Anchoring to the panel's start means some drift is expected late in a growing book: read the level against the thresholds, and the jumps against events." />
+            caption="Compares each period's distribution of predicted scores with the reference window's. A shift indicates the population being scored no longer resembles the development sample, and is visible months before outcomes are." />
           <EChart option={psi} height={200} ariaLabel="Score population stability index"
             table={{ columns: ['Period', 'PSI', 'Rows'],
                      rows: bt.score_psi.map((p) => [p.period, Number((p.psi ?? 0).toFixed(4)), p.n]) }} />

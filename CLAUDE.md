@@ -58,3 +58,80 @@ The store stamps `build_report.json`'s mtime and clears every registered
 derived cache on change; the frontend polls a data fingerprint and reloads
 on change; disk-cache keys carry the fingerprint. If data seems stale:
 `make reset` (clears versions, `data/cache/`, regenerates panels).
+
+## Working with the developer
+
+The developer cannot see background jobs, tool output, or intermediate
+reasoning. Only what is written in the reply exists for them. Everything
+below follows from that.
+
+### Stop and ask before changing a number
+
+Any change to what the numbers MEAN is the developer's decision, not the
+assistant's. Propose it, show the effect, wait for an answer:
+
+- the target definition (what counts as a default, and in which month)
+- which rows are kept or dropped (filters, samples, exclusions)
+- a derived column's formula
+- a threshold that gates a warning or a refusal
+- anything that changes a count, a rate, or a loss figure
+
+Show the effect as a before/after table with the actual numbers, not a
+description of them:
+
+| | before | after |
+|---|---|---|
+| defaults | 188,948 | 137,510 |
+| accounts | 998,452 | 998,435 |
+
+A 27% move in the default count is a modelling decision. It was made three
+times in one session without being put to the developer once, and twice it
+was wrong. Implementation details — a loop, a parse, a cache key — do not
+need this. If it moves a number on screen, it does.
+
+### Say what is running, and what it will produce
+
+Before a background job, state in one line: what it does, how long, what
+file or result appears at the end. While it runs, do not start a second
+investigation — the developer is waiting on the first and cannot see either.
+
+### Explain with the data, not with vocabulary
+
+Findings are quantitative. Show the rows, the counts, the distribution:
+
+| on code-4 rows (10,638) | |
+|---|---|
+| `recoveredAmount > 0` | 0 |
+| end balance = 0 | 10,638 |
+| median delinquency | 463 days |
+
+Then say what it means in plain words. The developer is an expert credit
+analyst and a novice coder: statistical substance lands, software jargon
+does not. Never write a sentence whose purpose is to sound authoritative.
+If a term is unavoidable, define it once in the same breath.
+
+### Do not widen the blast radius
+
+While fixing one thing, do not edit shared code for a different thing.
+Numerical code (`analysis/`, `models/fit.py`, `models/design.py`,
+`analysis/spline.py`) is used by every book: a change there is its own
+task, with its own before/after evidence, never a side quest inside
+another investigation.
+
+### Never touch the developer's working state
+
+`make reset`, `POST /api/workspace/reset`, deleting a book, clearing
+`data/cache/` — these destroy work the developer built by hand. Do not run
+them to clear a cache or tidy up. Ask. (One reset in this session archived
+an ingested book the developer had just loaded.)
+
+Do not ingest, delete, or archive tapes while the backend test suite is
+running; the suite reads panels lazily and a mid-run change produces dozens
+of phantom failures.
+
+### When it goes wrong, say so first
+
+Lead with the failure and its size, before the fix. "The build worked but
+the combine crashed and the six-minute download was discarded" comes before
+the explanation of why. Corrections to the assistant's own earlier claims
+are stated plainly as corrections, not folded quietly into new text.

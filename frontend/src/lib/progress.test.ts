@@ -31,10 +31,10 @@ describe('a book with nothing done', () => {
 
   it('does not treat the optional stages as outstanding work', () => {
     const r = computeProgress(EMPTY)
-    expect(stage(r, 'macro').optional).toBe(true)
+    expect(stage(r, 'mev').optional).toBe(true)
     expect(stage(r, 'scenarios').optional).toBe(true)
     // the next action must never be an optional stage
-    expect(['macro', 'scenarios']).not.toContain(r.next?.to)
+    expect(['mev', 'scenarios']).not.toContain(r.next?.to)
   })
 })
 
@@ -50,8 +50,13 @@ describe('building a model from scratch', () => {
     expect(computeProgress(s).next?.to).toBe('lgd')
 
     s = { ...s, lgd: lgdOf('L1', ['current_ltv']) }
-    const r = computeProgress(s)
+    // Both halves fitted: the payoff step comes before the save.
+    let r = computeProgress(s)
     expect(r.complete).toBe(true)
+    expect(r.next?.to).toBe('scenarios')
+    expect(r.next?.label).toMatch(/project/i)
+
+    r = computeProgress({ ...s, projected: 'h1:L1' })
     expect(r.next?.to).toBe('versions')
     expect(r.next?.label).toMatch(/save/i)
   })
@@ -112,7 +117,10 @@ describe('opening a saved version', () => {
     expect(r.mode).toBe('clean')
     expect(r.changed).toBe(0)
     expect(stage(r, 'versions').state).toBe('done')
-    expect(r.next).toBeNull()
+    // An opened model not yet projected THIS session is offered the
+    // projection; once projected, nothing is owed.
+    expect(r.next?.to).toBe('scenarios')
+    expect(computeProgress({ ...opened, projected: 'V1:L1' }).next).toBeNull()
   })
 
   it('reads as EDITED, not as an error, once something changes', () => {
@@ -412,16 +420,16 @@ describe('scenarios stage', () => {
 describe('the selection stage', () => {
   it('is optional and never the next action', () => {
     const r = computeProgress(EMPTY)
-    const sel = stage(r, 'select')
+    const sel = stage(r, 'screen')
     expect(sel.optional).toBe(true)
     expect(sel.state).toBe('todo')
     expect(sel.note).toMatch(/optional/)
-    expect(r.next?.to).not.toBe('select')
+    expect(r.next?.to).not.toBe('screen')
   })
 
   it('reads done once a search has completed, with the model count', () => {
     const r = computeProgress({ ...EMPTY, selection: { nModels: 42 } })
-    const sel = stage(r, 'select')
+    const sel = stage(r, 'screen')
     expect(sel.state).toBe('done')
     expect(sel.note).toBe('42 models on the leaderboard')
   })
@@ -434,12 +442,19 @@ describe('the selection stage', () => {
       lgd: lgdOf('L1', ['current_ltv']),
     })
     expect(r.complete).toBe(true)
-    expect(stage(r, 'select').state).toBe('todo')
-    expect(r.next?.to).toBe('versions')
+    expect(stage(r, 'screen').state).toBe('todo')
+    // The search never gates: with both halves fitted the chain moves on to
+    // the projection, then the save.
+    expect(r.next?.to).toBe('scenarios')
+    expect(computeProgress({
+      ...EMPTY, picked: ['fico_orig'],
+      fitted: fit('a', 'h1', ['fico_orig']),
+      lgd: lgdOf('L1', ['current_ltv']), projected: 'h1:L1',
+    }).next?.to).toBe('versions')
   })
 
   it('an empty search result does not read as done', () => {
     const r = computeProgress({ ...EMPTY, selection: { nModels: 0 } })
-    expect(stage(r, 'select').state).toBe('todo')
+    expect(stage(r, 'screen').state).toBe('todo')
   })
 })

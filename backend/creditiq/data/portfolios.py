@@ -480,6 +480,15 @@ CRE = PortfolioSpec(
 
 PORTFOLIOS: dict[str, PortfolioSpec] = {p.key: p for p in (CONSUMER, MORTGAGE, CRE)}
 
+# The three books this module can GENERATE, frozen before anything else can
+# add to the registry. `tapes.register_all()` mutates PORTFOLIOS at import so
+# an ingested tape behaves like any other book everywhere else in the app —
+# but an ingested tape has no generative truth, so anything that generates,
+# or asserts on generated behaviour, must iterate this instead. Reading
+# `list(PORTFOLIOS)` in the generator tests meant a developer who had ingested
+# a tape ran the generator suite against their own loans.
+SYNTHETIC_KEYS: tuple[str, ...] = tuple(PORTFOLIOS)
+
 # NOI sensitivity to the CRE price index, by property type. Office carries the
 # highest leverage, which is the mechanism behind its post-2022 divergence.
 CRE_NOI_BETA = {"office": 1.35, "retail": 0.85, "industrial": 0.55,

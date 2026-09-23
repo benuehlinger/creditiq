@@ -43,7 +43,7 @@ export default function InitSurface() {
       <Card>
         <CardHead title="No data on this machine yet"
           subtitle="The synthetic panels are generated locally, not shipped"
-          caption="Three portfolios are simulated from fixed seeds: 150,000 consumer installment accounts, 55,000 residential mortgages and 45,000 commercial real estate loans, monthly from 2008 through 2025. The same seeds produce the same bytes on every machine, so the numbers here match the numbers anywhere else this runs." />
+          caption="Three portfolios are simulated from fixed seeds, monthly from 2008 through 2025. The same seeds produce identical data on every machine." />
         <div className="px-4 pb-4 pt-3">
           {!running && s.state !== 'error' && (
             <>

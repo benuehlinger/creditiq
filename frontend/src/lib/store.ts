@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
 import type { FitRequest, LgdSpecPayload, PortfolioKey, SelectionConfigPayload } from './api'
-import { type PdSpec, emptyPdSpecs } from './spec'
+import { type PdSpec, emptyPdSpec, emptyPdSpecs } from './spec'
 
 type Theme = 'dark' | 'light'
 
@@ -51,6 +51,38 @@ export interface LoadedModel {
   loadedAt: string
 }
 
+/** Where the working draft came from, when it was opened off the selection
+ *  leaderboard. A leaderboard row is not a saved version, so it must never
+ *  set `loaded` — but the workbench still has to answer "how did I get
+ *  here", and a later save records this as the model's search lineage. */
+export interface DraftOrigin {
+  kind: 'selection'
+  /** The search's auto-name for the row, e.g. tidy-bastion-29. */
+  name: string
+  /** The row's specification hash — also the runcache key for its fit. */
+  hash: string
+  rank: number | null
+  configHash: string
+  /** Set once the first specification edit is confirmed through the fork
+   *  gate: the draft is then a revision of the row, and later edits are
+   *  free — the gate asks for a rationale once per departure, not per
+   *  keystroke. */
+  revised?: boolean
+}
+
+/** The rationale captured at the fork gate, held until the next save writes
+ *  it into the version record. One note per book: a fork is one departure
+ *  from one parent, whatever the number of edits that follow. */
+export interface ForkNote {
+  from: string
+  fromHash: string
+  fromKind: 'version' | 'selection'
+  change: string
+  reasonCode: string
+  justification: string
+  at: string
+}
+
 /** Everything that makes up a working draft on one book. */
 export interface Draft {
   pdSpec: PdSpec
@@ -58,6 +90,10 @@ export interface Draft {
   fittedLgd: FittedLgd | null
   projected: string | null
   stashedAt: string
+  /** Optional: drafts stashed before origins existed have none. */
+  origin?: DraftOrigin | null
+  lgdOrigin?: DraftOrigin | null
+  forkNote?: ForkNote | null
 }
 
 interface UiState {
@@ -75,6 +111,16 @@ interface UiState {
   fitted: Record<PortfolioKey, FittedModel | null>
   fittedLgd: Record<PortfolioKey, FittedLgd | null>
   loaded: Record<PortfolioKey, LoadedModel | null>
+  /** The working draft's search lineage, or null for a draft built by hand.
+   *  Cleared when a saved version is opened over it — a saved model's
+   *  provenance is its own record. */
+  origin: Record<PortfolioKey, DraftOrigin | null>
+  /** The severity half's own search lineage. Symmetric with `origin`: the
+   *  first edit of a draft taken off the LGD leaderboard is a departure and
+   *  asks for a rationale, exactly as the PD side does. */
+  lgdOrigin: Record<PortfolioKey, DraftOrigin | null>
+  /** The pending fork rationale per book, consumed by the next save. */
+  forkNote: Record<PortfolioKey, ForkNote | null>
   /** Macro terms promoted out of the transformation search, per target. They are
    *  candidates, not model terms: the PD fit and the LGD specification each
    *  choose from this list. */
@@ -102,6 +148,13 @@ interface UiState {
   setSelectionRun: (p: PortfolioKey,
                     v: { configHash: string; finishedAt: string
                          nModels: number } | null) => void
+  /** The severity search's last completed run, per book — the same marker
+   *  the PD search keeps, so reopening the LGD board is a lookup. */
+  lgdSelectionRun: Record<PortfolioKey, { configHash: string; finishedAt: string
+                                          nModels: number } | null>
+  setLgdSelectionRun: (p: PortfolioKey,
+                       v: { configHash: string; finishedAt: string
+                            nModels: number } | null) => void
   /** The setup screen's working configuration, per book, so half-built setups
    *  survive navigation and reloads the way the PD specification does. */
   selectionDraft: Record<PortfolioKey, SelectionConfigPayload | null>
@@ -146,10 +199,12 @@ interface UiState {
    *  made there has to land somewhere. Without it the first edit on the Explore
    *  stage silently did nothing. */
   editLgd: (p: PortfolioKey, change: (s: LgdSpecPayload) => LgdSpecPayload,
-            label: string, base?: LgdSpecPayload) => void
+            label: string, base?: LgdSpecPayload,
+            opts?: { adopt?: boolean }) => void
   /** An edit waiting on the fork confirmation, with what it would do. */
-  pendingEdit: { portfolio: PortfolioKey; label: string; apply: () => void } | null
-  confirmEdit: () => void
+  pendingEdit: { portfolio: PortfolioKey; label: string; apply: () => void
+                 half?: 'pd' | 'lgd' } | null
+  confirmEdit: (note?: { reasonCode: string; justification: string }) => void
   cancelEdit: () => void
   setTheme: (t: Theme) => void
   toggleTheme: () => void
@@ -159,6 +214,14 @@ interface UiState {
   setFitted: (p: PortfolioKey, f: FittedModel | null) => void
   setFittedLgd: (p: PortfolioKey, f: FittedLgd | null) => void
   setLoaded: (p: PortfolioKey, v: LoadedModel | null) => void
+  setOrigin: (p: PortfolioKey, o: DraftOrigin | null) => void
+  setLgdOrigin: (p: PortfolioKey, o: DraftOrigin | null) => void
+  setForkNote: (p: PortfolioKey, n: ForkNote | null) => void
+  /** Give a book that did not exist when this store was born — an ingested
+   *  tape — an entry in every per-book record. The three synthetic keys are
+   *  compiled into the initial state; a fourth arrives at runtime, and a
+   *  selector reading an absent key would crash the surface. Idempotent. */
+  ensureBook: (p: PortfolioKey) => void
   /** Called before an edit while a saved model is open. Clears the marker and
    *  returns its hash, which becomes the parent of the new specification. */
   forkFromLoaded: (p: PortfolioKey) => string | null
@@ -191,7 +254,16 @@ const guardedStorage = {
   removeItem: (name: string) => localStorage.removeItem(name),
 }
 
-export function resetWorkspace() {
+export async function resetWorkspace() {
+  // The server's share first: saved versions and selection review state are
+  // what made a "reset" workspace reopen on last session's champion. The
+  // browser is cleared afterwards either way — a server that cannot be
+  // reached must not leave the local drafts behind too.
+  try {
+    await fetch('/api/workspace/reset', { method: 'POST' })
+  } catch {
+    // reported by the palette; the local reset still proceeds
+  }
   resetting = true
   localStorage.removeItem('creditiq-ui')
   window.location.replace('/')
@@ -205,6 +277,9 @@ export const useUi = create<UiState>()(
       cta: null,
       methodologyOpen: null,
       fitted: { consumer: null, mortgage: null, cre: null },
+      origin: { consumer: null, mortgage: null, cre: null },
+      lgdOrigin: { consumer: null, mortgage: null, cre: null },
+      forkNote: { consumer: null, mortgage: null, cre: null },
       fittedLgd: { consumer: null, mortgage: null, cre: null },
       loaded: { consumer: null, mortgage: null, cre: null },
       macroShortlist: {
@@ -218,6 +293,9 @@ export const useUi = create<UiState>()(
       selectionRun: { consumer: null, mortgage: null, cre: null },
       setSelectionRun: (p, v) =>
         set((s) => ({ selectionRun: { ...s.selectionRun, [p]: v } })),
+      lgdSelectionRun: { consumer: null, mortgage: null, cre: null },
+      setLgdSelectionRun: (p, v) =>
+        set((s) => ({ lgdSelectionRun: { ...s.lgdSelectionRun, [p]: v } })),
       selectionDraft: { consumer: null, mortgage: null, cre: null },
       setSelectionDraft: (p, v) =>
         set((s) => ({ selectionDraft: { ...s.selectionDraft, [p]: v } })),
@@ -231,7 +309,9 @@ export const useUi = create<UiState>()(
         if (!has) return s
         return { draft: { ...s.draft, [p]: {
           pdSpec: s.pdSpec[p], fitted: s.fitted[p], fittedLgd: s.fittedLgd[p],
-          projected: s.projected[p], stashedAt: new Date().toISOString() } } }
+          projected: s.projected[p], stashedAt: new Date().toISOString(),
+          origin: s.origin[p], lgdOrigin: s.lgdOrigin[p],
+          forkNote: s.forkNote[p] } } }
       }),
       restoreDraft: (p) => set((s) => {
         const d = s.draft[p]
@@ -242,6 +322,9 @@ export const useUi = create<UiState>()(
           fittedLgd: { ...s.fittedLgd, [p]: d.fittedLgd },
           projected: { ...s.projected, [p]: d.projected },
           loaded: { ...s.loaded, [p]: null },
+          origin: { ...s.origin, [p]: d.origin ?? null },
+          lgdOrigin: { ...s.lgdOrigin, [p]: d.lgdOrigin ?? null },
+          forkNote: { ...s.forkNote, [p]: d.forkNote ?? null },
           draft: { ...s.draft, [p]: null },
         }
       }),
@@ -249,10 +332,17 @@ export const useUi = create<UiState>()(
       pendingEdit: null,
       editPd: (p, change, label) => {
         const apply = () => set((s) => ({ pdSpec: { ...s.pdSpec, [p]: change(s.pdSpec[p]) } }))
-        if (get().loaded[p]) { set({ pendingEdit: { portfolio: p, label, apply } }); return }
+        // Two gates on the same door: a SAVED model never changes (forking
+        // it needs a rationale), and a draft opened off the leaderboard is a
+        // recorded search result — its FIRST specification edit is a
+        // departure and gets a rationale too. After that first confirmed
+        // departure the draft is a draft, and edits are free.
+        const gate = get().loaded[p]
+          || (get().origin[p] && !get().origin[p]!.revised)
+        if (gate) { set({ pendingEdit: { portfolio: p, label, apply, half: 'pd' } }); return }
         apply()
       },
-      editLgd: (p, change, label, base) => {
+      editLgd: (p, change, label, base, opts) => {
         const cur = get().fittedLgd[p]
         if (!cur && !base) return
         const apply = () => set((s) => {
@@ -263,15 +353,52 @@ export const useUi = create<UiState>()(
           return { fittedLgd: { ...s.fittedLgd, [p]: {
             spec, hash: '', fittedAt: '', meanLgd: NaN, nDefaults: 0 } } }
         })
-        if (get().loaded[p]) { set({ pendingEdit: { portfolio: p, label, apply } }); return }
+        // The same two gates as the PD side: a SAVED pair never changes
+        // silently, and a draft taken off the LGD leaderboard is a recorded
+        // search result whose first edit is a departure. Adoption replaces a
+        // draft rather than editing it, so it passes the origin gate — the
+        // PD side's open-as-draft does the same.
+        const gate = get().loaded[p]
+          || (!opts?.adopt
+              && get().lgdOrigin[p] && !get().lgdOrigin[p]!.revised)
+        if (gate) { set({ pendingEdit: { portfolio: p, label, apply, half: 'lgd' } }); return }
         apply()
       },
-      confirmEdit: () => {
+      confirmEdit: (note) => {
         const e = get().pendingEdit
         if (!e) return
+        const p = e.portfolio
+        const parentV = get().loaded[p]
+        // The departing half's own origin is the fork's parent when no saved
+        // model is open; the OTHER half's origin is untouched.
+        const half = e.half ?? 'pd'
+        const parentO = half === 'lgd' ? get().lgdOrigin[p] : get().origin[p]
         // Forking clears the marker first, so the applied edit lands on a
-        // working draft rather than appearing to modify the saved model.
-        set((s) => ({ loaded: { ...s.loaded, [e.portfolio]: null }, pendingEdit: null }))
+        // working draft rather than appearing to modify the saved model. The
+        // rationale is held per book and written into the next saved
+        // version's record; an origin draft is marked revised so the gate
+        // asks once per departure, not once per edit.
+        set((s) => ({
+          loaded: { ...s.loaded, [p]: null },
+          pendingEdit: null,
+          origin: half === 'pd' && parentO
+            ? { ...s.origin, [p]: { ...parentO, revised: true } }
+            : s.origin,
+          lgdOrigin: half === 'lgd' && parentO
+            ? { ...s.lgdOrigin, [p]: { ...parentO, revised: true } }
+            : s.lgdOrigin,
+          forkNote: note && (parentV || parentO)
+            ? { ...s.forkNote, [p]: {
+                from: parentV?.name ?? parentO!.name,
+                fromHash: parentV?.hash ?? parentO!.hash,
+                fromKind: parentV ? 'version' : 'selection',
+                change: e.label,
+                reasonCode: note.reasonCode,
+                justification: note.justification,
+                at: new Date().toISOString(),
+              } }
+            : s.forkNote,
+        }))
         e.apply()
       },
       cancelEdit: () => set({ pendingEdit: null }),
@@ -285,7 +412,37 @@ export const useUi = create<UiState>()(
       setMethodology: (methodologyOpen) => set({ methodologyOpen }),
       setFitted: (p, f) => set((s) => ({ fitted: { ...s.fitted, [p]: f } })),
       setFittedLgd: (p, f) => set((s) => ({ fittedLgd: { ...s.fittedLgd, [p]: f } })),
-      setLoaded: (p, v) => set((s) => ({ loaded: { ...s.loaded, [p]: v } })),
+      // Opening a saved version clears the search origin: the version's
+      // provenance is its own record, and a leftover origin would resurface
+      // on the next fork and claim a lineage the model does not have.
+      setLoaded: (p, v) => set((s) => ({
+        loaded: { ...s.loaded, [p]: v },
+        origin: v ? { ...s.origin, [p]: null } : s.origin,
+        lgdOrigin: v ? { ...s.lgdOrigin, [p]: null } : s.lgdOrigin,
+        forkNote: v ? { ...s.forkNote, [p]: null } : s.forkNote,
+      })),
+      setOrigin: (p, o) => set((s) => ({ origin: { ...s.origin, [p]: o } })),
+      setLgdOrigin: (p, o) => set((s) => ({ lgdOrigin: { ...s.lgdOrigin, [p]: o } })),
+      setForkNote: (p, n) => set((s) => ({ forkNote: { ...s.forkNote, [p]: n } })),
+      ensureBook: (p) => {
+        const s = get()
+        if (s.pdSpec[p] !== undefined) return
+        set((st) => ({
+          pdSpec: { ...st.pdSpec, [p]: emptyPdSpec(p) },
+          fitted: { ...st.fitted, [p]: null },
+          fittedLgd: { ...st.fittedLgd, [p]: null },
+          loaded: { ...st.loaded, [p]: null },
+          origin: { ...st.origin, [p]: null },
+          lgdOrigin: { ...st.lgdOrigin, [p]: null },
+          forkNote: { ...st.forkNote, [p]: null },
+          projected: { ...st.projected, [p]: null },
+          draft: { ...st.draft, [p]: null },
+          selectionRun: { ...st.selectionRun, [p]: null },
+          lgdSelectionRun: { ...st.lgdSelectionRun, [p]: null },
+          selectionDraft: { ...st.selectionDraft, [p]: null },
+          macroShortlist: { ...st.macroShortlist, [p]: { pd: [], lgd: [] } },
+        }))
+      },
       forkFromLoaded: (p) => {
         const cur = get().loaded[p]
         if (cur) set((s) => ({ loaded: { ...s.loaded, [p]: null } }))
@@ -310,12 +467,16 @@ export const useUi = create<UiState>()(
       storage: createJSONStorage(() => guardedStorage),
       partialize: (s) => ({ theme: s.theme,
                             fitted: s.fitted, fittedLgd: s.fittedLgd, loaded: s.loaded,
+                            origin: s.origin,
+                            lgdOrigin: s.lgdOrigin,
+                            forkNote: s.forkNote,
                                                         macroShortlist: s.macroShortlist,
                             pdSpec: s.pdSpec, projected: s.projected, draft: s.draft,
                             selectionRun: s.selectionRun,
+                            lgdSelectionRun: s.lgdSelectionRun,
                             selectionDraft: s.selectionDraft,
                             brandVariant: s.brandVariant }),
-      version: 4,
+      version: 5,
       // Work in progress must survive the change of shape. The old state held
       // the specification in five store fields plus local component state; the
       // local parts are gone either way, but everything that WAS persisted is
@@ -331,6 +492,16 @@ export const useUi = create<UiState>()(
           for (const k of ['fitted', 'fittedLgd', 'loaded', 'draft',
                            'projected', 'pdSpec', 'macroShortlist']) {
             delete s[k]
+          }
+        }
+        // v5 (2026-09-20): the automatic account-age baseline was removed —
+        // nothing enters a specification unless the analyst selects it. Strip
+        // the flag from persisted working drafts so no draft carries it
+        // silently. A version SAVED with the baseline is untouched: opening it
+        // restores the flag from the record, so it replays to its numbers.
+        if (from < 5 && s.pdSpec) {
+          for (const p of Object.keys(s.pdSpec)) {
+            if (s.pdSpec[p]) delete s.pdSpec[p].seasoningSpline
           }
         }
         // Nothing recorded which model had been projected, so nothing may claim

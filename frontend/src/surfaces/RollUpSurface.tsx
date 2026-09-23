@@ -80,6 +80,8 @@ export default function RollUpSurface() {
   // stress it separates from the run-rate as losses emerge, then contracts as
   // the stressed cohorts resolve. Both shapes of the same series.
   const [emergence, setEmergence] = useState<'cumulative' | 'monthly'>('cumulative')
+  // Which half's macro exposures the what-the-models-respond-to view shows.
+  const [mevLens, setMevLens] = useState<'pd' | 'lgd'>('pd')
   useEffect(() => {
     if (isFetching) { setJustRan(true); return }
     if (!justRan) return
@@ -152,7 +154,8 @@ export default function RollUpSurface() {
     const membership: Record<string, string[]> = {}
     const terms: string[] = []
     for (const p of data?.portfolios ?? []) {
-      for (const t of p.mev_terms ?? []) {
+      const src = mevLens === 'lgd' ? (p.lgd_mev_terms ?? []) : (p.mev_terms ?? [])
+      for (const t of src) {
         if (!membership[t]) { membership[t] = []; terms.push(t) }
         membership[t].push(p.portfolio)
       }
@@ -162,7 +165,7 @@ export default function RollUpSurface() {
       label: p.label, color: portfolioColor(p.portfolio, m),
     }))
     return { terms, membership, books }
-  }, [data, theme])
+  }, [data, theme, mevLens])
 
   const tornado = useMemo(() => {
     if (!data?.tornado.length) return null
@@ -229,7 +232,7 @@ export default function RollUpSurface() {
       <div className="space-y-3 p-4">
         <Card>
           <CardHead title="Portfolio roll-up"
-            caption="No book has a promoted model yet. Promote a champion on a book's Versions page, or report a book on a saved version below, and the roll-up assembles from your choices." />
+            caption="No book has a promoted model. Promote a champion on a book's Versions page, or report on a saved version below." />
           <div className="grid gap-px border-t border-hairline bg-hairline sm:grid-cols-3">
             {uncovered.map((u) => {
               const options = data.available[u.portfolio] ?? []
@@ -262,7 +265,7 @@ export default function RollUpSurface() {
                         ))}
                       </select>
                     ) : (
-                      <button onClick={() => nav(`/${u.portfolio}/data`)}
+                      <button onClick={() => nav(`/${u.portfolio}/panel`)}
                         className="w-full rounded-ctl bg-accent px-3 py-1.5 text-xs font-semibold text-white">
                         Build a model on this book
                       </button>
@@ -271,6 +274,11 @@ export default function RollUpSurface() {
                 </div>
               )
             })}
+            {/* The hairline-gap grid shows its backing through any unfilled
+                cell; pad the last row so it reads as surface, not a hole. */}
+            {Array.from({ length: (3 - (uncovered.length % 3)) % 3 }).map((_, i) => (
+              <div key={`pad-${i}`} aria-hidden className="bg-surface" />
+            ))}
           </div>
         </Card>
       </div>
@@ -351,7 +359,7 @@ export default function RollUpSurface() {
 
       <Card>
         <CardHead title="Position by portfolio"
-          caption="Each book, the model it is reported on, and its stressed figure. The picker swaps the model this book is projected with; the book's name opens its workspace." />
+          caption="Each book, the model it is reported on, and its stressed figure. The picker changes the reporting model; the book's name opens its workspace." />
         <div className="grid gap-px bg-hairline sm:grid-cols-3">
           {data.portfolios.map((p) => {
             const s = p.by_scenario.severely_adverse
@@ -364,8 +372,8 @@ export default function RollUpSurface() {
               // picker inside stops the click from bubbling, so choosing a
               // model never navigates.
               <div key={p.portfolio} role="link" tabIndex={0}
-                onClick={() => nav(champ ? `/${p.portfolio}/versions` : `/${p.portfolio}/data`)}
-                onKeyDown={(e) => { if (e.key === 'Enter') nav(champ ? `/${p.portfolio}/versions` : `/${p.portfolio}/data`) }}
+                onClick={() => nav(champ ? `/${p.portfolio}/versions` : `/${p.portfolio}/panel`)}
+                onKeyDown={(e) => { if (e.key === 'Enter') nav(champ ? `/${p.portfolio}/versions` : `/${p.portfolio}/panel`) }}
                 title={`Open the ${p.label} workspace`}
                 className="flex cursor-pointer flex-col bg-surface p-4 transition-colors hover:bg-sunken">
                 <div className="flex items-center justify-between gap-2">
@@ -449,8 +457,8 @@ export default function RollUpSurface() {
             const options = data.available[u.portfolio] ?? []
             return (
               <div key={u.portfolio} role="link" tabIndex={0}
-                onClick={() => nav(`/${u.portfolio}/${options.length ? 'versions' : 'data'}`)}
-                onKeyDown={(e) => { if (e.key === 'Enter') nav(`/${u.portfolio}/data`) }}
+                onClick={() => nav(`/${u.portfolio}/${options.length ? 'versions' : 'panel'}`)}
+                onKeyDown={(e) => { if (e.key === 'Enter') nav(`/${u.portfolio}/panel`) }}
                 title={`Open the ${u.label} workspace`}
                 className="flex cursor-pointer flex-col bg-surface p-4 transition-colors hover:bg-sunken">
                 <div className="flex items-center justify-between gap-2">
@@ -485,7 +493,7 @@ export default function RollUpSurface() {
                       ))}
                     </select>
                   ) : (
-                    <button onClick={() => nav(`/${u.portfolio}/data`)}
+                    <button onClick={() => nav(`/${u.portfolio}/panel`)}
                       className="w-full rounded-ctl bg-accent px-3 py-1.5 text-xs font-semibold text-white">
                       Build a model on this book
                     </button>
@@ -499,6 +507,13 @@ export default function RollUpSurface() {
               </div>
             )
           })}
+          {/* Pad the last row: the hairline-gap grid shows its backing through
+              any unfilled cell. */}
+          {Array.from({
+            length: (3 - ((data.portfolios.length + uncovered.length) % 3)) % 3,
+          }).map((_, i) => (
+            <div key={`pad-${i}`} aria-hidden className="bg-surface" />
+          ))}
         </div>
         {!data.is_adopted && (
           <p className="max-w-[88ch] border-t border-hairline px-4 py-2 text-micro leading-relaxed text-ink-muted">
@@ -547,10 +562,28 @@ export default function RollUpSurface() {
 
       <Card>
         <CardHead title="What the models respond to"
-          caption="One row per macro term. The dot columns say which book's model carries it: a factor shared across books is one exposure however many models load on it, and the gaps say what a book is NOT exposed to. The path is history to the projection date, then the two Federal Reserve branches; the figures are the break-off."
-          right={<MevLegend />} />
-        <MevPathRows terms={mevUnion.terms} books={mevUnion.books}
-                     membership={mevUnion.membership} />
+          caption="One row per macro term; the dot columns mark which book's model carries it. Each path shows history to the projection date, then the two Federal Reserve branches."
+          right={
+            <div className="flex items-center gap-3">
+              <ViewTabs value={mevLens} onChange={setMevLens} tabs={[
+                { key: 'pd' as const, label: 'PD',
+                  title: 'Macro terms in the adopted PD specifications' },
+                { key: 'lgd' as const, label: 'LGD',
+                  title: 'Macro terms in the adopted severity specifications' },
+              ]} />
+              <MevLegend />
+            </div>
+          } />
+        {mevUnion.terms.length === 0 ? (
+          <p className="px-4 py-6 text-center text-xs text-ink-muted">
+            {mevLens === 'lgd'
+              ? 'No adopted severity model carries a macro term. Severity on these books does not move with the scenario.'
+              : 'No adopted model carries a macro term.'}
+          </p>
+        ) : (
+          <MevPathRows terms={mevUnion.terms} books={mevUnion.books}
+                       membership={mevUnion.membership} />
+        )}
       </Card>
 
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
@@ -570,7 +603,7 @@ export default function RollUpSurface() {
         <Card>
           <CardHead title="Risk parameters under stress"
             subtitle="12-month PD and LGD per book, baseline against severely adverse"
-            caption="The two halves of every loss number, shown as the distance stress moves them. PD is the exposure-weighted 12-month default probability; LGD is the mean predicted severity over the same window. The books whose dumbbells stretch furthest are where the stress number comes from."
+            caption="PD is the exposure-weighted 12-month default probability; LGD is the mean predicted severity over the same window. Segment length is the movement under stress."
             right={<Legend items={[
               { name: 'Supervisory Baseline', color: ordinal(0, 2) },
               { name: 'Supervisory Severely Adverse', color: ordinal(1, 2) },
@@ -626,50 +659,18 @@ export default function RollUpSurface() {
       <Card>
         <CardHead title="Concentration"
             subtitle="Share of each book's drawn balance, at the latest performance date"
-            caption="Each book is cut along the dimension its committee actually watches: origination FICO for consumer, current LTV for mortgage, property type for commercial. Bar length is the band's share of that book's balance; the figure is the balance itself. A property of the book, not of a model — changing the adopted model above moves nothing here." />
+            caption="Each book opens on its primary risk dimension; the picker beside a book's name cuts its drawn balance along any column, in round bands." />
           <div className="grid gap-x-8 gap-y-4 px-4 py-3"
                style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}>
-            {Object.entries(data.concentration).map(([p, bands]) => {
-              const maxShare = Math.max(...bands.map((b) => b.share), 0.01)
-              const DIM: Record<string, string> = {
-                consumer: 'by origination FICO', mortgage: 'by current LTV',
-                cre: 'by property type',
-              }
-              return (
-                <div key={p}>
-                  <div className="flex items-baseline gap-2 text-tiny">
-                    <span className="h-2 w-2 self-center rounded-full"
-                          style={{ background: portfolioColor(p as any, m) }} />
-                    <span className="font-medium text-ink">
-                      {data.portfolios.find((x) => x.portfolio === p)?.label ?? p}
-                    </span>
-                    <span className="text-micro text-ink-muted">{DIM[p] ?? ''}</span>
-                  </div>
-                  <div className="mt-1.5 space-y-1">
-                    {bands.map((b) => (
-                      <div key={b.band} className="flex items-center gap-2"
-                           title={`${b.band}: ${usd(b.exposure)} drawn, ${(b.share * 100).toFixed(1)}% of the book`}>
-                        <span className="w-20 shrink-0 text-right font-mono text-micro text-ink-muted">
-                          {b.band}
-                        </span>
-                        <div className="h-3 flex-1 rounded-sm bg-sunken">
-                          <div className="h-3 rounded-sm"
-                               style={{ width: `${(b.share / maxShare) * 100}%`,
-                                        background: portfolioColor(p as any, m),
-                                        opacity: 0.85 }} />
-                        </div>
-                        <span className="w-9 shrink-0 text-right tnum text-micro text-ink-secondary">
-                          {(b.share * 100).toFixed(0)}%
-                        </span>
-                        <span className="w-14 shrink-0 text-right tnum text-micro text-ink-muted">
-                          {usd(b.exposure)}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )
-            })}
+            {Object.entries(data.concentration).map(([p, bands]) => (
+              <ConcentrationBook key={p} p={p}
+                label={data.portfolios.find((x) => x.portfolio === p)?.label ?? p}
+                color={portfolioColor(p as any, m)}
+                defaultDim={{ consumer: 'by origination FICO',
+                              mortgage: 'by current LTV',
+                              cre: 'by property type' }[p] ?? 'default view'}
+                defaultBands={bands} />
+            ))}
           </div>
         </Card>
     </div>
@@ -698,8 +699,9 @@ function Welcome() {
   const nav = useNavigate()
   const books = useQuery({ queryKey: ['portfolios'], queryFn: api.portfolios })
   const steps: [string, string][] = [
-    ['Data', 'Review the book: composition, default history, data health.'],
-    ['Macro', 'Screen macroeconomic series and build transformed candidates.'],
+    ['Panel', 'Review the book: composition, default history, data health.'],
+    ['MEV', 'Rank macroeconomic series and build transformed candidates.'],
+    ['Screen', 'Run the automated screening: stepwise cores, macro combinations, a ranked board.'],
     ['PD model', 'Select variables, choose treatments, fit the default model.'],
     ['LGD model', 'Select severity drivers and fit the loss-given-default model.'],
     ['Scenarios', 'Project expected credit loss on the supervisory scenarios.'],
@@ -718,9 +720,14 @@ function Welcome() {
         as named, comparable versions. Nothing here is Apollo FIG data.
       </p>
 
-      <div className="mt-8 grid gap-3 sm:grid-cols-3">
-        {(books.data ?? []).map((p) => (
-          <button key={p.key} onClick={() => nav(`/${p.key}/data`)}
+      {/* Two ways in, stated as a choice rather than discovered later:
+          the synthetic demonstration books, or the user's own tape. */}
+      <h2 className="mt-8 text-tiny uppercase tracking-wider text-ink-muted">
+        Start in demo mode
+      </h2>
+      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+        {(books.data ?? []).filter((p) => ['consumer', 'mortgage', 'cre'].includes(p.key)).map((p) => (
+          <button key={p.key} onClick={() => nav(`/${p.key}/panel`)}
             className="rounded-card border border-hairline bg-raised px-4 py-4 text-left transition-colors hover:border-accent">
             <span className="flex items-center gap-2 text-sm font-semibold text-ink">
               <span aria-hidden className="h-2 w-2 rounded-full"
@@ -737,6 +744,24 @@ function Welcome() {
           </button>
         ))}
       </div>
+
+      <h2 className="mt-6 text-tiny uppercase tracking-wider text-ink-muted">
+        Or start from your own data
+      </h2>
+      <button onClick={() => nav('/tapes')}
+        className="mt-3 block w-full rounded-card border border-dashed border-hairline bg-transparent px-4 py-4 text-left transition-colors hover:border-accent">
+        <span className="flex items-center gap-2 text-sm font-semibold text-ink">
+          <span aria-hidden className="h-2 w-2 rounded-full border border-ink-muted" />
+          Load a loan tape
+        </span>
+        <span className="mt-1.5 block text-xs text-ink-secondary">
+          A CSV or parquet panel at monthly account grain. Map its columns onto
+          the canonical schema and it becomes a book like the three above.
+        </span>
+        <span className="mt-3 inline-block text-xs font-medium text-accent">
+          Map columns and add a book
+        </span>
+      </button>
 
       <div className="mt-10">
         <h2 className="text-tiny uppercase tracking-wider text-ink-muted">The workflow</h2>
@@ -758,6 +783,75 @@ function Welcome() {
       <p className="mt-10 border-t border-hairline pt-4 text-xs text-ink-muted">
         This page becomes the portfolio roll-up as books gain promoted models.
       </p>
+    </div>
+  )
+}
+
+/** One book's concentration column, with the dimension the user chooses.
+ *
+ *  The default is the roll-up's committee dimension for the book; picking any
+ *  other column bands the drawn balance along it server-side, in round bands
+ *  for numeric columns and largest-first levels for categorical ones. */
+function ConcentrationBook({ p, label, color, defaultDim, defaultBands }: {
+  p: string
+  label: string
+  color: string
+  defaultDim: string
+  defaultBands: { band: string; exposure: number; share: number }[]
+}) {
+  const [col, setCol] = useState('')
+  const books = useQuery({ queryKey: ['portfolios'], queryFn: api.portfolios })
+  const info = books.data?.find((b) => b.key === p)
+  const options = useMemo(() => {
+    const cand = [...(info?.drivers ?? []), ...(info?.categorical_drivers ?? [])]
+    return [...new Set(cand)].sort()
+  }, [info])
+  const custom = useQuery({
+    queryKey: ['concentration', p, col],
+    queryFn: () => api.concentration(p, col),
+    enabled: !!col, staleTime: Infinity,
+  })
+  const bands = col ? (custom.data?.bands ?? []) : defaultBands
+  const maxShare = Math.max(...bands.map((b) => b.share), 0.01)
+  return (
+    <div>
+      <div className="flex items-baseline gap-2 text-tiny">
+        <span className="h-2 w-2 self-center rounded-full" style={{ background: color }} />
+        <span className="font-medium text-ink">{label}</span>
+        <select value={col} onChange={(e) => setCol(e.target.value)}
+          className="max-w-[170px] cursor-pointer truncate border-none bg-transparent text-micro text-ink-muted outline-none hover:text-ink"
+          title="Cut this book's drawn balance along a different column.">
+          <option value="">{defaultDim}</option>
+          {options.map((c) => <option key={c} value={c}>by {c}</option>)}
+        </select>
+      </div>
+      <div className="mt-1.5 space-y-1">
+        {col && custom.isLoading && <div className="skeleton h-24" />}
+        {col && custom.isError && (
+          <p className="text-micro" style={{ color: 'var(--status-critical)' }}>
+            {String((custom.error as Error).message)}
+          </p>
+        )}
+        {bands.map((b) => (
+          <div key={b.band} className="flex items-center gap-2"
+               title={`${b.band}: ${usd(b.exposure)} drawn, ${(b.share * 100).toFixed(1)}% of the book`}>
+            <span className="w-20 shrink-0 truncate text-right font-mono text-micro text-ink-muted">
+              {b.band}
+            </span>
+            <div className="h-3 flex-1 rounded-sm bg-sunken">
+              <div className="h-3 rounded-sm"
+                   style={{ width: `${(b.share / maxShare) * 100}%`,
+                            background: color, opacity: 0.85 }} />
+            </div>
+            <span className="w-9 shrink-0 text-right tnum text-micro text-ink-secondary">
+              {(b.share * 100).toFixed(0)}%
+            </span>
+            <span className="w-14 shrink-0 text-right tnum text-micro text-ink-muted">
+              {usd(b.exposure)}
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

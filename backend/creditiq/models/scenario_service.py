@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -48,6 +49,11 @@ def lgd_model(portfolio: str, spec: LGD.LgdSpec | None = None) -> LGD.LgdModel:
     spec = spec or LGD.LgdSpec.default_for(portfolio)
     key = spec.hash()
     if key not in _LGD_CACHE:
+        # A declared assumption estimates nothing, so it never touches the
+        # panel and never needs the disk cache.
+        if spec.assumed_lgd is not None:
+            _LGD_CACHE[key] = LGD.assumed_model(spec)
+            return _LGD_CACHE[key]
         prev = runcache.load(spec.portfolio, "lgd", key)
         if prev is None:
             df = store.analysis_frame(spec.portfolio)
@@ -209,7 +215,8 @@ def run(spec: ModelSpec, scenarios: list[str] | None = None,
         # and both figures are always reported.
         cap_to_fitted_range: bool = False,
         bridge_from: str = "baseline", bridge_to: str = "severely_adverse",
-        force: bool = False) -> ScenarioRun:
+        force: bool = False,
+        progress: Callable[[str], None] | None = None) -> ScenarioRun:
     scenarios = scenarios or ["baseline", "severely_adverse"]
     key = (spec.hash(), tuple(scenarios), fixed_ccf, cpr, cap_to_fitted_range,
            tuple(sorted((k, tuple(sorted(v.items()))) for k, v in (custom or {}).items())))
@@ -224,11 +231,17 @@ def run(spec: ModelSpec, scenarios: list[str] | None = None,
             _ECL_CACHE[key] = prev
             return prev
 
+    # Named as they START, for a caller running this on a thread. The names
+    # are the timing keys the progress bar already sizes itself with.
+    say = progress or (lambda _phase: None)
+
     t = {}
+    say("pd_model")
     t0 = time.perf_counter()
     pd_run = modelsvc.run(spec)
     t["pd_model"] = time.perf_counter() - t0
 
+    say("lgd_model")
     t1 = time.perf_counter()
     lg = lgd_model(spec.portfolio, spec.lgd)
     t["lgd_model"] = time.perf_counter() - t1
@@ -245,6 +258,7 @@ def run(spec: ModelSpec, scenarios: list[str] | None = None,
     seg = {"consumer": "loan_purpose", "mortgage": "state",
            "cre": "property_type"}.get(spec.portfolio)
 
+    say("projection")
     t2 = time.perf_counter()
     results: dict[str, ECL.EclResult] = {}
     extrap: list[Extrapolation] = []
@@ -279,6 +293,7 @@ def run(spec: ModelSpec, scenarios: list[str] | None = None,
                                             as_of=as_of).ecl
     t["projection"] = time.perf_counter() - t2
 
+    say("bridge")
     steps, recon, shap = [], (True, 0.0), {}
     if bridge_from in results and bridge_to in results:
         steps = BR.build_bridge(results[bridge_from].components,

@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from .naming import friendly_name
+from .naming import friendly_name, lgd_display
 from .spec import ModelSpec
 
 VERSIONS_DIR = Path(__file__).resolve().parents[3] / "versions"
@@ -48,7 +48,14 @@ def data_fingerprint(portfolio: str) -> str:
     try:
         rep = json.loads(BUILD_REPORT.read_text())[portfolio]
     except Exception:                                                   # noqa: BLE001
-        return ""
+        # Not a synthetic book. An ingested tape carries its own content
+        # fingerprint in the tapes registry; read it from disk directly so
+        # this module stays import-cycle-free.
+        tape = BUILD_REPORT.parents[1] / "tapes" / f"{portfolio}.json"
+        try:
+            return json.loads(tape.read_text()).get("fingerprint", "")
+        except Exception:                                               # noqa: BLE001
+            return ""
     # `content` is a digest of what the columns hold. Without it the fingerprint
     # only counted rows, accounts, defaults and the window, all of which survive
     # a rescaling of the money: rebalancing the books moved the mean commercial
@@ -74,6 +81,17 @@ class Version:
     tags: list[str] = field(default_factory=list)
     notes: str = ""
     parent_hash: str | None = None
+    # WHY this version departs from its parent, captured at the fork gate when
+    # the edit was made rather than reconstructed at save time. Keys:
+    # reason_code, justification, change, from_hash, from_name, from_kind
+    # ("version" | "selection"), at, reviewer. Empty for a version that was
+    # not forked from anything.
+    fork: dict = field(default_factory=dict)
+    # Where the specification entered the workspace when it came off a search
+    # leaderboard rather than being built by hand. Keys: name, hash, rank,
+    # config_hash. This is what lets the graph say "started from rank 3 of the
+    # 16 Sep search" instead of showing an unexplained root.
+    origin: dict = field(default_factory=dict)
     # Set when this version replaced an earlier one in place. The earlier file is
     # removed, so this records what it superseded.
     replaced_hash: str | None = None
@@ -91,6 +109,95 @@ class Version:
         return asdict(self)
 
 
+def spec_changes(parent: dict, child: dict) -> list[str]:
+    """Every difference between two saved specifications, in the analyst's terms.
+
+    WHAT changed is a fact about the two specifications, so it is derived from
+    them rather than accumulated from the interface. The fork gate used to
+    record the label of the ONE edit that tripped it: rebinning a variable and
+    then adding another produced a record naming only the rebinning, and the
+    second change existed nowhere. A rationale is still asked for once — that
+    is a judgement, and one departure has one reason — but the change list is
+    measured here, at save, against the parent.
+    """
+    out: list[str] = []
+
+    def var_map(s: dict) -> dict[str, dict]:
+        return {v["column"]: v for v in (s.get("variables") or [])}
+
+    pv, cv = var_map(parent), var_map(child)
+    for col in cv.keys() - pv.keys():
+        t = cv[col].get("treatment")
+        out.append(f"+ {col}{f' ({t})' if t else ''}")
+    for col in pv.keys() - cv.keys():
+        out.append(f"− {col}")
+    for col in sorted(cv.keys() & pv.keys()):
+        a, b = pv[col], cv[col]
+        if a.get("treatment") != b.get("treatment"):
+            out.append(f"{col}: {a.get('treatment')} → {b.get('treatment')}")
+            continue
+        # Same treatment, different shape: the bin edges or the spline knots
+        # were moved by hand. Worth recording, and not visible in a name.
+        for field_, word in (("edges", "bin edges"), ("knots", "knots")):
+            if (a.get(field_) or None) != (b.get(field_) or None):
+                out.append(f"{col}: {word} changed")
+                break
+        else:
+            for field_, word in (("max_bins", "bin count"), ("n_knots", "knot count")):
+                if a.get(field_) != b.get(field_):
+                    out.append(f"{col}: {word} {a.get(field_)} → {b.get(field_)}")
+                    break
+
+    def mev_set(s: dict) -> set[str]:
+        return {f"{m['key']}@{m.get('transform', 'level')}@{m.get('lag_months', 0)}"
+                for m in (s.get("mevs") or [])}
+
+    pm, cm = mev_set(parent), mev_set(child)
+    out += [f"+ macro {t}" for t in sorted(cm - pm)]
+    out += [f"− macro {t}" for t in sorted(pm - cm)]
+
+    if parent.get("estimator") != child.get("estimator"):
+        out.append(f"estimator {parent.get('estimator')} → {child.get('estimator')}")
+    ps, cs = parent.get("sample") or {}, child.get("sample") or {}
+    if ps.get("oot_from") != cs.get("oot_from"):
+        out.append(f"out of time from {ps.get('oot_from')} → {cs.get('oot_from')}")
+    if ps.get("test_fraction") != cs.get("test_fraction"):
+        out.append(f"test fraction {ps.get('test_fraction')} → {cs.get('test_fraction')}")
+
+    # ── the severity half ──
+    pl, cl = parent.get("lgd") or {}, child.get("lgd") or {}
+    pa, ca = pl.get("assumed_lgd"), cl.get("assumed_lgd")
+    if pa != ca:
+        if ca is None:
+            out.append("severity: assumption replaced by a fitted model")
+        elif pa is None:
+            out.append(f"severity: assumed {ca:.0%}")
+        else:
+            out.append(f"severity assumed {pa:.0%} → {ca:.0%}")
+    for field_, word in (("drivers", "LGD"), ("categoricals", "LGD")):
+        a, b = set(pl.get(field_) or []), set(cl.get(field_) or [])
+        out += [f"{word} + {d}" for d in sorted(b - a)]
+        out += [f"{word} − {d}" for d in sorted(a - b)]
+    return out
+
+
+def _with_changes(fork: dict, parent_hash: str | None, child_spec: dict) -> dict:
+    """Attach the measured change list to a fork record.
+
+    The rationale in `fork` is the analyst's; `changes` is arithmetic on the
+    two specifications. A version with a parent but no gate record still gets
+    the list, so the lineage edge can say what moved."""
+    if not parent_hash:
+        return fork
+    parent = load(parent_hash)
+    if parent is None:
+        return fork
+    changes = spec_changes(parent.spec, child_spec)
+    if not changes:
+        return fork
+    return {**fork, "changes": changes}
+
+
 def _path(hash_: str) -> Path:
     return VERSIONS_DIR / f"{hash_}.json"
 
@@ -98,7 +205,8 @@ def _path(hash_: str) -> Path:
 def save(spec: ModelSpec, metrics: dict, ecl: dict | None = None,
          label: str | None = None, notes: str = "", tags: list[str] | None = None,
          parent_hash: str | None = None, author: str = "CreditIQ",
-         replaces: str | None = None) -> Version:
+         replaces: str | None = None, fork: dict | None = None,
+         origin: dict | None = None) -> Version:
     """Write a version.
 
     `replaces` supersedes an existing version. The hash is derived from the
@@ -109,12 +217,25 @@ def save(spec: ModelSpec, metrics: dict, ecl: dict | None = None,
     parent.
     """
     prior = load(replaces) if replaces else None
+    # A fork IS parentage. The client clears its "loaded" marker the moment
+    # the fork is confirmed (so the edit lands on a working draft), which
+    # means the refit request often carries no parent — but the fork record
+    # names exactly the version departed from. Without this, a fork saved
+    # right after its parent appeared in the lineage as a second unexplained
+    # root.
+    if parent_hash is None and fork and fork.get("from_kind") == "version":
+        parent_hash = fork.get("from_hash") or None
     VERSIONS_DIR.mkdir(parents=True, exist_ok=True)
     h = spec.hash()
     existing = load(h)
     inherit = existing or prior
+    # The default name is the two halves collated — never a third name minted
+    # for the pair, which would break the thread from the search's name for
+    # the PD half and the LGD surface's name for the severity half.
+    collated = (f"{friendly_name(spec.pd_hash())} · {lgd_display(spec.lgd)}"
+                if spec.lgd is not None else friendly_name(spec.pd_hash()))
     v = Version(
-        hash=h, name=label or (existing.name if existing else friendly_name(h)),
+        hash=h, name=label or (existing.name if existing else collated),
         portfolio=spec.portfolio,
         created_at=existing.created_at if existing
         else pd.Timestamp.utcnow().isoformat(timespec="seconds"),
@@ -125,6 +246,14 @@ def save(spec: ModelSpec, metrics: dict, ecl: dict | None = None,
         notes=notes or (inherit.notes if inherit else ""),
         parent_hash=parent_hash or (existing.parent_hash if existing
                                     else prior.parent_hash if prior else None),
+        fork=_with_changes(
+            fork or (existing.fork if existing else
+                     prior.fork if prior else {}),
+            parent_hash or (existing.parent_hash if existing
+                            else prior.parent_hash if prior else None),
+            spec.to_dict()),
+        origin=origin or (existing.origin if existing else
+                          prior.origin if prior else {}),
         replaced_hash=(prior.hash if prior and prior.hash != h else None),
         author=author, data_fingerprint=data_fingerprint(spec.portfolio),
     )
@@ -272,7 +401,65 @@ def lineage(portfolio: str) -> dict:
         "nodes": [{"hash": v.hash, "name": v.name, "status": v.status,
                    "created_at": v.created_at, "starred": v.starred,
                    "auc": v.metrics.get("auc_test"),
+                   "ecl": v.ecl.get("ecl_severely_adverse"),
+                   "notes": v.notes,
+                   "fork": v.fork, "origin": v.origin,
                    "n_variables": len(v.spec.get("variables", []))} for v in vs],
-        "edges": [{"from": v.parent_hash, "to": v.hash}
-                  for v in vs if v.parent_hash and v.parent_hash in known],
+        # An edge carries the REASON, so the graph can answer "why did this
+        # branch happen" without a second lookup. Parentage is parent_hash
+        # first; a version saved without one but carrying a fork record from
+        # a known version is still that version's child — this reads the
+        # records already on disk from before save() started normalizing.
+        "edges": [{"from": parent, "to": v.hash,
+                   "reason_code": v.fork.get("reason_code"),
+                   "justification": v.fork.get("justification"),
+                   # Every measured difference, and the gate's own label for
+                   # records written before the list was measured.
+                   "changes": v.fork.get("changes")
+                   or ([v.fork["change"]] if v.fork.get("change") else []),
+                   "change": v.fork.get("change")}
+                  for v in vs
+                  if (parent := v.parent_hash
+                      or (v.fork.get("from_hash")
+                          if v.fork.get("from_kind") == "version" else None))
+                  and parent in known and parent != v.hash],
     }
+
+
+def archive_all() -> dict:
+    """Move every saved version and all selection review state out of the way.
+
+    "Start from scratch" used to clear the BROWSER only, which left the
+    server's saved versions in place: the roll-up still opened on a promoted
+    champion and a loss figure from the previous session, which is precisely
+    the artifact a reset is supposed to remove.
+
+    Archiving rather than deleting, because a demo reset must never be the
+    thing that loses real work. `list_all` globs the top level only, so a
+    timestamped subdirectory is invisible to the app while the files remain
+    on disk — the same shape as the archive folder already sitting here.
+    """
+    stamp = pd.Timestamp.utcnow().strftime("%Y-%m-%dT%H-%M-%S")
+    dest = VERSIONS_DIR / f"archive-{stamp}"
+    moved = {"versions": 0, "selection_reviews": 0, "selection_configs": 0}
+    if not VERSIONS_DIR.exists():
+        return {**moved, "archive": None}
+
+    for p in sorted(VERSIONS_DIR.glob("*.json")):
+        dest.mkdir(parents=True, exist_ok=True)
+        p.replace(dest / p.name)
+        moved["versions"] += 1
+
+    sel = VERSIONS_DIR / "selection"
+    for sub, key in (("reviews", "selection_reviews"),
+                     ("configs", "selection_configs")):
+        src = sel / sub
+        if not src.is_dir():
+            continue
+        for p in sorted(src.glob("*.json")):
+            out = dest / "selection" / sub
+            out.mkdir(parents=True, exist_ok=True)
+            p.replace(out / p.name)
+            moved[key] += 1
+
+    return {**moved, "archive": str(dest.name) if any(moved.values()) else None}

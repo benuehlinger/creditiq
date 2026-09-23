@@ -61,14 +61,16 @@ export default function ScenarioSurface() {
   // of nowhere" experience. The roll-up still uses documented defaults, and
   // says so per book; this page is the analyst's own model only.
   const lgdReady = !!fittedLgd?.hash
+  // The phase the server reports while the projection runs.
+  const [phase, setPhase] = useState<string | undefined>(undefined)
   const run = useQuery({
     queryKey: ['ecl', portfolio, fitted?.hash, fittedLgd?.hash, capped],
-    queryFn: () => api.ecl({
+    queryFn: () => { setPhase(undefined); return api.ecl({
       ...fitted!.request,
       lgd: fittedLgd!.spec,
       cap_to_fitted_range: capped,
       weights,
-    }),
+    }, setPhase) },
     enabled: !!fitted && lgdReady,
     staleTime: Infinity,
     // Aligned with the app-wide hour: this query's shorter 30-minute
@@ -136,7 +138,7 @@ export default function ScenarioSurface() {
           <CardHead title="Scenarios" subtitle={portfolio} />
           <EmptyState title="No fitted model to project">
             This stage projects a fitted PD model forward. It does not estimate
-            one. Fit a PD model first; the Macro stage has the supervisory
+            one. Fit a PD model first; the MEV stage has the supervisory
             variables and the transformation search in the meantime.
           </EmptyState>
         </Card>
@@ -201,7 +203,7 @@ export default function ScenarioSurface() {
       )}
 
       {(busy || justRan) && (
-        <FitProgress done={!busy} doneLabel="Projected"
+        <FitProgress done={!busy} doneLabel="Projected" phase={phase}
           phases={ECL_PHASES(res?.scenarios?.[0]?.n_accounts, res?.timings)} />
       )}
 
@@ -308,6 +310,11 @@ export default function ScenarioSurface() {
             </div>
           </Card>
 
+          {fittedLgd?.spec.assumed_lgd != null && (
+            <SeverityWhatIf declared={fittedLgd.spec.assumed_lgd}
+              baseline={base.ecl} severe={sa.ecl} weighted={res.weighted_ecl} />
+          )}
+
           <div className="grid gap-3 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
             <Card>
               <CardHead title="ECL attribution bridge"
@@ -410,7 +417,7 @@ export default function ScenarioSurface() {
           <div className="space-y-3">
             <Card>
               <CardHead title="Exposure at default" subtitle={`Method: ${res.ead.method}`}
-                caption="The exposure assumption applied to every account, and the parameters it was estimated from. It is carried into each ECL figure on this page." />
+                caption="The exposure assumption applied to every account, carried into each ECL figure on this page." />
               <div className="max-w-[88ch] px-4 py-3 text-xs leading-relaxed text-ink-secondary">
                 {res.ead.plain_english}
                 {res.ead.ccf_note && (
@@ -418,6 +425,18 @@ export default function ScenarioSurface() {
                 )}
               </div>
             </Card>
+            {res.lgd.n_defaults === 0 && res.lgd.drivers.length === 0 ? (
+              /* A declared severity was never estimated: no fitting
+                 population, no drivers, no zero-loss share to report. */
+              <Card>
+                <CardHead title="Loss given default"
+                  subtitle="Declared assumption, not estimated"
+                  caption="A flat severity applied to every exposure and every scenario. Stress moves the default rate; the severity is the number declared on the LGD stage." />
+                <div className="grid grid-cols-1">
+                  <StatTile label="Assumed severity" value={pct(res.lgd.mean_lgd * 100, 0)} />
+                </div>
+              </Card>
+            ) : (
             <Card>
               <CardHead title="Loss given default"
                 subtitle={`Fractional logit · fitted on ${num(res.lgd.n_defaults)} defaults`}
@@ -430,10 +449,11 @@ export default function ScenarioSurface() {
                   value={res.lgd.mean_severity_given_loss.toFixed(3)} />
               </div>
               <div className="border-t border-hairline px-4 py-2 text-micro text-ink-muted">
-                Drivers: {res.lgd.drivers.join(', ')} · mean workout{' '}
-                {res.lgd.mean_workout_months.toFixed(1)} months
+                {res.lgd.drivers.length > 0 && <>Drivers: {res.lgd.drivers.join(', ')} · </>}
+                mean workout {res.lgd.mean_workout_months.toFixed(1)} months
               </div>
             </Card>
+            )}
           </div>
           </div>
         </>
@@ -454,5 +474,60 @@ export default function ScenarioSurface() {
       </>
       </div>
     </div>
+  )
+}
+
+
+/** What-if on a DECLARED severity.
+ *
+ *  Only for a book running on an assumption: with a flat severity every
+ *  month's loss is EAD x PD x LGD, so lifetime ECL is exactly linear in the
+ *  assumed value and the slider is exact arithmetic, not an approximation and
+ *  not a re-projection. The declared number stays the number of record; this
+ *  control explores, and changing the record is a specification edit on the
+ *  LGD stage, where it forks like any other.
+ */
+function SeverityWhatIf({ declared, baseline, severe, weighted }: {
+  declared: number; baseline: number; severe: number; weighted: number
+}) {
+  const [pct, setPct] = useState(Math.round(declared * 100))
+  const k = (pct / 100) / declared
+  const off = Math.abs(k - 1) > 1e-9
+  return (
+    <Card>
+      <CardHead title="Severity what-if"
+        subtitle={`This book runs on an assumed severity of ${Math.round(declared * 100)}%`}
+        caption="Lifetime loss is proportional to a flat severity, so these figures rescale the projection above. The declared value remains the number of record; change it on the LGD stage."
+        right={off ? (
+          <button onClick={() => setPct(Math.round(declared * 100))}
+            className="rounded-ctl border border-hairline px-2 py-0.5 text-tiny text-ink-secondary hover:text-ink">
+            Reset to {Math.round(declared * 100)}%
+          </button>
+        ) : undefined} />
+      <div className="flex flex-wrap items-center gap-6 px-4 pb-4">
+        <div className="flex min-w-[260px] flex-1 items-center gap-3">
+          <input type="range" min={5} max={95} step={1} value={pct}
+            onChange={(e) => setPct(+e.target.value)}
+            aria-label="What-if severity, percent of exposure lost at default"
+            className="w-full accent-[var(--accent)]" />
+          <span className="w-12 text-right text-sm font-semibold tnum text-ink">{pct}%</span>
+        </div>
+        <div className="flex divide-x divide-hairline">
+          <StatTile label="Baseline ECL" value={usd(baseline * k)}
+            explain="Baseline lifetime ECL at the what-if severity." />
+          <StatTile label="Severely adverse" value={usd(severe * k)}
+            explain="Severely adverse lifetime ECL at the what-if severity." />
+          <StatTile label="Probability-weighted" value={usd(weighted * k)}
+            explain="Probability-weighted lifetime ECL at the what-if severity." />
+        </div>
+        {off && (
+          <p className="w-full text-tiny text-ink-muted">
+            Shown at {pct}% against the declared {Math.round(declared * 100)}%:
+            every figure above scales by {(k).toFixed(2)}x. Nothing is saved
+            from here.
+          </p>
+        )}
+      </div>
+    </Card>
   )
 }

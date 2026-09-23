@@ -10,26 +10,43 @@ Renaming never breaks a reference, because nothing references the name.
 
 from __future__ import annotations
 
-ADJECTIVES = [
-    "amber", "stoic", "candid", "brisk", "lucid", "quiet", "sturdy", "vivid",
-    "patient", "frank", "nimble", "solemn", "keen", "steady", "wry", "plain",
-    "sober", "hardy", "tidy", "swift", "clement", "prudent", "astute", "modest",
-    "gilded", "rugged", "tranquil", "earnest", "vigilant", "temperate", "canny",
-    "measured",
+# One word per half. Adjective-noun pairs made a saved pairing four words
+# long ("wry-rampart-98 · vivid-heron-51"), which nobody could hold in their
+# head. The PD and LGD halves draw from DISJOINT word families, so a bare
+# name also says which half it is: PD names are structures, LGD names are
+# vessels and grounds.
+PD_NOUNS = [
+    "rampart", "bastion", "keystone", "beacon", "lattice", "obelisk",
+    "buttress", "colonnade", "portico", "trellis", "pergola", "cornice",
+    "meridian", "compass", "sextant", "anchor", "capstan", "windlass",
+    "harbour", "foundry", "quarry", "aqueduct", "citadel", "parapet",
+    "gable", "spire", "vault", "archway", "pillar", "turret", "gantry",
+    "causeway",
 ]
-NOUNS = [
-    "heron", "lattice", "harbour", "beacon", "compass", "quarry", "meridian",
-    "anchor", "cypress", "foundry", "keystone", "lantern", "bastion", "trellis",
-    "granary", "aqueduct", "obelisk", "chandler", "ledger", "abacus", "sextant",
-    "almanac", "cornice", "pergola", "cistern", "dovecote", "windlass", "capstan",
-    "rampart", "buttress", "colonnade", "portico",
+LGD_NOUNS = [
+    "heron", "cypress", "granary", "cistern", "dovecote", "ledger",
+    "abacus", "almanac", "chandler", "lantern", "coffer", "sluice",
+    "wharf", "ballast", "keel", "rudder", "mooring", "jetty", "quay",
+    "estuary", "delta", "fathom", "sounding", "breakwater", "lockgate",
+    "millrace", "weir", "culvert", "berth", "hull", "bilge", "anchorage",
 ]
 
 
-def friendly_name(config_hash: str) -> str:
-    """adjective-noun-NN, seeded from the hash. Stable and collision-visible."""
+def friendly_name(config_hash: str, kind: str = "pd") -> str:
+    """noun-NN, seeded from the hash. Stable and collision-visible; the word
+    family says which half of the model the name belongs to."""
+    nouns = LGD_NOUNS if kind == "lgd" else PD_NOUNS
     h = int(config_hash[:12], 16)
-    adj = ADJECTIVES[h % len(ADJECTIVES)]
-    noun = NOUNS[(h // len(ADJECTIVES)) % len(NOUNS)]
-    nn = (h // (len(ADJECTIVES) * len(NOUNS))) % 100
-    return f"{adj}-{noun}-{nn:02d}"
+    noun = nouns[h % len(nouns)]
+    nn = (h // len(nouns)) % 100
+    return f"{noun}-{nn:02d}"
+
+
+def lgd_display(lgd_spec) -> str:
+    """The severity half's display name. A fitted model gets the hash-derived
+    name like any other; a declared assumption IS its own name — minting a
+    codename for "55%, because I said so" would dress an assumption as an
+    estimate."""
+    if getattr(lgd_spec, "assumed_lgd", None) is not None:
+        return f"assumed {lgd_spec.assumed_lgd:.0%}"
+    return friendly_name(lgd_spec.hash(), kind="lgd")

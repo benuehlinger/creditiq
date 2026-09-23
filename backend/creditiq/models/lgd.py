@@ -260,6 +260,16 @@ def candidates(df: pd.DataFrame, portfolio: str,
         if pd.api.types.is_numeric_dtype(col):
             if filled < 0.5 or col.nunique(dropna=True) < 3:
                 continue
+            # A cohort label (vintage, origination year) is ordered but not a
+            # scale; it enters as bins, never as a linear term. The 12-level
+            # categorical cap below does not apply — cohorts bin cleanly.
+            from ..analysis.screening import is_cohort_label
+            if is_cohort_label(col):
+                categorical.append({"column": c, "filled": filled,
+                                    "kind": "categorical",
+                                    "levels": int(col.nunique(dropna=True)),
+                                    "macro": False})
+                continue
             numeric.append({"column": c, "filled": filled, "kind": "numeric",
                             "macro": c in LGD_MACRO})
         elif col.dtype == object or str(col.dtype) == "category":
@@ -304,6 +314,32 @@ def attach_macro(d: pd.DataFrame, mev_panel: pd.DataFrame,
     return d
 
 
+def assumed_model(spec: LgdSpec) -> LgdModel:
+    """The severity half of a book whose tape carries no realised losses.
+
+    Not a fit: a DECLARED flat severity, entered by the user and recorded in
+    the specification. Built as an intercept-only model whose intercept is the
+    logit of the declared value, so every scoring path — projection, ECL,
+    design_for — produces exactly that value through the machinery a fitted
+    model uses, with nothing special-cased downstream. It has no macro terms,
+    so severity holds flat under stress, and the interface says so.
+    """
+    v = float(spec.assumed_lgd)                     # type: ignore[arg-type]
+    if not 0.0 < v < 1.0:
+        raise ValueError(f"an assumed severity must be strictly between 0 and 1, "
+                         f"got {v}")
+    logit = float(np.log(v / (1.0 - v)))
+    return LgdModel(
+        portfolio=spec.portfolio, spec=spec, columns=["intercept"],
+        beta=np.array([logit]), means=np.array([]), stds=np.array([]),
+        levels={}, n_defaults=0, mean_lgd=v, zero_loss_share=0.0,
+        mean_severity_given_loss=v,
+        fit_note=(f"Assumed severity {v:.0%}, declared by the user. This tape "
+                  f"carries no realised losses, so nothing here is estimated: "
+                  f"the loss number scales one-for-one with this assumption."),
+    )
+
+
 def fit_lgd(df: pd.DataFrame, spec: LgdSpec | str,
             mev_panel: pd.DataFrame) -> LgdModel:
     """Fit on the DEFAULTED account-months only — the only rows where a realised
@@ -312,8 +348,20 @@ def fit_lgd(df: pd.DataFrame, spec: LgdSpec | str,
         spec = LgdSpec.default_for(spec)
     portfolio = spec.portfolio
     d = df.loc[df["default_flag"] == 1].copy()
+    n_defaults_total = len(d)
+    # Severity is estimated on defaults whose severity was OBSERVED. The
+    # synthetic books record a realised severity on every default, so this
+    # filter is a no-op there — but a real tape can carry severity for a
+    # subset (recoveries reported on some accounts only), and the unobserved
+    # rows are NaN, not zero. Fitting through them poisoned the estimation:
+    # every coefficient came back NaN and the mean displayed as 0.0%.
+    if "lgd_realised" in d.columns:
+        d = d.loc[d["lgd_realised"].notna()]
     if len(d) < 60:
-        raise ValueError(f"{portfolio}: only {len(d)} defaults — too few to fit LGD")
+        raise ValueError(
+            f"{portfolio}: only {len(d)} of {n_defaults_total} defaults carry "
+            "an observed severity — too few to fit LGD. Declare an assumed "
+            "severity instead.")
 
     d = attach_macro(d, mev_panel, tuple(c for c in spec.drivers if "@" in c))
     dropped = [c for c in (*spec.drivers, *spec.categoricals) if c not in d.columns]
@@ -372,6 +420,15 @@ def fit_lgd(df: pd.DataFrame, spec: LgdSpec | str,
 
 
 def design_for(df: pd.DataFrame, model: LgdModel) -> np.ndarray:
+    # A spec from the severity search can carry macro terms (`key@transform@lag`).
+    # They are functions of performance_date alone, so attaching them at score
+    # time reproduces exactly the columns the fit saw; the stored means/stds
+    # then standardize them identically. Without this every scoring caller had
+    # to remember the join, and the backtest didn't.
+    macro = tuple(c for c in model.spec.drivers if "@" in c and c not in df.columns)
+    if macro:
+        from ..mev.panel import monthly_panel
+        df = attach_macro(df.copy(), monthly_panel(), macro)
     X, _, _, _, _, _ = _matrix(df, model.spec, levels=model.levels,
                                means=model.means, stds=model.stds, maps=model.maps)
     return X

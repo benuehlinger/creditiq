@@ -43,7 +43,10 @@ demo:  ## like dev, but pre-warms every cache at boot (~9 GB of memory, instant 
 	@CREDITIQ_WARM=1 $(MAKE) -j2 backend frontend
 
 backend:
-	cd backend && .venv/bin/uvicorn creditiq.api.main:app --reload --port 8000
+# --timeout-graceful-shutdown: without it uvicorn waits FOREVER for in-flight
+# requests on reload or stop, and one wedged handler makes the server
+# unrestartable short of kill -9.
+	cd backend && .venv/bin/uvicorn creditiq.api.main:app --reload --port 8000 --timeout-graceful-shutdown 15
 
 frontend:
 	cd frontend && npm run dev

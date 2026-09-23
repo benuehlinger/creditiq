@@ -24,6 +24,10 @@ docs/GENERATIVE_TRUTH.md
 versions/
 .DS_Store
 data/cache/
+
+# Ingested loan tapes are user data on this machine — never committed, exactly
+# like the generated panels and the saved versions.
+data/tapes/
 # superseded saved versions, archived out of the app
 versions/archive-*/
 

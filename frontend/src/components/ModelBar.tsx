@@ -2,7 +2,7 @@ import type React from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { type PortfolioKey } from '../lib/api'
 import { useUi, NONE } from '../lib/store'
-import { columns } from '../lib/spec'
+import { columns , lgdSpecified} from '../lib/spec'
 import { useModelIdentity, useProgress } from '../lib/progress'
 import { ArrowRight } from './icons'
 
@@ -73,6 +73,7 @@ export default function ModelBar() {
   const loc = useLocation()
   const fitted = useUi((s) => (pk ? s.fitted[pk] : null))
   const lgd = useUi((s) => (pk ? s.fittedLgd[pk] : null))
+  const origin = useUi((s) => (pk ? s.origin[pk] : null))
   const loaded = useUi((s) => (pk ? s.loaded[pk] : null))
   // Select the SPECIFICATION, then derive the column list outside the selector.
   // `columns()` maps, so calling it inside the selector returns a new array on
@@ -103,8 +104,7 @@ export default function ModelBar() {
   // then the bar reported "LGD model not fitted", which is false: the model has
   // an LGD specification and it is on screen. It has not been replayed in this
   // session, which is a different thing and asks for a different action.
-  const awaitingLgdReplay = !!loaded && !lgd?.hash
-    && !!(lgd?.spec.drivers.length || lgd?.spec.categoricals.length)
+  const awaitingLgdReplay = !!loaded && !lgd?.hash && lgdSpecified(lgd?.spec)
 
   // The one-line account of which model is on screen. It used to be a row of
   // its own, under the section navigation, with the stage navigation on its
@@ -113,13 +113,26 @@ export default function ModelBar() {
   // row. The long form of every state is on the hover, and the stage dots in
   // the navigation carry the detail.
   const pill = (label: string, tone: 'accent' | 'warning' | 'muted') => (
-    <span className={`rounded px-1.5 py-0.5 font-medium ${
+    <span className={`shrink-0 whitespace-nowrap rounded px-1.5 py-0.5 font-medium ${
       tone === 'accent' ? 'bg-accent/15' : tone === 'warning' ? 'bg-warning/15' : 'bg-sunken'}`}
       style={{ color: tone === 'accent' ? 'var(--accent)'
         : tone === 'warning' ? 'var(--status-serious)' : 'var(--ink-muted)' }}>
       {label}
     </span>
   )
+
+  /** Where a draft came from, as a sentence for the hover.
+   *
+   *  It used to sit in the row, between the state and the model's own name.
+   *  Three things plus a button do not fit the space this strip has, so the
+   *  provenance was the part that clipped — mid-word, against the button.
+   *  It is a question about HISTORY, which the lineage answers in full and
+   *  the version record keeps; the row answers "what is on screen, and what
+   *  is the next thing to do". */
+  const cameFrom = origin
+    ? ` Taken from the screening leaderboard as ${origin.name}${
+        origin.rank != null ? ` at rank ${origin.rank}` : ''}.`
+    : ''
 
   let body: React.ReactNode
   let title: string
@@ -130,10 +143,14 @@ export default function ModelBar() {
       <>
         {pill(edited ? 'Working draft' : 'Saved model',
               edited || drifted ? 'warning' : 'accent')}
-        {edited && <span className="text-ink-muted">from</span>}
-        <span className="font-medium text-ink">{loaded.name}</span>
-        {edited && <EditSummary diff={progress.diff} />}
-        {drifted && <span className="text-ink-muted">refit no longer matches the record</span>}
+        {edited && <span className="shrink-0 text-ink-muted">from</span>}
+        <span className="shrink-0 whitespace-nowrap font-medium text-ink">{loaded.name}</span>
+        {edited && <span className="min-w-0 shrink truncate"><EditSummary diff={progress.diff} /></span>}
+        {drifted && (
+          <span className="min-w-0 shrink truncate text-ink-muted">
+            refit no longer matches the record
+          </span>
+        )}
       </>
     )
     title = progress.mode === 'drifted'
@@ -151,8 +168,8 @@ export default function ModelBar() {
     body = (
       <>
         {pill('Working draft', 'muted')}
-        <span className="text-ink-secondary">{what}</span>
-        {fitted && <span className="font-mono text-micro text-ink-muted">{fitted.hash}</span>}
+        <span className="shrink-0 whitespace-nowrap text-ink-secondary">{what}</span>
+        {fitted && <span className="hidden shrink-0 font-mono text-micro text-ink-muted xl:inline">{fitted.hash}</span>}
       </>
     )
     title = progress.pdStale && picked.length === 0
@@ -162,20 +179,23 @@ export default function ModelBar() {
       : progress.lgdStale ? 'No LGD drivers selected.'
       : missing.length === 2 ? 'No model fitted yet.'
       : `${missing[0]} model not fitted. A Model ID requires both.`
+    title += cameFrom
   } else {
     body = (
       <>
         {pill('Working draft', 'muted')}
-        <span className="font-medium text-ink">{ident.name ?? '…'}</span>
+        <span className="shrink-0 whitespace-nowrap font-medium text-ink">{ident.name ?? '…'}</span>
       </>
     )
-    title = `${ident.hash ?? ''} · PD ${fitted!.request.variables.length} variables · LGD ${
-      lgd!.spec.drivers.length + lgd!.spec.categoricals.length} drivers. Not yet saved.`
+    const sev = lgd!.spec.assumed_lgd != null
+      ? `severity assumed at ${Math.round(lgd!.spec.assumed_lgd * 100)}%`
+      : `LGD ${lgd!.spec.drivers.length + lgd!.spec.categoricals.length} drivers`
+    title = `${ident.hash ?? ''} · PD ${fitted!.request.variables.length} variables · ${sev}. Not yet saved.${cameFrom}`
   }
 
   return (
     <div className="flex min-w-0 items-center gap-2 text-tiny" title={title}>
-      <span className="flex min-w-0 items-center gap-2 truncate">{body}</span>
+      <span className="flex min-w-0 items-center gap-2">{body}</span>
       {progress.next && (
         <button onClick={() => {
           const { to, label } = progress.next!

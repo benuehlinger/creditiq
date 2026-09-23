@@ -127,3 +127,40 @@ def test_the_real_books_give_the_answers_a_credit_analyst_expects(portfolio, col
                         knots=[float(q) for q in
                                np.nanquantile(df[column].astype(float), [.2, .4, .6, .8])])
     assert r["recommendation"]["treatment"] == expected, r["recommendation"]["reason"]
+
+
+def test_a_knot_needs_data_on_both_sides_of_it():
+    """The column at knot k is max(value - k, 0): flat below the knot, rising
+    above it. The flat part is what lets the line bend there.
+
+    With nothing BELOW the knot the column is just the value line shifted, so
+    it duplicates a column already in the basis. That is the normal shape of a
+    securitized tape — a trust stops buying loans when it prices, so the
+    youngest loan is already months old — and it sent the fit down a
+    rank-deficient path that rebuilt the basis wrongly at scoring time.
+
+    Nothing ABOVE the knot gives an all-zero column instead, which was always
+    caught.
+    """
+    import numpy as np
+    from creditiq.analysis.spline import spline_basis
+
+    knots = (3, 6, 12, 24, 36, 60, 96, 144)
+    rng = np.random.default_rng(0)
+
+    # A closed pool: youngest loan already 6 months old, oldest 75.
+    closed = rng.integers(6, 76, 40_000).astype(float)
+    B, _, meta = spline_basis(closed, knots)
+    assert meta["knots"] == [12, 24, 36, 60], "3 and 6 have nothing below them"
+    assert np.linalg.matrix_rank(B - B.mean(axis=0), tol=1e-8) == B.shape[1], (
+        "every column kept must be independent, or the rank-deficient path runs")
+
+    # An open book originating continuously keeps the early knots.
+    openbook = rng.integers(0, 76, 40_000).astype(float)
+    _, _, m2 = spline_basis(openbook, knots)
+    assert 3 in m2["knots"] and 6 in m2["knots"]
+
+    # And a fitted basis must rebuild EXACTLY when applied again — that is the
+    # whole contract, and what breaks when rank truncation fires.
+    B3, _, _ = spline_basis(closed, knots, fitted=meta)
+    assert np.abs(B - B3).max() < 1e-9

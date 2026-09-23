@@ -81,10 +81,14 @@ export interface ProgressInput {
             specAtFit?: string } | null
   /** The canonical specification currently on screen. */
   specNow?: string
-  lgd: { hash: string; spec: { drivers: string[]; categoricals: string[] } } | null
+  lgd: { hash: string; spec: { drivers: string[]; categoricals: string[]; assumed_lgd?: number | null } } | null
   /** `pdHash:lgdHash` of the model this book was last projected on. */
   projected?: string | null
   loaded: { hash: string; name: string } | null
+  /** False on a book that mapped no realised severity: its LGD stage is a
+   *  declared assumption, and the call to action must say so rather than
+   *  send the reader to select drivers that cannot be screened. */
+  hasSeverity?: boolean
   shortlisted: number
   /** The last completed automated variable search on this book, if any. */
   selection?: { nModels: number } | null
@@ -120,6 +124,7 @@ export function useProgress(portfolio: string | undefined) {
   const picked = pdSpec ? columns(pdSpec) : (NONE as string[])
   const specNow = pdSpec ? canonical(pdSpec) : undefined
 
+  const books = useQuery({ queryKey: ['portfolios'], queryFn: api.portfolios })
   const origin = useQuery({
     queryKey: ['version', loaded?.hash],
     queryFn: () => api.version(loaded!.hash),
@@ -140,6 +145,7 @@ export function useProgress(portfolio: string | undefined) {
     lgd: lgd ? { hash: lgd.hash, spec: lgd.spec } : null,
     projected,
     loaded: loaded ? { hash: loaded.hash, name: loaded.name } : null,
+    hasSeverity: books.data?.find((b) => b.key === pk)?.has_severity,
     shortlisted: (shortlist?.pd.length ?? 0) + (shortlist?.lgd.length ?? 0),
     selection: selectionRun ? { nModels: selectionRun.nModels } : null,
     originVars: spec ? (spec.variables ?? []).map((v: any) => v.column) : null,
@@ -152,6 +158,9 @@ export function computeProgress(inp: ProgressInput) {
   const { picked, fitted, lgd, loaded, shortlisted, selection, originVars,
           originLgd, specNow, projected } = inp
   const currentLgd = lgd ? [...lgd.spec.drivers, ...lgd.spec.categoricals] : []
+  // A declared severity is a complete LGD half with zero drivers - the
+  // absence of drivers is its definition, not an emptied tray.
+  const lgdAssumed = lgd?.spec.assumed_lgd != null
 
   // A fit is a RESULT, and the tray is the draft specification. Once they
   // diverge the fit no longer describes what is on screen: clearing every
@@ -164,7 +173,7 @@ export function computeProgress(inp: ProgressInput) {
     // Everything the names do not carry: treatments, bin edges, spline knots,
     // the estimator, the out-of-time boundary, the macro terms.
     || (!!fitted.specAtFit && !!specNow && fitted.specAtFit !== specNow))
-  const lgdStale = !!lgd?.hash && currentLgd.length === 0
+  const lgdStale = !!lgd?.hash && currentLgd.length === 0 && !lgdAssumed
 
   // Whether the SPECIFICATION differs from the opened version. Decided from the
   // variables and drivers, never from the hash: a hash that differs while the
@@ -204,11 +213,11 @@ export function computeProgress(inp: ProgressInput) {
     : 'current'
 
   const stages: Stage[] = [
-    { to: 'data', label: 'Data', parent: 'data', state: 'done' },
+    { to: 'panel', label: 'Panel', parent: 'panel', state: 'done' },
     {
       // Optional: a model can take the catalogue's level terms without ever
       // opening the search. An empty one is a choice, not an outstanding task.
-      to: 'macro', label: 'Macro', parent: 'macro', optional: true,
+      to: 'mev', label: 'MEV', parent: 'mev', optional: true,
       state: shortlisted > 0 ? 'done' : 'todo',
       note: shortlisted > 0 ? `${shortlisted} terms shortlisted`
                             : 'optional, none shortlisted',
@@ -216,7 +225,7 @@ export function computeProgress(inp: ProgressInput) {
     {
       // Optional: the automated search proposes candidates, it is not a gate.
       // A book built entirely by hand skips it without looking unfinished.
-      to: 'select', label: 'Selection', parent: 'select', optional: true,
+      to: 'screen', label: 'Screen', parent: 'screen', optional: true,
       state: (selection?.nModels ?? 0) > 0 ? 'done' : 'todo',
       note: (selection?.nModels ?? 0) > 0
         ? `${selection!.nModels} models on the leaderboard`
@@ -238,16 +247,22 @@ export function computeProgress(inp: ProgressInput) {
         : `PD ${fitted.hash}`,
     },
     {
-      to: 'lgd', id: 'lgd/explore', label: 'LGD drivers', parent: 'lgd',
-      state: !currentLgd.length ? 'todo'
+      to: 'lgd', id: 'lgd/explore', parent: 'lgd',
+      label: inp.hasSeverity === false ? 'Severity assumption' : 'LGD drivers',
+      state: lgdAssumed ? 'done'
+        : !currentLgd.length ? 'todo'
         : originLgd && !sameSet(originLgd, currentLgd) ? 'changed' : 'done',
-      note: currentLgd.length ? `${currentLgd.length} drivers selected` : 'no drivers selected',
+      note: lgdAssumed ? 'severity assumed, no drivers'
+        : inp.hasSeverity === false ? 'no severity declared'
+        : currentLgd.length ? `${currentLgd.length} drivers selected` : 'no drivers selected',
     },
     {
       to: 'lgd', id: 'lgd/fit', label: 'LGD fit', parent: 'lgd',
       state: !lgd?.hash || lgdStale ? 'todo' : 'done',
       note: !lgd?.hash ? 'not fitted'
-        : lgdStale ? 'no drivers selected. Refit needed' : 'fitted',
+        : lgdStale ? 'no drivers selected. Refit needed'
+        : lgdAssumed ? `assumed ${Math.round((lgd!.spec.assumed_lgd ?? 0) * 100)}%`
+        : 'fitted',
     },
     {
       // Done means RUN, the way it does on every other stage. Being able to
@@ -302,7 +317,8 @@ export function computeProgress(inp: ProgressInput) {
   const firstTodo = required.find((s) => s.state === 'todo')
   const NEXT_LABEL: Record<string, string> = {
     'pd/explore': 'Select PD variables', 'pd/fit': 'Fit the PD model',
-    'lgd/explore': 'Select LGD drivers', 'lgd/fit': 'Fit the LGD model',
+    'lgd/explore': inp.hasSeverity === false ? 'Declare the severity' : 'Select LGD drivers',
+    'lgd/fit': 'Fit the LGD model',
     data: 'Review the data',
   }
   // Drift gets no special call to action. A drifted model has ALREADY been
@@ -313,6 +329,12 @@ export function computeProgress(inp: ProgressInput) {
   const next = firstTodo ? { label: NEXT_LABEL[firstTodo.id ?? firstTodo.to] ?? firstTodo.label,
                     to: firstTodo.to }
     : changed > 0 ? { label: 'Save as a new version', to: 'versions' }
+    // Both halves fitted but never projected: the projection is the payoff
+    // of the whole chain, so it is offered before the save rather than
+    // skipped. Projection stays optional — saving without it still works
+    // from the Versions surface directly.
+    : complete && projectionLink !== 'current'
+      ? { label: 'Project the scenarios', to: 'scenarios' }
     : complete && !loaded ? { label: 'Save this model', to: 'versions' }
     : null
 
@@ -455,6 +477,8 @@ export function useModelIdentity(portfolio: string | undefined) {
   })
   return {
     name: q.data?.name ?? null,
+    pdName: q.data?.pd_name ?? null,
+    lgdName: q.data?.lgd_name ?? null,
     hash: q.data?.hash ?? null,
     complete: !!fitted && !!lgd?.hash,
   }

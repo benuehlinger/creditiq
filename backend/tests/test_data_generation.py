@@ -17,15 +17,18 @@ from creditiq.data.assemble import assemble
 from creditiq.data.build import SEEDS
 from creditiq.data.calibrate import TARGET_AUC, TARGET_RATE, measure
 from creditiq.data.generate import generate
-from creditiq.data.portfolios import PORTFOLIOS
+from creditiq.data.portfolios import PORTFOLIOS, SYNTHETIC_KEYS
 
-KEYS = list(PORTFOLIOS)
+# The generated books only. An ingested tape is registered in PORTFOLIOS
+# too, and has no generative process to assert on — without this, a developer
+# who had uploaded a tape ran the generator suite against their own loans.
+KEYS = list(SYNTHETIC_KEYS)
 
 
 @pytest.fixture(scope="module")
 def built() -> dict[str, tuple[pd.DataFrame, pd.DataFrame]]:
     out = {}
-    for k, spec in PORTFOLIOS.items():
+    for k, spec in ((k, PORTFOLIOS[k]) for k in SYNTHETIC_KEYS):
         res = generate(spec, seed=SEEDS[k])
         out[k] = assemble(res, seed=SEEDS[k])
     return out

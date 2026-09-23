@@ -385,3 +385,124 @@ def test_changing_pd_leaves_the_severity_model_untouched():
     assert a.pop("pd_hash") != b.pop("pd_hash")
     assert a == b, "the severity model moved when only the PD side changed"
     assert alt.hash() != spec.hash(), "a new pairing must get a new Model ID"
+
+
+def test_start_from_scratch_archives_rather_than_deletes(tmp_path, monkeypatch):
+    """"Start from scratch" must leave the roll-up genuinely empty — a saved
+    champion surviving it was the artifact that made a reset workspace reopen
+    on the previous session's loss figure. It must also never be the action
+    that loses real work, so the files are moved, not removed."""
+    from creditiq.models import versions as V
+
+    monkeypatch.setattr(V, "VERSIONS_DIR", tmp_path)
+    (tmp_path / "abc123.json").write_text('{"hash": "abc123"}')
+    reviews = tmp_path / "selection" / "reviews"
+    reviews.mkdir(parents=True)
+    (reviews / "consumer-1.json").write_text("{}")
+    configs = tmp_path / "selection" / "configs"
+    configs.mkdir(parents=True)
+    (configs / "consumer-2.json").write_text("{}")
+
+    moved = V.archive_all()
+    assert moved["versions"] == 1
+    assert moved["selection_reviews"] == 1
+    assert moved["selection_configs"] == 1
+
+    # Nothing left where the app looks...
+    assert list(tmp_path.glob("*.json")) == []
+    assert list(reviews.glob("*.json")) == []
+    assert V.list_all() == []
+    # ...and nothing lost.
+    arch = tmp_path / moved["archive"]
+    assert (arch / "abc123.json").exists()
+    assert (arch / "selection" / "reviews" / "consumer-1.json").exists()
+    assert (arch / "selection" / "configs" / "consumer-2.json").exists()
+
+
+def test_archiving_an_empty_workspace_creates_no_folder(tmp_path, monkeypatch):
+    """Resetting twice must not litter the directory with empty archives."""
+    from creditiq.models import versions as V
+
+    monkeypatch.setattr(V, "VERSIONS_DIR", tmp_path)
+    moved = V.archive_all()
+    assert moved["archive"] is None
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_fork_records_why_and_the_edge_carries_it(tmp_path, monkeypatch):
+    """The rationale is the point of the fork gate. It has to survive onto the
+    version and out through the lineage edge, or the graph can draw a branch
+    but not explain it."""
+    from creditiq.models import versions as V
+    from creditiq.models.spec import ModelSpec, VariableSpec
+
+    monkeypatch.setattr(V, "VERSIONS_DIR", tmp_path)
+    parent_spec = ModelSpec(portfolio="consumer",
+                            variables=[VariableSpec("fico_orig"),
+                                       VariableSpec("dti")])
+    parent = V.save(parent_spec, {}, origin={"name": "tidy-bastion-29",
+                                             "rank": 3,
+                                             "config_hash": "40f74e2d"})
+    child_spec = ModelSpec(portfolio="consumer",
+                           variables=[VariableSpec("fico_orig")])
+    fork = {"reason_code": "sign_contradicts_history",
+            "justification": "dti fitted with the wrong sign.",
+            "change": "dti", "from_hash": parent.hash,
+            "from_name": parent.name, "from_kind": "version"}
+    child = V.save(child_spec, {}, parent_hash=parent.hash, fork=fork)
+
+    assert child.fork["reason_code"] == "sign_contradicts_history"
+    # The ROOT says where it entered the workspace, so it is not unexplained.
+    assert parent.origin["name"] == "tidy-bastion-29"
+    assert parent.origin["rank"] == 3
+
+    g = V.lineage("consumer")
+    edge = next(e for e in g["edges"] if e["to"] == child.hash)
+    assert edge["from"] == parent.hash
+    assert edge["change"] == "dti"
+    assert edge["reason_code"] == "sign_contradicts_history"
+    root = next(n for n in g["nodes"] if n["hash"] == parent.hash)
+    assert root["origin"]["rank"] == 3
+
+
+def test_a_fork_saved_without_a_parent_is_still_its_parents_child(tmp_path, monkeypatch):
+    """Confirming the fork gate clears the client's loaded marker, so the refit
+    request often arrives with NO parent_hash — only the fork note names the
+    version departed from. The graph must read that, or a fork saved right
+    after its parent shows up as a second unexplained root (the bug: 2
+    versions, 0 forks, rationale recorded but no arrow)."""
+    from creditiq.models import versions as V
+    from creditiq.models.spec import ModelSpec, VariableSpec
+
+    monkeypatch.setattr(V, "VERSIONS_DIR", tmp_path)
+    parent = V.save(ModelSpec("consumer", [VariableSpec("fico_orig"),
+                                           VariableSpec("dti")]), {})
+    fork = {"reason_code": "business_judgment",
+            "justification": "The client decided not to use WoE.",
+            "change": "dti", "from_hash": parent.hash,
+            "from_name": parent.name, "from_kind": "version"}
+    child = V.save(ModelSpec("consumer", [VariableSpec("fico_orig")]), {},
+                   parent_hash=None, fork=fork)
+
+    # save() normalizes: the fork names the parent.
+    assert child.parent_hash == parent.hash
+    edge = next(e for e in V.lineage("consumer")["edges"] if e["to"] == child.hash)
+    assert edge["from"] == parent.hash
+
+    # And a record already on disk from before the normalization (parent_hash
+    # missing in the file) is healed at read time by lineage(). update()
+    # treats None as "leave unchanged", so the legacy file is written directly.
+    import json
+    f = tmp_path / f"{child.hash}.json"
+    rec = json.loads(f.read_text())
+    rec["parent_hash"] = None
+    f.write_text(json.dumps(rec))
+    assert V.load(child.hash).parent_hash is None
+    edge = next(e for e in V.lineage("consumer")["edges"] if e["to"] == child.hash)
+    assert edge["from"] == parent.hash
+
+    # A fork from a SELECTION row is not version parentage.
+    sel_fork = dict(fork, from_kind="selection", from_hash="cafecafecafecafe")
+    lone = V.save(ModelSpec("consumer", [VariableSpec("dti")]), {},
+                  parent_hash=None, fork=sel_fork)
+    assert lone.parent_hash is None

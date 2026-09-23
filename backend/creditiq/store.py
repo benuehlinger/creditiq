@@ -12,6 +12,7 @@ model surface would silently produce a perfect model in front of a client.
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -19,11 +20,24 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from .data import tapes
 from .data.portfolios import PORTFOLIOS
 from .data.spec import PortfolioSpec
 
 DATA = Path(__file__).resolve().parents[2] / "data" / "synthetic"
 _BUILD_REPORT = DATA / "build_report.json"
+
+# Ingested books re-register on import, so a restart finds the same books an
+# upload created. Synthetic books need no such step: they are compiled in.
+tapes.register_all()
+
+
+def _panel_dir(key: str) -> Path:
+    """Where this book's parquet lives: ingested tapes beside the synthetic
+    books, resolved per key so every reader below stays one code path."""
+    if (tapes.TAPES_DIR / f"{key}_panel.parquet").exists():
+        return tapes.TAPES_DIR
+    return DATA
 
 # The mtime of the build report the caches were filled against. The panels can
 # be rebuilt UNDER a running server — `make data` in another terminal, or the
@@ -62,26 +76,67 @@ class Portfolio:
 
 
 def available() -> list[str]:
-    return [k for k in PORTFOLIOS if (DATA / f"{k}_panel.parquet").exists()]
+    return [k for k in PORTFOLIOS
+            if (_panel_dir(k) / f"{k}_panel.parquet").exists()]
+
+
+# One load per book at a time. lru_cache memoizes results but does NOT
+# serialize concurrent misses: a surface's first visit fires several requests
+# at once, each missed the cache, and each loaded the same multi-hundred-MB
+# panel in its own thread — minutes of GIL thrash that starved every other
+# request, the health probe included. The lock makes the second caller wait
+# for the first caller's load instead of repeating it. Reentrant, because the
+# derived-frame builders call load() themselves.
+_KEY_LOCKS: dict[str, threading.RLock] = {}
+_KEY_LOCKS_GUARD = threading.Lock()
+
+# How long a request may wait for another request's load of the same book.
+# Generous — a cold 22M-row panel takes about a minute — but FINITE. An
+# unbounded wait is how one wedged loader thread turned into a pile of
+# parked request handlers and, past the worker pool's size, a server that
+# answered nothing at all, health probe included.
+LOCK_TIMEOUT_S = 180
+
+
+def _key_lock(key: str) -> threading.RLock:
+    with _KEY_LOCKS_GUARD:
+        return _KEY_LOCKS.setdefault(key, threading.RLock())
+
+
+def _locked(key: str, fn):
+    lk = _key_lock(key)
+    if not lk.acquire(timeout=LOCK_TIMEOUT_S):
+        raise RuntimeError(
+            f"the {key} book has been loading in another request for over "
+            f"{LOCK_TIMEOUT_S}s. Retry shortly; if this repeats, restart the "
+            "server.")
+    try:
+        return fn()
+    finally:
+        lk.release()
 
 
 def load(key: str) -> Portfolio:
     _check_current()
-    return _load(key)
+    return _locked(key, lambda: _load(key))
 
 
 @lru_cache(maxsize=8)
 def _load(key: str) -> Portfolio:
     if key not in PORTFOLIOS:
         raise KeyError(f"unknown portfolio {key!r}")
-    p = pd.read_parquet(DATA / f"{key}_panel.parquet")
-    a = pd.read_parquet(DATA / f"{key}_accounts.parquet")
+    d = _panel_dir(key)
+    p = pd.read_parquet(d / f"{key}_panel.parquet")
+    a = pd.read_parquet(d / f"{key}_accounts.parquet")
     for df in (p, a):
         drop = [c for c in df.columns if c.startswith("_truth")]
         if drop:
             df.drop(columns=drop, inplace=True)
     p["performance_date"] = pd.to_datetime(p["performance_date"])
-    a["origination_date"] = pd.to_datetime(a["origination_date"])
+    # An ingested tape may carry no origination date at all; the synthetic
+    # books always do. Parse what exists, require nothing extra here.
+    if "origination_date" in a.columns:
+        a["origination_date"] = pd.to_datetime(a["origination_date"])
     return Portfolio(PORTFOLIOS[key], _compact(p), _compact(a))
 
 
@@ -116,7 +171,7 @@ def _compact(df: pd.DataFrame) -> pd.DataFrame:
 
 def analysis_frame(key: str) -> pd.DataFrame:
     _check_current()
-    return _analysis_frame(key)
+    return _locked(key, lambda: _analysis_frame(key))
 
 
 @lru_cache(maxsize=8)
@@ -137,7 +192,7 @@ SCREEN_ROWS = 300_000
 
 def screening_frame(key: str, n: int = SCREEN_ROWS) -> tuple[pd.DataFrame, bool]:
     _check_current()
-    return _screening_frame(key, n)
+    return _locked(key, lambda: _screening_frame(key, n))
 
 
 @lru_cache(maxsize=8)

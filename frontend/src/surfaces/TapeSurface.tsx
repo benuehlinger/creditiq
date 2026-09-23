@@ -1,0 +1,327 @@
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { api, type TapeInspection } from '../lib/api'
+import { blessFingerprintChange } from '../lib/fingerprint'
+import { num } from '../lib/format'
+import { Card, CardHead, Field, Notice } from '../components/ui'
+
+/** Loan tape ingestion — the validation gate.
+ *
+ *  The file must already be a panel: one row per account per month. This
+ *  surface maps the seller's column names onto the canonical schema, asks
+ *  the four questions the synthetic books hardcode, and registers the book.
+ *  It refuses clearly when the file is not a panel — panel CONSTRUCTION is
+ *  deliberately not offered here (docs/CECL-FORK.md has the boundary).
+ */
+export default function TapeSurface() {
+  const nav = useNavigate()
+  const qc = useQueryClient()
+  const fileRef = useRef<HTMLInputElement>(null)
+  const [report, setReport] = useState<TapeInspection | null>(null)
+  const [dragging, setDragging] = useState(false)
+  const [mapping, setMapping] = useState<Record<string, string | null>>({})
+  const [label, setLabel] = useState('')
+  const [key, setKey] = useState('')
+  const [keyTouched, setKeyTouched] = useState(false)
+  const [definition, setDefinition] = useState('')
+  const [lgdDefinition, setLgdDefinition] = useState('')
+  const [ead, setEad] = useState<'amortizing' | 'ccf'>('amortizing')
+  const [oot, setOot] = useState('2023-01-01')
+
+  // Replacing an existing book: the previous answers and mapping are carried
+  // in, so correcting one column or loading next quarter's file is a glance
+  // rather than the whole form again. The mapping still has to be confirmed
+  // against the NEW file's columns — a seller can change their headers.
+  const [params] = useSearchParams()
+  const replacing = params.get('replace')
+  const prior = useQuery({ queryKey: ['tapes'], queryFn: api.tapes,
+                           enabled: !!replacing })
+  const priorRec = prior.data?.tapes.find((t) => t.key === replacing)
+  useEffect(() => {
+    if (!priorRec || key) return
+    setKey(priorRec.key); setKeyTouched(true); setLabel(priorRec.label)
+    setDefinition(priorRec.target.description)
+    setEad(priorRec.ead_method === 'ccf' ? 'ccf' : 'amortizing')
+    setOot(priorRec.default_oot_from)
+  }, [priorRec, key])
+
+  const inspect = useMutation({
+    mutationFn: (f: File) => api.tapeInspect(f),
+    onSuccess: (r) => {
+      setReport(r)
+      // The prior mapping wins where the new file still has that column;
+      // suggestions fill the rest. A replacement is usually the same layout.
+      const have = new Set(r.columns.map((c) => c.name))
+      setMapping(priorRec
+        ? { ...r.suggested_mapping,
+            ...Object.fromEntries(Object.entries(priorRec.mapping)
+              .filter(([, orig]) => have.has(orig as string))) }
+        : r.suggested_mapping)
+      const base = r.filename.replace(/\.[^.]+$/, '')
+      setLabel(base.replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()))
+      if (!keyTouched) setKey(slug(base))
+    },
+  })
+
+  const ingest = useMutation({
+    mutationFn: () => api.tapeIngest({
+      token: report!.token, key, label, mapping,
+      default_definition: definition.trim(),
+      lgd_definition: lgdDefinition.trim(),
+      ead_method: ead, oot_from: oot,
+    }),
+    onSuccess: (rec) => {
+      // This tab caused the fingerprint to change; the shell adopts it
+      // rather than reloading out from under the arrival on the new book.
+      blessFingerprintChange()
+      qc.invalidateQueries({ queryKey: ['portfolios'] })
+      qc.invalidateQueries({ queryKey: ['health'] })
+      nav(`/${rec.key}/panel`)
+    },
+  })
+
+  // What the running ingest is doing right now. A 20-million-row tape spends
+  // real seconds reading, checking and writing; naming the stage (with the
+  // row counts) is what separates visible work from an apparent hang.
+  const progress = useQuery({
+    queryKey: ['ingest-progress', report?.token],
+    queryFn: () => api.tapeIngestProgress(report!.token),
+    enabled: ingest.isPending && !!report?.token,
+    refetchInterval: 700,
+    gcTime: 0,
+    staleTime: 0,
+  })
+
+  const missing = useMemo(() => {
+    if (!report) return []
+    return report.schema.filter((s) => s.required && !mapping[s.name])
+      .map((s) => s.name)
+  }, [report, mapping])
+
+  const taken = useMemo(() => new Set(Object.values(mapping).filter(Boolean)),
+                        [mapping])
+
+  // Everything the ingest button is waiting on, by name. The button being
+  // disabled is a state; WHY it is disabled must be on screen.
+  const outstanding = [
+    ...(missing.length ? [`map ${missing.join(', ')}`] : []),
+    ...(label ? [] : ['a display name']),
+    ...(key ? [] : ['a key']),
+    ...(definition.trim() ? [] : ['the default definition']),
+    ...(mapping.lgd_realised && !lgdDefinition.trim()
+      ? ['what lgd_realised means on this tape'] : []),
+  ]
+
+  return (
+    <div className="mx-auto max-w-[1100px] space-y-3 px-4 py-4">
+      <Card>
+        <CardHead title="Load a loan tape"
+          subtitle="CSV or parquet, already at monthly account grain"
+          caption="One row per account per month, with a 0/1 default flag. This surface validates a panel; converting a snapshot or raw performance file into account-months is a documented data-preparation step outside it." />
+        {/* A drop target as well as a picker: a tape arrives as a file on
+            someone's desktop, and dragging it here is the shorter path. */}
+        <div className="px-4 pb-4">
+          <input ref={fileRef} type="file" accept=".csv,.parquet,.pq"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0]
+              if (f) inspect.mutate(f)
+            }} />
+          {/* Once a file is read, the tall drop target has done its job: it
+              collapses to one line naming the file, and the mapping below is
+              what the eye should land on. A different file is one click away. */}
+          {report && !inspect.isPending ? (
+            <div className="flex items-center justify-between gap-3 rounded-card border border-hairline px-3 py-2">
+              <p className="min-w-0 truncate text-xs text-ink-secondary">
+                <span className="font-mono text-ink">{report.filename}</span>
+                {' · '}{num(report.n_rows)} rows · {report.n_columns} columns
+              </p>
+              <button onClick={() => fileRef.current?.click()}
+                className="shrink-0 rounded-ctl border border-hairline px-2 py-1 text-tiny text-ink-secondary hover:text-ink">
+                Choose a different file
+              </button>
+            </div>
+          ) : (
+            <div
+              onDragOver={(e) => { e.preventDefault(); setDragging(true) }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={(e) => {
+                e.preventDefault()
+                setDragging(false)
+                const f = e.dataTransfer.files?.[0]
+                if (f) inspect.mutate(f)
+              }}
+              onClick={() => fileRef.current?.click()}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') fileRef.current?.click() }}
+              className={`flex cursor-pointer flex-col items-center gap-1 rounded-card border border-dashed px-4 py-7 text-center transition-colors ${
+                dragging ? 'border-accent bg-accent-soft' : 'border-hairline hover:border-accent'
+              }`}>
+              <span className="text-sm font-medium text-ink">
+                {inspect.isPending ? 'Reading the file…'
+                  : dragging ? 'Drop to read it'
+                  : 'Drag a tape here, or click to choose one'}
+              </span>
+              <span className="text-tiny text-ink-muted">CSV or parquet</span>
+            </div>
+          )}
+          {inspect.isError && (
+            <p className="mt-2 text-xs" style={{ color: 'var(--status-critical)' }}>
+              {String((inspect.error as Error).message)}
+            </p>
+          )}
+        </div>
+      </Card>
+
+      {report && (
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_320px]">
+          <Card>
+            <CardHead title="Column mapping"
+              subtitle="Their names, onto the canonical schema"
+              caption="Suggested mappings follow common seller conventions; confirm or correct them. Unmapped columns are retained under their own names as candidate drivers." />
+            {missing.length > 0 && (
+              <p className="px-4 pb-2 text-xs" style={{ color: 'var(--status-warning)' }}>
+                Still required: {missing.join(', ')}
+              </p>
+            )}
+            <div className="thin-scroll max-h-[520px] overflow-auto px-4 pb-4">
+              <table className="w-full text-left text-xs">
+                <thead className="sticky top-0 bg-surface text-tiny text-ink-muted">
+                  <tr>
+                    <th className="py-1.5 pr-2 font-medium">Canonical field</th>
+                    <th className="py-1.5 pr-2 font-medium">Their column</th>
+                    <th className="py-1.5 font-medium">What it is for</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.schema.map((item) => (
+                    <tr key={item.name} className="border-t border-hairline align-top">
+                      <td className="py-1.5 pr-2">
+                        <span className="font-mono text-micro text-ink">{item.name}</span>
+                        {item.required && (
+                          <span className="ml-1 text-micro"
+                                style={{ color: 'var(--status-warning)' }}>required</span>
+                        )}
+                      </td>
+                      <td className="py-1.5 pr-2">
+                        <select value={mapping[item.name] ?? ''}
+                          onChange={(e) => setMapping((m) =>
+                            ({ ...m, [item.name]: e.target.value || null }))}
+                          className="w-44 rounded-ctl border border-hairline bg-surface px-1.5 py-1 text-micro">
+                          <option value="">not in this file</option>
+                          {report.columns.map((c) => (
+                            <option key={c.name} value={c.name}
+                              disabled={taken.has(c.name) && mapping[item.name] !== c.name}>
+                              {c.name}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="py-1.5 text-micro leading-relaxed text-ink-secondary">
+                        {item.about}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+
+          <div className="space-y-3">
+            <Card>
+              <CardHead title="About this book"
+                caption="Definitions the analysis depends on. Each is stated at ingestion and recorded with the book." />
+              <div className="space-y-3 px-4 pb-4">
+                <Field label="Display name">
+                  <input value={label} onChange={(e) => {
+                      setLabel(e.target.value)
+                      if (!keyTouched) setKey(slug(e.target.value))
+                    }}
+                    className="w-full rounded-ctl border border-hairline bg-surface px-2 py-1.5 text-xs" />
+                </Field>
+                <Field label="Key (short, permanent)">
+                  <input value={key}
+                    onChange={(e) => { setKeyTouched(true); setKey(slug(e.target.value)) }}
+                    className="w-full rounded-ctl border border-hairline bg-surface px-2 py-1.5 font-mono text-xs" />
+                </Field>
+                <Field label="What does default mean on this tape?"
+                  hint="In your own words. The app cannot read this from a column of ones and zeroes, and every figure it reports is measured against it.">
+                  <input value={definition}
+                    onChange={(e) => setDefinition(e.target.value)}
+                    placeholder="90+ days past due or charge-off"
+                    className="w-full rounded-ctl border border-hairline bg-surface px-2 py-1.5 text-xs" />
+                </Field>
+                {mapping.lgd_realised && (
+                  <Field label="How is LGD calculated on this tape?"
+                    hint="Recoveries to date or to resolution, gross or net of costs, discounted or not. The app takes your figure as given and records how you arrived at it.">
+                    <input value={lgdDefinition}
+                      onChange={(e) => setLgdDefinition(e.target.value)}
+                      placeholder="net of repossession costs, to resolution, undiscounted"
+                      className="w-full rounded-ctl border border-hairline bg-surface px-2 py-1.5 text-xs" />
+                  </Field>
+                )}
+                <Field label="Exposure method">
+                  <select value={ead}
+                    onChange={(e) => setEad(e.target.value as 'amortizing' | 'ccf')}
+                    className="w-full rounded-ctl border border-hairline bg-surface px-2 py-1.5 text-xs">
+                    <option value="amortizing">Amortising loans</option>
+                    <option value="ccf">Revolving commitments (CCF)</option>
+                  </select>
+                </Field>
+                <Field label="Out-of-time window starts">
+                  <input type="date" value={oot} onChange={(e) => setOot(e.target.value)}
+                    className="w-full rounded-ctl border border-hairline bg-surface px-2 py-1.5 text-xs" />
+                </Field>
+              </div>
+            </Card>
+
+            <Card>
+              <div className="space-y-2 px-4 py-4">
+                <button
+                  disabled={ingest.isPending || outstanding.length > 0}
+                  onClick={() => ingest.mutate()}
+                  className="w-full rounded-ctl bg-accent px-3 py-2 text-xs font-semibold text-white disabled:opacity-40">
+                  {ingest.isPending ? 'Validating and registering…' : 'Validate and add this book'}
+                </button>
+                {ingest.isPending && (
+                  <p className="flex items-center gap-2 text-xs text-ink-secondary">
+                    <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-accent" />
+                    {progress.data?.stage ?? 'Validating the file'}
+                    {progress.data?.elapsed_s != null && (
+                      <span className="text-ink-muted">· {Math.round(progress.data.elapsed_s)}s</span>
+                    )}
+                  </p>
+                )}
+                {/* A disabled button with no reason reads as broken. The one
+                    line under it names exactly what is still required. */}
+                {outstanding.length > 0 && !ingest.isPending && (
+                  <p className="text-xs" style={{ color: 'var(--status-warning)' }}>
+                    Still needed: {outstanding.join(' · ')}
+                  </p>
+                )}
+                {ingest.isError && (
+                  <Notice severity="critical" label="The tape was refused">
+                    {String((ingest.error as Error).message)}
+                  </Notice>
+                )}
+                {outstanding.length === 0 && (
+                  <p className="text-micro leading-relaxed text-ink-muted">
+                    Validation refuses duplicate account-months, unparseable
+                    dates and a non-0/1 default flag. Judgement findings land
+                    on the Panel surface.
+                  </p>
+                )}
+              </div>
+            </Card>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+const slug = (s: string) =>
+  s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+    .replace(/^[^a-z]+/, '').slice(0, 24)

@@ -140,19 +140,36 @@ def check_integrity(panel: pd.DataFrame, spec: PortfolioSpec) -> list[dict]:
         else f"{gaps:,} breaks in the monthly sequence. A missing month is not the "
              f"same as a censored account and will bias a hazard model.", gaps)
 
-    last = s.groupby("account_id")["performance_date"].transform("max")
-    term = s["terminal_event"].isin(["default", "payoff", "matured"])
-    after = int((term & (s["performance_date"] != last)).sum())
-    add("No rows after a terminal event", after == 0, "critical",
-        "Accounts stop at their terminal event." if after == 0
-        else f"{after:,} rows recorded after a terminal event. These inflate the "
-             f"denominator and depress every rate.", after)
+    # Ingested tapes usually carry no terminal_event column; the target-fires-
+    # once check below still catches survival past a default.
+    if "terminal_event" in s.columns:
+        last = s.groupby("account_id")["performance_date"].transform("max")
+        term = s["terminal_event"].isin(["default", "payoff", "matured"])
+        after = int((term & (s["performance_date"] != last)).sum())
+        add("No rows after a terminal event", after == 0, "critical",
+            "Accounts stop at their terminal event." if after == 0
+            else f"{after:,} rows recorded after a terminal event. These inflate the "
+                 f"denominator and depress every rate.", after)
 
     neg = int((panel["current_balance"] < 0).sum())
     add("Balances are non-negative", neg == 0, "serious",
         "No negative balances." if neg == 0
         else f"{neg:,} negative balance(s). A balance cannot be below zero; this "
              f"is a data error, not a credit.", neg)
+
+    # For a default model the history must STOP at default: rows recorded
+    # after an account's default month survive into the non-event denominator
+    # and depress every rate. Reported, not refused — the model still fits,
+    # and the finding tells the user what their number is standing on.
+    first_def = (panel.loc[panel[spec.target.column] == 1]
+                 .groupby("account_id")["performance_date"].min())
+    fd = panel["account_id"].map(first_def)
+    after_def = int((fd.notna() & (panel["performance_date"] > fd)).sum())
+    add("History stops at default", after_def == 0, "serious",
+        "No account has performance rows after its default month." if after_def == 0
+        else f"{after_def:,} rows recorded after the account's default month. "
+             f"For a default model the history must stop at default; these rows "
+             f"sit in the denominator and depress every rate.", after_def)
 
     tgt = panel[spec.target.column]
     multi = int((panel.groupby("account_id")[spec.target.column].sum() > 1).sum())
@@ -173,10 +190,13 @@ def check_integrity(panel: pd.DataFrame, spec: PortfolioSpec) -> list[dict]:
         + ("" if span >= 3 else " Under three years leaves no room for an "
                                "out-of-time split."))
 
-    fut = int((panel["performance_date"] < panel["origination_date"]).sum())
-    add("No performance before origination", fut == 0, "critical",
-        "No account is observed before it was booked." if fut == 0
-        else f"{fut:,} rows dated before origination.", fut)
+    # origination_date is optional on an ingested tape; without it this check
+    # has nothing to compare and is skipped rather than crashed.
+    if "origination_date" in panel.columns:
+        fut = int((panel["performance_date"] < panel["origination_date"]).sum())
+        add("No performance before origination", fut == 0, "critical",
+            "No account is observed before it was booked." if fut == 0
+            else f"{fut:,} rows dated before origination.", fut)
     return issues
 
 

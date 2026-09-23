@@ -195,12 +195,9 @@ export default function SpecificationCard({ r, onOpenVariable }: {
                     account-age baseline
                   </td>
                   <td colSpan={7} className="px-3 py-1.5 text-tiny text-ink-muted">
-                    The account-age baseline, switched on in the fit controls above:
-                    a curve on months on book capturing how default risk varies with
-                    loan age, so the selected variables do not absorb that pattern.
-                    Fitted as {seasoning.length} combined columns; only the whole
-                    curve is meaningful, and it is plotted under Fit diagnostics.
-                    Selecting months_on_book as a variable replaces it.
+                    Seasoning spline on months_on_book: {seasoning.length} basis
+                    columns fitted as one block. The fitted curve is under
+                    Fit diagnostics.
                   </td>
                 </tr>
               )}

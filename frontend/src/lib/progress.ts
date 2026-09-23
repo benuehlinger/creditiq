@@ -85,6 +85,10 @@ export interface ProgressInput {
   /** `pdHash:lgdHash` of the model this book was last projected on. */
   projected?: string | null
   loaded: { hash: string; name: string } | null
+  /** False on a book that mapped no realised severity: its LGD stage is a
+   *  declared assumption, and the call to action must say so rather than
+   *  send the reader to select drivers that cannot be screened. */
+  hasSeverity?: boolean
   shortlisted: number
   /** The last completed automated variable search on this book, if any. */
   selection?: { nModels: number } | null
@@ -120,6 +124,7 @@ export function useProgress(portfolio: string | undefined) {
   const picked = pdSpec ? columns(pdSpec) : (NONE as string[])
   const specNow = pdSpec ? canonical(pdSpec) : undefined
 
+  const books = useQuery({ queryKey: ['portfolios'], queryFn: api.portfolios })
   const origin = useQuery({
     queryKey: ['version', loaded?.hash],
     queryFn: () => api.version(loaded!.hash),
@@ -140,6 +145,7 @@ export function useProgress(portfolio: string | undefined) {
     lgd: lgd ? { hash: lgd.hash, spec: lgd.spec } : null,
     projected,
     loaded: loaded ? { hash: loaded.hash, name: loaded.name } : null,
+    hasSeverity: books.data?.find((b) => b.key === pk)?.has_severity,
     shortlisted: (shortlist?.pd.length ?? 0) + (shortlist?.lgd.length ?? 0),
     selection: selectionRun ? { nModels: selectionRun.nModels } : null,
     originVars: spec ? (spec.variables ?? []).map((v: any) => v.column) : null,
@@ -241,11 +247,13 @@ export function computeProgress(inp: ProgressInput) {
         : `PD ${fitted.hash}`,
     },
     {
-      to: 'lgd', id: 'lgd/explore', label: 'LGD drivers', parent: 'lgd',
+      to: 'lgd', id: 'lgd/explore', parent: 'lgd',
+      label: inp.hasSeverity === false ? 'Severity assumption' : 'LGD drivers',
       state: lgdAssumed ? 'done'
         : !currentLgd.length ? 'todo'
         : originLgd && !sameSet(originLgd, currentLgd) ? 'changed' : 'done',
       note: lgdAssumed ? 'severity assumed, no drivers'
+        : inp.hasSeverity === false ? 'no severity declared'
         : currentLgd.length ? `${currentLgd.length} drivers selected` : 'no drivers selected',
     },
     {
@@ -309,7 +317,8 @@ export function computeProgress(inp: ProgressInput) {
   const firstTodo = required.find((s) => s.state === 'todo')
   const NEXT_LABEL: Record<string, string> = {
     'pd/explore': 'Select PD variables', 'pd/fit': 'Fit the PD model',
-    'lgd/explore': 'Select LGD drivers', 'lgd/fit': 'Fit the LGD model',
+    'lgd/explore': inp.hasSeverity === false ? 'Declare the severity' : 'Select LGD drivers',
+    'lgd/fit': 'Fit the LGD model',
     data: 'Review the data',
   }
   // Drift gets no special call to action. A drifted model has ALREADY been
@@ -320,6 +329,12 @@ export function computeProgress(inp: ProgressInput) {
   const next = firstTodo ? { label: NEXT_LABEL[firstTodo.id ?? firstTodo.to] ?? firstTodo.label,
                     to: firstTodo.to }
     : changed > 0 ? { label: 'Save as a new version', to: 'versions' }
+    // Both halves fitted but never projected: the projection is the payoff
+    // of the whole chain, so it is offered before the save rather than
+    // skipped. Projection stays optional — saving without it still works
+    // from the Versions surface directly.
+    : complete && projectionLink !== 'current'
+      ? { label: 'Project the scenarios', to: 'scenarios' }
     : complete && !loaded ? { label: 'Save this model', to: 'versions' }
     : null
 

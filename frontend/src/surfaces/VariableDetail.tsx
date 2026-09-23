@@ -93,7 +93,6 @@ export default function VariableDetail({ portfolio, column }: {
     <div className="min-w-0 space-y-3">
     {binning.data && (
       <>
-        {uni.data && <Distribution d={uni.data} />}
         {binning.data.leakage_risk !== 'none' && (
           <LeakageBanner risk={binning.data.leakage_risk}
                          reason={binning.data.leakage_reason}
@@ -239,6 +238,12 @@ export default function VariableDetail({ portfolio, column }: {
           <BinStability portfolio={portfolio} column={binning.data.column}
                         edges={binning.data.edges ?? undefined} />
         )}
+
+        {/* The column on its own. BELOW the shape view, because the shape is
+            what the treatment is chosen from and this is the reference a
+            reader reaches for when the shape surprises them. Collapsed, so
+            it never pushes that decision off the screen. */}
+        {uni.data && <Distribution d={uni.data} />}
 
       </>
     )}
@@ -409,11 +414,35 @@ function BinTable({ b, selected, onSelect }: {
  *  much of the column sits on one value, and how much of it is missing. Each
  *  finding names the treatment that answers it. */
 function Distribution({ d }: { d: import('../lib/api').Univariate }) {
+  const [open, setOpen] = useState(false)
+  const worst = d.findings.find((f) => f.severity === 'serious'
+                                    || f.severity === 'critical')
   const fmt = (v: number | undefined) =>
     v == null ? '—'
       : Math.abs(v) >= 1000 ? v.toLocaleString(undefined, { maximumFractionDigits: 0 })
       : Math.abs(v) >= 1 ? v.toFixed(2) : v.toPrecision(3)
   const P = d.percentiles ?? {}
+  if (!open) {
+    return (
+      <Card>
+        <button onClick={() => setOpen(true)}
+          className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-sunken/40">
+          <span className="text-sm font-medium text-ink">View univariate information</span>
+          <span className="text-tiny text-ink-muted">
+            {d.kind === 'numeric'
+              ? `distribution, percentiles, repeated values · ${num(d.n)} values`
+              : `level shares and concentration · ${d.n_unique} levels`}
+          </span>
+          {/* A serious finding is not worth hiding behind a closed panel. */}
+          {worst && (
+            <StatusPill severity={worst.severity}>{worst.label}</StatusPill>
+          )}
+          <span className="ml-auto text-tiny text-ink-muted">Show</span>
+        </button>
+      </Card>
+    )
+  }
+
   return (
     <Card>
       <CardHead title="Distribution"
@@ -421,8 +450,12 @@ function Distribution({ d }: { d: import('../lib/api').Univariate }) {
           ? `${num(d.n)} values · ${num(d.n_unique)} distinct`
           : `${num(d.n)} values · ${d.n_unique} levels`}
         caption={d.kind === 'numeric'
-          ? 'The column on its own, before any relationship to default. Percentiles describe a skewed column honestly where a mean and a standard deviation do not.'
-          : 'Level shares, and how much of the book sits in the long thin tail that binning has to collapse.'} />
+          ? 'The marginal distribution, before any relationship to default. Percentiles characterise a skewed column where a mean and standard deviation do not.'
+          : 'Level shares, and how much of the book sits in the long thin tail that binning has to collapse.'}
+        right={<button onClick={() => setOpen(false)}
+          className="rounded-ctl border border-hairline px-2.5 py-1 text-tiny text-ink-secondary hover:text-ink">
+          Hide
+        </button>} />
 
       {d.findings.length > 0 && (
         <div className="space-y-1.5 px-4 pb-3">
@@ -447,6 +480,17 @@ function Distribution({ d }: { d: import('../lib/api').Univariate }) {
             <StatTile label="Missing" value={`${(d.missing_pct ?? 0).toFixed(1)}%`}
               explain="Missing takes its own bin and its own weight of evidence. It is not imputed." />
           </div>
+          <div className="grid grid-cols-2 divide-x divide-hairline border-t border-hairline md:grid-cols-4">
+            <StatTile label="Std deviation" value={fmt(d.std)}
+              explain="Root mean squared distance from the mean. On a skewed column it is inflated by the tail; the median absolute deviation beside it is not." />
+            <StatTile label="Median abs deviation" value={fmt(d.mad)}
+              explain="Median distance from the median. A robust spread: no single extreme value can move it." />
+            <StatTile label="IQR" value={fmt(d.iqr)}
+              explain="p75 less p25 — the width of the middle half of the column." />
+            <StatTile label="p99 / median"
+              value={d.p99_over_p50 == null ? '—' : `${d.p99_over_p50.toFixed(1)}x`}
+              explain="How far the top of the column runs past its middle. Near 1 is a tight column; large means a long right tail." />
+          </div>
           <div className="thin-scroll overflow-x-auto px-4 py-3">
             <table className="w-full text-left text-micro">
               <thead className="text-ink-muted">
@@ -464,7 +508,25 @@ function Distribution({ d }: { d: import('../lib/api').Univariate }) {
                 </tr>
               </tbody>
             </table>
+            {(d.top_values?.length ?? 0) > 0 && (
+              <div className="mt-3">
+                <p className="mb-1 text-micro font-medium uppercase tracking-wide text-ink-muted"
+                   title="The values this column repeats most. A histogram spreads a repeated value across a bar and a percentile table steps over it; a sentinel code for 'unknown' is only visible here.">
+                  Most repeated values
+                </p>
+                <div className="flex flex-wrap gap-x-5 gap-y-1">
+                  {d.top_values!.map((t) => (
+                    <span key={t.value} className="text-micro tnum text-ink-secondary">
+                      <span className="text-ink">{fmt(t.value)}</span>
+                      {' '}· {num(t.count)} ({t.pct.toFixed(1)}%)
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
             <p className="mt-2 text-micro leading-relaxed text-ink-muted">
+              {d.integral && <>Whole numbers only · </>}
+              Range {fmt(d.range)} ·{' '}
               Most common value {fmt(d.mode)}, held by {(d.mode_share_pct ?? 0).toFixed(0)}% of rows
               {(d.zero_pct ?? 0) > 0 && <> · {(d.zero_pct ?? 0).toFixed(0)}% exactly zero</>}
               {(d.negative_pct ?? 0) > 0 && <> · {(d.negative_pct ?? 0).toFixed(1)}% negative</>}
@@ -527,9 +589,12 @@ function HistogramPair({ d }: { d: import('../lib/api').Univariate }) {
         : Math.abs(v) >= 1 ? v.toFixed(0) : v.toPrecision(2)
     return {
       ...baseOption(),
+      // Two stacked panels sharing an x. The rate panel had 84px for seven
+      // labels and they collided; both now get real height, with a gap
+      // between them so neither axis runs into the other's bars.
       grid: [
-        gridFor({ left: 62, right: 18, top: 10, bottom: hasRates ? 132 : 40 }),
-        ...(hasRates ? [gridFor({ left: 62, right: 18, top: 176, bottom: 40 })] : []),
+        gridFor({ left: 76, right: 20, top: 12, bottom: hasRates ? 224 : 44 }),
+        ...(hasRates ? [gridFor({ left: 76, right: 20, top: 250, bottom: 50 })] : []),
       ],
       tooltip: markTooltip((p: any) => {
         const i = p.dataIndex ?? 0
@@ -551,11 +616,11 @@ function HistogramPair({ d }: { d: import('../lib/api').Univariate }) {
       ],
       yAxis: [
         { ...(baseOption().yAxis as object), type: 'value' as const, gridIndex: 0,
-          ...yName('Account-months', 54),
+          ...yName('Account-months', 62), splitNumber: 4,
           axisLabel: { color: k.muted, fontSize: 10,
                        formatter: (v: number) => byUnit(v, 'count') } },
         ...(hasRates ? [{ ...(baseOption().yAxis as object), type: 'value' as const,
-          gridIndex: 1, ...yName('Default rate', 54),
+          gridIndex: 1, ...yName('Default rate', 62), splitNumber: 3,
           axisLabel: { color: k.muted, fontSize: 10,
                        formatter: (v: number) => `${(v * 100).toFixed(1)}%` } }] : []),
       ],
@@ -588,7 +653,7 @@ function HistogramPair({ d }: { d: import('../lib/api').Univariate }) {
                    { key: 'trim', label: '1st to 99th' }]} />
         )}
       </div>
-      <EChart option={opt} height={h.rates?.some((r) => r != null) ? 300 : 170}
+      <EChart option={opt} height={h.rates?.some((r) => r != null) ? 400 : 190}
         ariaLabel={`Distribution of ${d.column}`} />
     </div>
   )

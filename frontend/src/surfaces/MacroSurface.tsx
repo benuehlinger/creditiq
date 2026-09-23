@@ -7,7 +7,7 @@ import { Check, Cross, Info } from '../components/icons'
 import EChart from '../charts/EChart'
 import { baseOption, crosshairTooltip, lineSeries } from '../charts/base'
 import { deemphasis, ink, mode, series } from '../design/tokens'
-import { monthShort, num, ratio, monthLong } from '../lib/format'
+import { monthAxis, num, ratio, monthLong } from '../lib/format'
 import { useUi } from '../lib/store'
 
 /** Macro — the transformation search.
@@ -95,6 +95,24 @@ export default function MacroSurface() {
   if (lib.isLoading || !lib.data) return <div className="p-4"><Skeleton className="h-[560px]" /></div>
   const d = lib.data
   const nStationary = d.rows.filter((c) => c.stationary === true).length
+  if (d.pd_months === 0) {
+    // No month reached the row floor, so there is no monthly default-rate
+    // series to correlate against. An empty table read as "no macro term
+    // matters"; the truth is that nothing could be measured.
+    return (
+      <div className="p-4">
+        <Card>
+          <EmptyState title="This book is too small for a monthly default-rate series">
+            A month enters the series only when it carries at least{' '}
+            {num(d.min_month_rows ?? 500)} account-months, and no month on this
+            book does. Macro terms cannot be ranked against it, so the search
+            has no macro candidates to offer. The PD workbench can still fit
+            a specification without a macro term, but it cannot be stressed.
+          </EmptyState>
+        </Card>
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-3 p-4">
@@ -102,7 +120,7 @@ export default function MacroSurface() {
         <CardHead
           title="MEV: transformation search"
           subtitle={`${d.n_bases} supervisory variables × ${d.transforms.length} transforms × ${d.lags.length} lags · estimation window ${d.window[0].slice(0, 7)} to ${d.window[1].slice(0, 7)}`}
-          caption="Only variables with a published Federal Reserve forward path are offered, because a term with no projected path cannot be carried into a scenario."
+          caption="Only variables with a published Federal Reserve forward path are offered; a term without one cannot enter a scenario."
         />
         <div className="grid gap-3 border-t border-hairline p-3 sm:grid-cols-4">
           <StatTile label="Candidate terms" value={num(d.n_candidates)} />
@@ -110,8 +128,13 @@ export default function MacroSurface() {
             explain={`Augmented Dickey-Fuller p < ${d.adf_alpha}. The null is a unit root, so a small p-value is evidence against one.`} />
           <StatTile label="PD target" value={`${num(d.pd_months)} months`}
             explain="The monthly default rate on the log-odds scale, over the estimation window." />
-          <StatTile label="LGD target" value={`${num(d.lgd_defaults)} defaults`}
-            explain={`Severity is correlated per resolved default, with the macro term joined at the default month. This is the population the LGD model is estimated on. Those defaults fall in ${d.lgd_months} distinct months, which caps the effective sample size.`} />
+          {d.lgd_defaults === 0 ? (
+            <StatTile label="LGD target" value="none"
+              explain="No realised-severity column was mapped on this book, so there is no severity series to rank macro terms against. The LGD stage runs on a declared severity assumption." />
+          ) : (
+            <StatTile label="LGD target" value={`${num(d.lgd_defaults)} defaults`}
+              explain={`Severity is correlated per resolved default, with the macro term joined at the default month. This is the population the LGD model is estimated on. Those defaults fall in ${d.lgd_months} distinct months, which caps the effective sample size.`} />
+          )}
         </div>
       </Card>
 
@@ -164,7 +187,7 @@ export default function MacroSurface() {
       <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_460px]">
         <Card>
           <CardHead title="Candidates" subtitle={`Ranked by |correlation| with the ${target === 'pd' ? 'monthly default rate, on the log-odds scale' : 'monthly mean severity, on the logit scale'}`}
-            caption="Significance uses an effective sample size, not the raw month count. Two smooth monthly series carry far less independent information than the observation count implies." />
+            caption="Significance is assessed on an autocorrelation-adjusted effective sample size, not the raw month count." />
           {target === 'lgd' && d.lgd_defaults === 0 ? (
             /* No severity target to rank against. An empty table with no
                explanation reads as "no macro term matters here", which is a
@@ -266,7 +289,7 @@ export default function MacroSurface() {
         </Card>
 
         <div className="space-y-3">
-          {shown && detail.data && <SeriesChart d={detail.data}
+          {shown && detail.data && !(target === 'lgd' && d.lgd_defaults === 0) && <SeriesChart d={detail.data}
             label={rows.find((c) => c.column === shown)?.label ?? shown}
             unit={rows.find((c) => c.column === shown)?.unit ?? ''}
             target={target} />}
@@ -306,7 +329,7 @@ function SeriesChart({ d, label, unit, target }: {
              name: 'Reporting month', nameLocation: 'middle' as const, nameGap: 30,
              nameTextStyle: { color: ink(m).muted, fontSize: 10 },
              axisLabel: { ...(baseOption().xAxis as any).axisLabel,
-                          formatter: (v: string) => monthShort(v), interval: 35 } },
+                          ...monthAxis(months.length) } },
     // ONE axis, in standard deviations. Both series are z-scored, which is what
     // makes a shared axis honest — see the caption.
     yAxis: { ...baseOption().yAxis, type: 'value' as const, scale: true,
@@ -339,7 +362,7 @@ function SeriesChart({ d, label, unit, target }: {
     <Card>
       <CardHead title="Candidate against the target"
         subtitle={`${d.key} · ${d.transform}${d.lag_months ? ` · lag ${d.lag_months}m` : ''}`}
-        caption="Both series are z-scored, so the single axis reads in standard deviations. Read timing and turning points, not levels. The tooltip carries the published value in its own units." />
+        caption="Both series are z-scored onto one axis in standard deviations; the tooltip carries published values in native units." />
       <div className="p-3">
         <EChart height={230} ariaLabel="Candidate macro term against the target series"
           option={option as any}
@@ -414,7 +437,7 @@ function Shortlist({ portfolio, rows }: { portfolio: PortfolioKey; rows: MacroCa
   return (
     <Card>
       <CardHead title="Shortlist"
-        caption="These appear as candidates in the Explore stage of each model. Selecting one here does not add it to a specification." />
+        caption="Shortlisted terms are the macro candidates offered to the Screen search and the model workbenches. Shortlisting does not add a term to any specification." />
       <Section t="pd" label="PD model" />
       <Section t="lgd" label="LGD model" />
     </Card>

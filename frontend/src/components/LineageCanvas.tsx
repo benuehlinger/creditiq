@@ -75,7 +75,21 @@ function layout(g: LineageGraph): { placed: Placed[]; w: number; h: number } {
 const reasonLabel = (code?: string | null) =>
   (code && FORK_REASONS[code]) || code || 'No reason code recorded'
 
-export default function LineageCanvas({ data }: { data: LineageGraph }) {
+/** What an arrow says. One change is worth naming; a list is not readable at
+ *  nine pixels, so several are counted and the panel carries the detail. */
+const edgeLabel = (e: { changes?: string[]; change?: string | null }) => {
+  const cs = e.changes?.length ? e.changes : e.change ? [e.change] : []
+  if (!cs.length) return 'forked'
+  return cs.length === 1 ? cs[0] : `${cs.length} changes`
+}
+
+export default function LineageCanvas({ data, onOpen }: {
+  data: LineageGraph
+  /** Load this version into the workspace. With a destination, also go
+   *  there; without one, stay — the hot-load that makes the PD, LGD and
+   *  Scenarios stages show the selected model on their next visit. */
+  onOpen?: (hash: string, dest?: 'pd' | 'lgd' | 'scenarios') => void
+}) {
   const { placed, w, h } = useMemo(() => layout(data), [data])
   const pos = useMemo(
     () => new Map(placed.map((p) => [p.node.hash, p])), [placed])
@@ -179,11 +193,13 @@ export default function LineageCanvas({ data }: { data: LineageGraph }) {
                           strokeWidth={on ? 2 : 1.25} />
                     <circle cx={x2 - 3} cy={y2} r={2.5}
                             fill={on ? 'var(--accent)' : 'var(--chrome-border-strong)'} />
-                    {/* the reason, on the edge: the graph explains itself */}
+                    {/* What changed, on the edge: the graph explains itself.
+                        One change is named; several are counted, because a
+                        list does not fit on an arrow — the panel has it. */}
                     <text x={mid} y={(y1 + y2) / 2 - 6} textAnchor="middle"
                           className="pointer-events-none"
                           style={{ fontSize: 9, fill: on ? 'var(--accent)' : 'var(--ink-muted)' }}>
-                      {e.change ? `− ${e.change}` : 'forked'}
+                      {edgeLabel(e)}
                     </text>
                   </g>
                 )
@@ -196,7 +212,12 @@ export default function LineageCanvas({ data }: { data: LineageGraph }) {
               const fromSearch = !!node.origin?.name
               return (
                 <button key={node.hash} data-node
-                        onClick={() => setSel({ kind: 'node', hash: node.hash })}
+                        onClick={() => {
+                          setSel({ kind: 'node', hash: node.hash })
+                          // Selecting a model IS opening it: the workbenches
+                          // show it from here on, without leaving this page.
+                          onOpen?.(node.hash)
+                        }}
                         style={{ left: x, top: y, width: NODE_W, height: NODE_H,
                                  borderColor: on ? 'var(--accent)'
                                    : champ ? 'var(--accent)' : 'var(--chrome-border)',
@@ -306,17 +327,37 @@ export default function LineageCanvas({ data }: { data: LineageGraph }) {
               )}
             </div>
 
+            {onOpen && (
+              <div className="border-t border-hairline pt-2">
+                <h5 className="mb-1.5 text-micro font-medium uppercase tracking-wide text-ink-muted">
+                  Open this model
+                </h5>
+                <div className="flex gap-1.5">
+                  {([['pd', 'PD'], ['lgd', 'LGD'], ['scenarios', 'Scenarios']] as const)
+                    .map(([dest, label]) => (
+                      <button key={dest}
+                        onClick={() => onOpen(detail.hash, dest)}
+                        className="rounded-ctl border border-hairline px-2.5 py-1 text-xs text-ink-secondary hover:text-ink">
+                        {label}
+                      </button>
+                    ))}
+                </div>
+              </div>
+            )}
+
             {(detail.fork?.reason_code || detail.fork?.justification) && (
               <div className="rounded-ctl border border-hairline p-2"
                    style={{ borderLeftWidth: 3, borderLeftColor: 'var(--accent)' }}>
                 <h5 className="mb-1 text-micro font-medium uppercase tracking-wide text-ink-muted">
                   Why it was changed
                 </h5>
-                {detail.fork.change && (
-                  <p className="mb-1 font-mono text-micro text-ink-secondary">
-                    {detail.fork.change}
+                {(detail.fork.changes?.length
+                  ? detail.fork.changes
+                  : detail.fork.change ? [detail.fork.change] : []).map((c) => (
+                  <p key={c} className="font-mono text-micro text-ink-secondary">
+                    {c}
                   </p>
-                )}
+                ))}
                 <p className="font-medium text-ink">{reasonLabel(detail.fork.reason_code)}</p>
                 {detail.fork.justification && (
                   <p className="mt-1 leading-relaxed text-ink-secondary">

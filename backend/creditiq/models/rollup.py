@@ -249,6 +249,11 @@ def run(scenarios: list[str] | None = None, with_tornado: bool = True,
             # key@transform@lag form the paths endpoint parses, so the roll-up
             # can show what each book's projection actually responds to.
             "mev_terms": [f"{m.key}@{m.transform}@{m.lag_months}" for m in spec.mevs],
+            # The severity half's macro exposures, for the PD|LGD lens on the
+            # what-the-models-respond-to view. Drivers written key@transform@lag
+            # are macro; plain columns are tape variables and stay out.
+            "lgd_mev_terms": [d for d in (spec.lgd.drivers if spec.lgd else [])
+                              if "@" in d],
             "capped": sr.capped,
             "extrapolation_flags": [e.key for e in sr.extrapolation if e.outside],
         })

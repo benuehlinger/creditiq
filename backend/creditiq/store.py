@@ -12,6 +12,7 @@ model surface would silently produce a perfect model in front of a client.
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -79,9 +80,45 @@ def available() -> list[str]:
             if (_panel_dir(k) / f"{k}_panel.parquet").exists()]
 
 
+# One load per book at a time. lru_cache memoizes results but does NOT
+# serialize concurrent misses: a surface's first visit fires several requests
+# at once, each missed the cache, and each loaded the same multi-hundred-MB
+# panel in its own thread — minutes of GIL thrash that starved every other
+# request, the health probe included. The lock makes the second caller wait
+# for the first caller's load instead of repeating it. Reentrant, because the
+# derived-frame builders call load() themselves.
+_KEY_LOCKS: dict[str, threading.RLock] = {}
+_KEY_LOCKS_GUARD = threading.Lock()
+
+# How long a request may wait for another request's load of the same book.
+# Generous — a cold 22M-row panel takes about a minute — but FINITE. An
+# unbounded wait is how one wedged loader thread turned into a pile of
+# parked request handlers and, past the worker pool's size, a server that
+# answered nothing at all, health probe included.
+LOCK_TIMEOUT_S = 180
+
+
+def _key_lock(key: str) -> threading.RLock:
+    with _KEY_LOCKS_GUARD:
+        return _KEY_LOCKS.setdefault(key, threading.RLock())
+
+
+def _locked(key: str, fn):
+    lk = _key_lock(key)
+    if not lk.acquire(timeout=LOCK_TIMEOUT_S):
+        raise RuntimeError(
+            f"the {key} book has been loading in another request for over "
+            f"{LOCK_TIMEOUT_S}s. Retry shortly; if this repeats, restart the "
+            "server.")
+    try:
+        return fn()
+    finally:
+        lk.release()
+
+
 def load(key: str) -> Portfolio:
     _check_current()
-    return _load(key)
+    return _locked(key, lambda: _load(key))
 
 
 @lru_cache(maxsize=8)
@@ -134,7 +171,7 @@ def _compact(df: pd.DataFrame) -> pd.DataFrame:
 
 def analysis_frame(key: str) -> pd.DataFrame:
     _check_current()
-    return _analysis_frame(key)
+    return _locked(key, lambda: _analysis_frame(key))
 
 
 @lru_cache(maxsize=8)
@@ -155,7 +192,7 @@ SCREEN_ROWS = 300_000
 
 def screening_frame(key: str, n: int = SCREEN_ROWS) -> tuple[pd.DataFrame, bool]:
     _check_current()
-    return _screening_frame(key, n)
+    return _locked(key, lambda: _screening_frame(key, n))
 
 
 @lru_cache(maxsize=8)

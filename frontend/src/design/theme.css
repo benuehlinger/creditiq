@@ -226,3 +226,11 @@
 @media (prefers-reduced-motion: reduce) {
   .swap-live { animation: none; }
 }
+
+/* ECharts tooltips: follow the live theme, whatever theme the chart was built
+   under. ECharts writes its colours inline, hence the !important. */
+.chart-tip {
+  background: var(--surface-raised) !important;
+  border-color: var(--chrome-border) !important;
+  color: var(--ink-primary) !important;
+}

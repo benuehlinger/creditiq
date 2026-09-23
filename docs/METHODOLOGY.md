@@ -15,11 +15,14 @@ the conditional probability that the account defaults in **that** month, given i
 has survived to it.
 
 ```
-logit( PD_i(t) ) = a + f(age_it) + B'x_i + G'z_t
+logit( PD_i(t) ) = a + B'x_i + G'z_t
 ```
 
-`f(age)` is a seasoning spline, `x_i` are borrower attributes, `z_t` are
-macroeconomic variables at that performance date.
+`x_i` are borrower attributes, `z_t` are macroeconomic variables at that
+performance date. Every term is selected by the analyst; nothing enters a
+specification automatically. Loan age (`months_on_book`) is offered as a
+candidate like any other driver — with spline treatment where the seasoning
+hump matters — and appears in the coefficient table when selected.
 
 This frame is chosen because lifetime expected credit loss needs a **term
 structure** of conditional probabilities. A model fitted on "did this account

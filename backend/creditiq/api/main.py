@@ -6,6 +6,7 @@ No key, no network, no configuration.
 
 from __future__ import annotations
 
+import hashlib as _hashlib
 import json
 from functools import lru_cache
 from pathlib import Path
@@ -86,6 +87,35 @@ def health():
 def portfolios():
     out = []
     for key in store.available():
+        s = PORTFOLIOS[key]
+        # An ingested book answers from its registry record: every figure
+        # below was computed once at ingestion. Loading the panel just to
+        # relist the books cost a minute on a large tape — the first thing a
+        # user saw after adding one was the whole app waiting on this loop.
+        rec = tapemod.record_for(key)
+        summary = (rec or {}).get("summary")
+        if summary:
+            out.append(_jsonable({
+                "key": key, "label": s.label, "accent_slot": s.accent_slot,
+                "source": "ingested",
+                "has_severity": summary["has_severity"],
+                "n_accounts": rec["n_accounts"], "n_rows": rec["n_rows"],
+                "n_defaults": summary["n_defaults"],
+                "annual_default_rate_pct": round(
+                    float(annualize(summary["monthly_default_rate"])), 3),
+                "window": summary["window"],
+                "oot_from": _book_oot_from(key),
+                "target": {"column": s.target.column, "label": s.target.label,
+                           "description": s.target.description},
+                "ead_method": s.ead_method, "ead_note": s.ead_note,
+                "mev_keys": PORTFOLIO_MEVS.get(key, s.mev_keys),
+                "drivers": sorted(set(s.numeric_betas)
+                                  | set(s.observed_aliases.values())
+                                  - set(s.observed_aliases)),
+                "categorical_drivers": list(s.categorical_betas),
+                "expected_signs": s.expected_signs,
+            }))
+            continue
         pf = store.load(key)
         s, p = pf.spec, pf.panel
         out.append(_jsonable({
@@ -102,6 +132,9 @@ def portfolios():
             "n_defaults": int(p[s.target.column].sum()),
             "annual_default_rate_pct": round(float(annualize(p[s.target.column].mean())), 3),
             "window": [p["performance_date"].min(), p["performance_date"].max()],
+            # One source of truth for the out-of-time boundary the workbenches
+            # propose: the book's own, stated at ingestion where there is one.
+            "oot_from": _book_oot_from(key),
             "target": {"column": s.target.column, "label": s.target.label,
                        "description": s.target.description},
             "ead_method": s.ead_method, "ead_note": s.ead_note,
@@ -593,10 +626,6 @@ def vif_for(key: str, columns: str = Query(...), treatments: str = Query("")):
         portfolio=key,
         variables=[VariableSpec(c, treatment=tmap.get(c, "woe")) for c in cols],  # type: ignore[arg-type]
         target_column=PORTFOLIOS[key].target.column,
-        # The seasoning basis is in every fitted design, so it belongs in the
-        # collinearity picture: it is seven columns of months on book, and a
-        # selected variable correlated with age competes with all of them.
-        seasoning_spline=True,
     )
     try:
         des = design.build(df, spec)
@@ -648,16 +677,62 @@ def prepare_portfolio(key: str):
     and stays opt-in."""
     if key not in PORTFOLIOS:
         raise HTTPException(404, f"unknown portfolio {key!r}")
+    with _WARM_LOCK:
+        if _WARM.get(key, {}).get("stage") not in (None, "", "ready", "failed"):
+            return {"status": "warming", "portfolio": key}
+        _WARM[key] = {"stage": "panel", "started": _time.time(), "error": ""}
+
+    def say(stage: str, error: str = "") -> None:
+        with _WARM_LOCK:
+            _WARM[key] = {"stage": stage, "error": error,
+                          "started": _WARM.get(key, {}).get("started", _time.time())}
 
     def run() -> None:
         try:
+            say("panel")
+            store.load(key)
+            say("frame")
             store.analysis_frame(key)
+            say("screen")
             _screen_all(key)
-        except Exception:                                               # noqa: BLE001
-            pass
+            say("ready")
+        except Exception as e:                                          # noqa: BLE001
+            say("failed", f"{type(e).__name__}: {e}")
 
     _threading.Thread(target=run, daemon=True).start()
     return {"status": "warming", "portfolio": key}
+
+
+# What a book's first visit is doing, so the surface can narrate it. A 22
+# million row tape takes the better part of a minute to read, join and screen,
+# and the page showed only pulsing skeletons for all of it — indistinguishable
+# from a hang.
+_WARM: dict[str, dict] = {}
+_WARM_LOCK = _threading.Lock()
+
+WARM_STAGES = [
+    ("panel", "Reading the panel"),
+    ("frame", "Joining account attributes"),
+    ("screen", "Screening the columns"),
+]
+
+
+@app.get("/api/portfolios/{key}/warm-status")
+def warm_status(key: str):
+    """Which stage this book's first load has reached, and for how long."""
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+    with _WARM_LOCK:
+        w = dict(_WARM.get(key) or {})
+    stage = w.get("stage") or ""
+    labels = dict(WARM_STAGES)
+    return {
+        "portfolio": key, "stage": stage,
+        "label": labels.get(stage, "Ready" if stage == "ready" else ""),
+        "stages": [{"key": k, "label": lbl} for k, lbl in WARM_STAGES],
+        "elapsed_s": round(_time.time() - w["started"], 1) if w.get("started") else None,
+        "error": w.get("error", ""),
+    }
 
 
 @app.get("/api/data/status")
@@ -773,7 +848,9 @@ class FitRequest(BaseModel):
     mevs: list[dict] = []
     estimator: str = "logistic"
     regularization: float = 1.0
-    seasoning_spline: bool = True
+    # Off unless the request carries a saved specification that recorded it:
+    # nothing enters a model automatically.
+    seasoning_spline: bool = False
     vintage_effect: bool = False
     test_fraction: float = 0.30
     oot_from: str = "2023-01-01"
@@ -946,6 +1023,291 @@ def fit_model(req: FitRequest):
     return _jsonable(_run_payload(r))
 
 
+# ── Fitting as a JOB ────────────────────────────────────────────────────────
+#
+# /api/fit above answers inside the request, which is right for the generated
+# panels: three million account-months fit in under ten seconds. It is wrong
+# for an ingested tape. The Santander book is twenty-two million account-months
+# and a fit is three to five minutes, and holding an HTTP request open that
+# long fails in four separate ways:
+#
+#   - the browser aborted at 45s and showed an error for work that was fine;
+#   - the abort disconnects the client, FastAPI cancels the handler, and the
+#     minutes already spent are DISCARDED — the retry starts from nothing;
+#   - a reverse proxy in front of this closes an idle connection long before
+#     five minutes, so the request never survives outside a dev machine;
+#   - closing the tab kills the run.
+#
+# So the long path submits a job and polls, the same shape /api/data/generate
+# already uses. The result is not returned by the poll: `modelsvc.run` caches
+# by specification hash, so once the job says done the client collects the
+# payload from /api/models/{hash} — one way for a finished model to be read,
+# whoever asks and whenever.
+#
+# Phases are reported as they start, so the bar shows where the fit actually
+# is rather than pacing itself off the previous run's timings.
+# One registry for every long job, whatever it computes. A job whose result
+# can be fetched by hash afterwards — a PD fit, read back from /models/{hash} —
+# leaves `result` empty. A job with nowhere else to keep its answer — an ECL
+# projection, which is not cached under a retrievable key — parks the payload
+# here and the status call hands it over on completion.
+_FITS: dict[str, dict] = {}
+_FITS_LOCK = _threading.Lock()
+MAX_FIT_JOBS = 24
+
+
+def _job_snapshot(hash_: str, j: dict | None, *, with_result: bool = False) -> dict:
+    """Format one job entry. Takes NO lock — the caller already read `j`."""
+    if j is None:
+        return {"hash": hash_, "state": "unknown", "phase": "",
+                "elapsed_s": 0.0, "error": ""}
+    elapsed = (j["finished_at"] or _time.time()) - j["started_at"]
+    out = {"hash": hash_, "state": j["state"], "phase": j["phase"],
+           "elapsed_s": round(elapsed, 1), "error": j["error"]}
+    if with_result and j["state"] == "done":
+        out["result"] = j.get("result")
+    return out
+
+
+def _fit_state(hash_: str, *, with_result: bool = False) -> dict:
+    with _FITS_LOCK:
+        j = _FITS.get(hash_)
+        j = dict(j) if j is not None else None
+    return _job_snapshot(hash_, j, with_result=with_result)
+
+
+def _start_job(hash_: str, work, first_phase: str):
+    """Run `work(phase)` on a thread under `hash_`, or join the run in flight.
+
+    `work` is handed a callback to name the phase it has reached, and whatever
+    it returns is kept as the job's result. Idempotent on the hash: a second
+    ask for the same thing joins the first rather than doubling the work.
+    Returns None when a job was started or joined, or the existing state dict
+    when one is already running.
+    """
+    with _FITS_LOCK:
+        j = _FITS.get(hash_)
+        if j is not None and j["state"] == "running":
+            # Snapshot WITHOUT re-acquiring: _fit_state takes _FITS_LOCK,
+            # which this thread already holds, and threading.Lock is not
+            # reentrant. This exact call self-deadlocked whenever a fit was
+            # requested twice while running — a double click, a retry, a
+            # second tab — and the stuck holder then queued every fit and
+            # status request in the process behind it forever. That one line
+            # was the recurring "server died" of the past three days.
+            return _job_snapshot(hash_, dict(j))
+        if len(_FITS) >= MAX_FIT_JOBS:
+            for k, v in list(_FITS.items()):
+                if v["state"] != "running":
+                    _FITS.pop(k)
+                    break
+        _FITS[hash_] = {"state": "running", "phase": first_phase, "error": "",
+                        "started_at": _time.time(), "finished_at": None,
+                        "result": None}
+
+    def phase(name: str) -> None:
+        with _FITS_LOCK:
+            if hash_ in _FITS:
+                _FITS[hash_]["phase"] = name
+
+    def run() -> None:
+        try:
+            out = work(phase)
+            state, err = "done", ""
+        except Exception as e:                                          # noqa: BLE001
+            out, state, err = None, "error", f"{type(e).__name__}: {e}"
+        with _FITS_LOCK:
+            if hash_ in _FITS:
+                _FITS[hash_].update(state=state, error=err, result=out,
+                                    finished_at=_time.time())
+
+    _threading.Thread(target=run, daemon=True).start()
+    return None
+
+
+def _book_window(key: str) -> list[str]:
+    pf = store.load(key)
+    d = pf.panel["performance_date"]
+    return [str(pd.Timestamp(d.min()).date()), str(pd.Timestamp(d.max()).date())]
+
+
+def _book_oot_from(key: str) -> str:
+    """The out-of-time boundary to propose for this book.
+
+    An ingested tape states its own at ingestion, and that answer is the
+    analyst's, so it is used verbatim. The synthetic books keep the compiled
+    default — deriving one from the window would move their out-of-time split
+    and every statistic measured on it."""
+    rec = tapemod.record_for(key)
+    if rec and rec.get("default_oot_from"):
+        return str(rec["default_oot_from"])
+    return sel.SelectionConfig.__dataclass_fields__["oot_from"].default
+
+
+def _fit_window_note(key: str, oot_from: str) -> str:
+    """A warning when the boundary leaves too little behind it to fit on.
+
+    Search fits see only rows BEFORE this date. On a tape whose history is
+    short, a boundary meant for an eighteen-year synthetic panel can leave a
+    few weeks, where whole columns hold one value and the fit cannot run."""
+    try:
+        df, _ = store.screening_frame(key)
+    except Exception:                                               # noqa: BLE001
+        return ""
+    cut = pd.Timestamp(oot_from)
+    before = df[df["performance_date"] < cut]
+    lo = pd.Timestamp(df["performance_date"].min())
+    months = max(0, round((cut - lo).days / 30.44))
+    target = PORTFOLIOS[key].target.column
+    events = int(before[target].sum()) if target in before.columns else 0
+    if len(before) == 0:
+        return (f"No rows fall before {cut.date()}, so there is nothing to fit "
+                f"on. This book starts {lo.date()}.")
+    if months < 12 or events < 200:
+        return (f"Only {len(before):,} of {len(df):,} rows and {events:,} "
+                f"defaults fall before {cut.date()}, about {months} months of "
+                f"history from {lo.date()}. A search fits on those rows alone; "
+                "move the boundary later for a wider fitting window.")
+    return ""
+
+
+@app.get("/api/portfolios/{key}/concentration")
+def concentration_for(key: str, column: str):
+    """The book's drawn balance cut along any column, in readable bands.
+
+    Numeric columns are banded on ROUND edges, not quantiles: deciles of
+    balance are flat by construction and say nothing, while "50-59, 60-69,
+    ..." is how a committee actually talks about LTV. The step is chosen so
+    five to eight bands cover the 2nd to 98th percentile; categorical columns
+    report their largest levels by balance."""
+    if key not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {key!r}")
+    from ..models import ecl as ECL
+    pf = store.load(key)
+    book = ECL._as_of_frame(store.analysis_frame(key),
+                            pf.panel["performance_date"].max())
+    if column not in book.columns:
+        raise HTTPException(400, f"{column!r} is not a column of the {key} panel")
+    if "current_balance" not in book.columns:
+        raise HTTPException(400, f"{key} has no current_balance; concentration "
+                                 "is a share of drawn balance")
+    exposure = pd.to_numeric(book["current_balance"], errors="coerce").fillna(0.0)
+    col = book[column]
+    numeric = pd.api.types.is_numeric_dtype(col)
+
+    if numeric:
+        v = pd.to_numeric(col, errors="coerce")
+        ok = v.notna()
+        if not ok.any():
+            raise HTTPException(400, f"{column} holds no numeric values")
+        lo, hi = float(v[ok].quantile(0.02)), float(v[ok].quantile(0.98))
+        span = max(hi - lo, 1e-9)
+        # A round step: 1, 2, 2.5 or 5 times a power of ten, aiming at ~6 bands.
+        raw = span / 6
+        mag = 10 ** np.floor(np.log10(raw))
+        step = float(min((s for s in (1, 2, 2.5, 5, 10)
+                          if s * mag >= raw), default=10) * mag)
+        first = float(np.floor(lo / step) * step)
+        edges = [first + i * step for i in range(1, 9) if first + i * step < hi]
+        fmt = (lambda x: f"{x:,.0f}") if step >= 1 else (lambda x: f"{x:g}")
+        labels = ([f"<{fmt(edges[0])}"]
+                  + [f"{fmt(a)}-{fmt(b)}" for a, b in zip(edges, edges[1:])]
+                  + [f"{fmt(edges[-1])}+"])
+        band = pd.cut(v, [-np.inf, *edges, np.inf], labels=labels)
+        order = labels
+    else:
+        band = col.astype(str)
+        by_bal = exposure.groupby(band).sum().sort_values(ascending=False)
+        keep = list(by_bal.index[:8])
+        band = band.where(band.isin(keep), "other")
+        order = keep + (["other"] if (~col.astype(str).isin(keep)).any() else [])
+
+    sums = exposure.groupby(band.astype(str)).sum()
+    tot = float(sums.sum()) or 1.0
+    return _jsonable({
+        "portfolio": key, "column": column,
+        "kind": "numeric" if numeric else "categorical",
+        "bands": [{"band": str(b), "exposure": float(sums.get(str(b), 0.0)),
+                   "share": float(sums.get(str(b), 0.0) / tot)}
+                  for b in order if str(b) in sums.index],
+    })
+
+
+@app.get("/api/debug/stacks")
+def debug_stacks():
+    """Every thread's Python stack, for diagnosing a hang in place.
+
+    Read-only and cheap. This is how a wedged request is identified without
+    attaching a debugger to the process."""
+    import sys
+    import traceback
+    frames = sys._current_frames()
+    return {str(tid): traceback.format_stack(frame)
+            for tid, frame in frames.items()}
+
+
+@app.post("/api/fit/start")
+def fit_start(req: FitRequest):
+    """Begin a fit in the background. Returns at once with its hash.
+
+    Idempotent on the hash: asking twice for the same specification joins the
+    run already going rather than starting a second one. A specification
+    already in the cache comes back done immediately, so the client's poll
+    resolves on its first tick and a refit of something seen before still
+    feels instant.
+    """
+    if req.portfolio not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {req.portfolio!r}")
+    if not req.variables:
+        raise HTTPException(400, "select at least one variable")
+    spec = req.to_spec()
+    hash_ = spec.hash()
+
+    # NOTHING heavy runs in this request. Column validation reads the
+    # analysis frame and the cache probe unpickles a stored run — a minute
+    # each on a large cold book — and both used to run right here, so the
+    # start call itself timed out on the client while the server was merely
+    # busy. They now run on the job's own thread; a bad column comes back
+    # through the poll as the job's error, in the same words.
+    def work(phase):
+        phase("prepare")
+        try:
+            _reject_unknown_columns(req.portfolio,
+                                    [v.column for v in spec.variables],
+                                    "variables")
+            if spec.lgd is not None:
+                _reject_unknown_columns(req.portfolio,
+                                        [*spec.lgd.drivers,
+                                         *spec.lgd.categoricals],
+                                        "LGD drivers")
+        except HTTPException as e:
+            raise ValueError(e.detail) from e
+        hit = modelsvc.cached(hash_)
+        if hit is not None:
+            return hit
+        return modelsvc.run(spec, progress=phase)
+
+    # The run is not kept here: modelsvc caches it under the same hash and
+    # /api/models/{hash} is the one way a finished model is read.
+    running = _start_job(hash_, work, "prepare")
+    return running or _fit_state(hash_)
+
+
+@app.get("/api/fit/status/{hash_}")
+def fit_status(hash_: str):
+    """Where a submitted fit has got to.
+
+    `done` means the model is in the cache and /api/models/{hash_} will serve
+    it. A job this process never started but whose model IS cached also reads
+    done — a restart, or a fit that came from somewhere else, should not look
+    like a failure to the client that is waiting on it.
+    """
+    s = _fit_state(hash_)
+    if s["state"] == "unknown" and modelsvc.cached(hash_) is not None:
+        s["state"] = "done"
+    return s
+
+
 @app.get("/api/models/{hash_}")
 def get_model(hash_: str):
     r = modelsvc.cached(hash_)
@@ -976,9 +1338,7 @@ def model_identity(req: FitRequest):
     missing = []
     if not spec.variables:
         missing.append("PD variables")
-    lgd_present = spec.lgd is not None and (
-        spec.lgd.drivers or spec.lgd.categoricals
-        or spec.lgd.assumed_lgd is not None)
+    lgd_present = spec.lgd is not None and spec.lgd.is_specified
     if not lgd_present:
         missing.append("LGD drivers")
     pd_name = friendly_name(spec.pd_hash()) if spec.variables else None
@@ -1007,7 +1367,8 @@ def segment_backtest(portfolio: str, hash_: str, column: str):
     from ..models import design as dz
     from ..models.fit import predict as pr
     des = dz.build(df, r.spec, woe_maps=r.fit.woe_maps, means=r.fit.means,
-                   stds=r.fit.stds, basis_maps=r.fit.basis_maps)
+                   stds=r.fit.stds, basis_maps=r.fit.basis_maps,
+                   columns=r.fit.columns)
     p = pr(des.X, r.fit.beta)
     return _jsonable({"column": column,
                       "segments": bt.segment_backtest(df, des.y, p, column)})
@@ -1101,20 +1462,9 @@ class EclRequest(FitRequest):
     bridge_to: str = "severely_adverse"
 
 
-@app.post("/api/ecl")
-def project_ecl(req: EclRequest):
-    if req.portfolio not in PORTFOLIOS:
-        raise HTTPException(404, f"unknown portfolio {req.portfolio!r}")
-    if not req.variables:
-        raise HTTPException(400, "select at least one variable")
-    try:
-        r = scensvc.run(req.to_spec(), scenarios=req.scenarios, weights=req.weights,
-                        custom=req.custom, fixed_ccf=req.fixed_ccf, cpr=req.cpr,
-                        cap_to_fitted_range=req.cap_to_fitted_range,
-                        bridge_from=req.bridge_from, bridge_to=req.bridge_to)
-    except Exception as e:                                              # noqa: BLE001
-        raise HTTPException(400, f"{type(e).__name__}: {e}") from e
-
+def _ecl_payload(r) -> dict:
+    """One projection, as the wire sees it. Shared by the blocking endpoint and
+    the job, so the two can never drift into reporting different shapes."""
     sc_meta, _ = scen.load_all()
     return _jsonable({
         "portfolio": r.portfolio, "model_hash": r.model_hash, "as_of": r.as_of,
@@ -1146,6 +1496,93 @@ def project_ecl(req: EclRequest):
                 "calibration": r.lgd.calibration, "note": r.lgd.fit_note,
                 "spec": r.lgd.spec.to_dict(), "drivers": list(r.lgd.spec.drivers)},
     })
+
+
+def _ecl_run(req: EclRequest, progress=None):
+    return scensvc.run(req.to_spec(), scenarios=req.scenarios, weights=req.weights,
+                       custom=req.custom, fixed_ccf=req.fixed_ccf, cpr=req.cpr,
+                       cap_to_fitted_range=req.cap_to_fitted_range,
+                       bridge_from=req.bridge_from, bridge_to=req.bridge_to,
+                       progress=progress)
+
+
+def _ecl_view_key(req: EclRequest) -> str:
+    """Semantic key for the finished PAYLOAD of a projection.
+
+    The full ScenarioRun holds account-level material — a gigabyte on a large
+    tape — so even a disk cache hit unpickled for half a minute and looked
+    exactly like a re-run. The payload the page renders is kilobytes, so it is
+    cached in its own right under everything that changes it: the model
+    identity and every projection option, weights included (the run-level key
+    ignores weights because they only rescale the weighted tile; the payload
+    carries that tile, so here they count)."""
+    spec = req.to_spec()
+    key = (spec.hash(), tuple(req.scenarios),
+           tuple(sorted((req.weights or {}).items())),
+           tuple(sorted((k, tuple(sorted(v.items())))
+                        for k, v in (req.custom or {}).items())),
+           req.fixed_ccf, req.cpr, req.cap_to_fitted_range,
+           req.bridge_from, req.bridge_to)
+    return "eclview-" + _hashlib.sha256(repr(key).encode()).hexdigest()[:16]
+
+
+def _ecl_view(req: EclRequest, progress=None) -> dict:
+    """The projection payload, served from its own small cache when known."""
+    vk = _ecl_view_key(req)
+    hit = runcache.load(req.portfolio, "ecl", vk)
+    if hit is not None:
+        return hit
+    payload = _ecl_payload(_ecl_run(req, progress))
+    runcache.save(req.portfolio, "ecl", vk, payload)
+    return payload
+
+
+def _ecl_guard(req: EclRequest) -> None:
+    if req.portfolio not in PORTFOLIOS:
+        raise HTTPException(404, f"unknown portfolio {req.portfolio!r}")
+    if not req.variables:
+        raise HTTPException(400, "select at least one variable")
+
+
+@app.post("/api/ecl")
+def project_ecl(req: EclRequest):
+    _ecl_guard(req)
+    try:
+        return _ecl_view(req)
+    except Exception as e:                                              # noqa: BLE001
+        raise HTTPException(400, f"{type(e).__name__}: {e}") from e
+
+
+# The projection as a JOB, for the same reasons as the fit above: on an
+# ingested tape it runs past two minutes, and a held-open request loses the
+# work the moment anything interrupts it. Unlike a fit there is no
+# /api/models/{hash} to read the answer back from, so the job keeps the
+# payload and the status call hands it over once the run is done.
+@app.post("/api/ecl/start")
+def ecl_start(req: EclRequest):
+    _ecl_guard(req)
+    # The job id is the semantic view key, not a hash of the raw body: two
+    # requests that mean the same projection join the same job even when the
+    # JSON differs cosmetically.
+    job = _ecl_view_key(req)
+    hit = runcache.load(req.portfolio, "ecl", job)
+    if hit is not None:
+        # Known payload: answer done on the start call itself. Registering it
+        # as a finished job keeps the status endpoint's contract for any poll
+        # already in flight.
+        with _FITS_LOCK:
+            _FITS[job] = {"state": "done", "phase": "", "error": "",
+                          "started_at": _time.time(),
+                          "finished_at": _time.time(), "result": hit}
+        return {"hash": job, "state": "done", "phase": "", "elapsed_s": 0.0,
+                "error": "", "result": hit}
+    running = _start_job(job, lambda phase: _ecl_view(req, phase), "pd_model")
+    return running or _fit_state(job)
+
+
+@app.get("/api/ecl/status/{job}")
+def ecl_status(job: str):
+    return _fit_state(job, with_result=True)
 
 
 @app.get("/api/scenarios/{name}/editable")
@@ -1195,6 +1632,10 @@ def _lgd_frame(key: str, extra: str = "") -> pd.DataFrame:
     candidate terms named `key@transform@lag`."""
     df = store.analysis_frame(key)
     d = df.loc[df["default_flag"] == 1].copy()
+    # Severity views describe defaults whose severity was observed; on an
+    # ingested tape the unreported rest are NaN, not zero.
+    if "lgd_realised" in d.columns:
+        d = d.loc[d["lgd_realised"].notna()]
     cols = tuple(c for c in extra.split(",") if "@" in c)
     return scensvc.LGD.attach_macro(d, mevpanel.monthly_panel(), cols)
 
@@ -1210,6 +1651,13 @@ def lgd_screen(key: str, extra: str = Query("")):
     if key not in PORTFOLIOS:
         raise HTTPException(404, f"unknown portfolio {key!r}")
     d = _lgd_frame(key, extra)
+    if "lgd_realised" not in d.columns:
+        # A tape without realised losses has nothing to rank severity drivers
+        # against. This used to fall through to a KeyError and a bare 500.
+        raise HTTPException(
+            400, "This book carries no realised severity (no lgd_realised column "
+                 "was mapped), so severity drivers cannot be screened. Declare an "
+                 "assumed severity on the LGD stage instead.")
     cand = scensvc.LGD.candidates(store.analysis_frame(key), key,
                                   mevpanel.monthly_panel())
     # Shortlisted macro terms are ranked beside the tape columns, on the same
@@ -1398,7 +1846,7 @@ def lgd_fit(req: LgdFitRequest):
         "portfolio": req.portfolio, "spec": spec.to_dict(), "hash": spec.hash(),
         # The same naming as the PD fit. Half of a model with a name and half
         # with a code read as two different kinds of thing; they are not.
-        "name": friendly_name(spec.hash()),
+        "name": friendly_name(spec.hash(), kind="lgd"),
         "columns": m.columns, "diagnostics": diag,
         "n_defaults": m.n_defaults, "mean_lgd": m.mean_lgd,
         "zero_loss_share": m.zero_loss_share,
@@ -1590,8 +2038,15 @@ def _lgd_metrics_for(spec) -> dict:
     the basis is recorded, so the interface says which it is rather than passing
     one off as the other.
     """
-    if spec.lgd is None or not (spec.lgd.drivers or spec.lgd.categoricals):
+    if spec.lgd is None or not spec.lgd.is_specified:
         return {}
+    if spec.lgd.assumed_lgd is not None:
+        # Nothing was estimated, so there is nothing to backtest. The
+        # assumption's basis is recorded instead of a fabricated error.
+        return {"lgd_basis": "assumed",
+                "lgd_basis_note": f"declared flat severity "
+                                  f"{spec.lgd.assumed_lgd:.0%}, not estimated",
+                "lgd_mean_predicted": float(spec.lgd.assumed_lgd)}
     try:
         m = scensvc.lgd_model(spec.portfolio, spec.lgd)
         d = _lgd_frame(spec.portfolio,
@@ -1686,11 +2141,13 @@ def save_version(req: SaveVersionRequest):
     # that produced an ECL number, and half of that number comes from severity.
     if not spec.variables:
         raise HTTPException(400, "no PD variables — nothing to save")
-    if spec.lgd is None or not (spec.lgd.drivers or spec.lgd.categoricals):
+    if spec.lgd is None or not spec.lgd.is_specified:
         raise HTTPException(
-            400, "fit an LGD model before naming this one. A Model ID covers the "
-                 "PD specification and the LGD specification together, because "
-                 "both of them produced the loss number.")
+            400, "fit an LGD model before naming this one, or declare an assumed "
+                 "severity on a book whose tape carries no realised losses. A "
+                 "Model ID covers the PD specification and the severity "
+                 "specification together, because both of them produced the loss "
+                 "number.")
     run = modelsvc.run(spec)
     ecl_summary: dict = {}
     if req.with_ecl:
@@ -1934,6 +2391,14 @@ def selection_defaults(key: str):
         "scenarios": sel.available_scenarios(),
         "rules": {f: getattr(sel.SelectionRules(), f)
                   for f in sel.SelectionRules.__dataclass_fields__},
+        # The BOOK's own out-of-time date, stated at ingestion, with the
+        # window it sits in. A fixed 2023-01-01 belongs to the synthetic
+        # books, whose panels run from 2008; on a tape that starts in 2022 it
+        # left the search fitting on a few weeks of rows, where whole columns
+        # hold one value and nothing can be estimated.
+        "oot_from": (oot := _book_oot_from(key)),
+        "window": _book_window(key),
+        "fit_window_note": _fit_window_note(key, oot),
         "reason_codes": selstore.REASON_CODES,
     })
 
@@ -1982,8 +2447,16 @@ def selection_run(key: str, body: SelectionRunRequest):
             with _SEL_LOCK:
                 _SEL[key].update(state="cancelled", label="Cancelled")
         except Exception as e:                                          # noqa: BLE001
+            # A ValueError here is a deliberate refusal written for the
+            # analyst — "chargedoffPrincipalAmount holds a single value on
+            # the rows before the out-of-time date". Prefixing it with the
+            # exception type turns a sentence into a stack trace. Anything
+            # else is unexpected, and the type is part of the evidence.
             with _SEL_LOCK:
-                _SEL[key].update(state="error", error=f"{type(e).__name__}: {e}")
+                _SEL[key].update(
+                    state="error",
+                    error=str(e) if isinstance(e, ValueError)
+                    else f"{type(e).__name__}: {e}")
 
     _threading.Thread(target=run, daemon=True).start()
     return {"state": "running", "config_hash": cfg.hash()}
@@ -2302,7 +2775,8 @@ def lgd_selection_defaults(key: str):
     return _jsonable({
         "candidates": cand,
         "rules": vars(sel.SelectionRules()),
-        "oot_from": "2023-01-01",
+        "oot_from": _book_oot_from(key),
+        "fit_window_note": _fit_window_note(key, _book_oot_from(key)),
     })
 
 
@@ -2427,11 +2901,23 @@ class TapeIngestRequest(BaseModel):
     # it is the single most important fact about the target, and the app
     # cannot infer it from a column of ones and zeroes.
     default_definition: str
+    # How the supplied LGD was calculated. Required when lgd_realised is
+    # mapped, ignored otherwise.
+    lgd_definition: str = ""
     # Re-ingesting over an existing ingested book: a corrected mapping, or
     # next period's file. Refused for the synthetic books.
     replace: bool = False
     ead_method: str = "amortizing"
     oot_from: str = "2023-01-01"
+
+
+@app.get("/api/tapes/ingest-progress/{token}")
+def tapes_ingest_progress(token: str):
+    """The running ingest's current stage, for the frontend to poll.
+
+    A large tape spends real time reading, checking and writing; the stage on
+    screen is what distinguishes work in progress from a hang."""
+    return tapemod.ingest_progress(token) or {"stage": None, "elapsed_s": None}
 
 
 @app.post("/api/tapes/ingest")
@@ -2442,11 +2928,19 @@ def tapes_ingest(req: TapeIngestRequest):
             mapping={k: v for k, v in req.mapping.items() if v},
             default_definition=req.default_definition,
             ead_method=req.ead_method, oot_from=req.oot_from,
-            replace=req.replace)
+            replace=req.replace, lgd_definition=req.lgd_definition)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    # The new book is data the rest of the process has never seen.
-    store.clear()
+    finally:
+        tapemod.clear_progress(req.token)
+    # A replaced book invalidates everything cached under its key, and the
+    # per-key caches offer no selective eviction, so replacement clears the
+    # store. A NEW key was never cached: clearing the whole store for it made
+    # the next /api/portfolios reload every book's panel from disk — the
+    # minute of dead skeletons right after adding a tape. The roll-up cache
+    # goes either way, because the set of books changed.
+    if req.replace:
+        store.clear()
     rollupsvc.clear_cache()
     return _jsonable(record)
 

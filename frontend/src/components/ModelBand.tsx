@@ -4,6 +4,7 @@ import { useLoadVersion } from '../lib/loadVersion'
 import { usd } from '../lib/format'
 import { api, type PortfolioKey } from '../lib/api'
 import { useUi } from '../lib/store'
+import { lgdSpecified } from '../lib/spec'
 import { useModelIdentity, useProgress } from '../lib/progress'
 import { StatusPill } from './ui'
 import { ratio } from '../lib/format'
@@ -226,12 +227,16 @@ export default function ModelBand({ portfolio }: { portfolio: string }) {
               <p className="mt-1.5 tnum text-xs text-ink-secondary">
                 {lgd!.rmse != null
                   ? <>RMSE {lgd!.rmse.toFixed(3)} · bias {(lgd!.bias ?? 0) >= 0 ? '+' : ''}{(lgd!.bias ?? 0).toFixed(3)} · mean {(lgd!.meanLgd * 100).toFixed(1)}%</>
-                  : <>{lgd!.spec.drivers.length + lgd!.spec.categoricals.length} drivers · mean {(lgd!.meanLgd * 100).toFixed(1)}%</>}
+                  : lgd!.spec.assumed_lgd != null
+                    ? <>declared, not estimated · mean {(lgd!.meanLgd * 100).toFixed(1)}%</>
+                    : <>{lgd!.spec.drivers.length + lgd!.spec.categoricals.length} drivers · mean {(lgd!.meanLgd * 100).toFixed(1)}%</>}
               </p>
             </>
-          ) : lgd?.spec && (lgd.spec.drivers.length || lgd.spec.categoricals.length) ? (
+          ) : lgdSpecified(lgd?.spec) ? (
             <p className="mt-1.5 text-xs text-ink-muted">
-              {lgd.spec.drivers.length + lgd.spec.categoricals.length} drivers selected · not fitted
+              {lgd!.spec.assumed_lgd != null
+                ? <>severity assumed at {Math.round(lgd!.spec.assumed_lgd * 100)}%</>
+                : <>{lgd!.spec.drivers.length + lgd!.spec.categoricals.length} drivers selected · not fitted</>}
             </p>
           ) : (
             <p className="mt-1.5 text-xs text-ink-muted">not fitted</p>

@@ -120,7 +120,7 @@ def project(spec: ModelSpec, fit_result, df: pd.DataFrame, mev_path: pd.DataFram
     # conditional PD from the fitted hazard, on the SCENARIO macro path
     des = D.build(proj, spec, woe_maps=fit_result.woe_maps, means=fit_result.means,
                   stds=fit_result.stds, mev_override=mev_path,
-                  basis_maps=fit_result.basis_maps)
+                  basis_maps=fit_result.basis_maps, columns=fit_result.columns)
     pd_t = predict(des.X, fit_result.beta).reshape(n, horizon_months)
 
     # LGD, also scenario-conditioned. Every macro column the severity model is

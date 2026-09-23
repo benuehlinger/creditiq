@@ -61,14 +61,16 @@ export default function ScenarioSurface() {
   // of nowhere" experience. The roll-up still uses documented defaults, and
   // says so per book; this page is the analyst's own model only.
   const lgdReady = !!fittedLgd?.hash
+  // The phase the server reports while the projection runs.
+  const [phase, setPhase] = useState<string | undefined>(undefined)
   const run = useQuery({
     queryKey: ['ecl', portfolio, fitted?.hash, fittedLgd?.hash, capped],
-    queryFn: () => api.ecl({
+    queryFn: () => { setPhase(undefined); return api.ecl({
       ...fitted!.request,
       lgd: fittedLgd!.spec,
       cap_to_fitted_range: capped,
       weights,
-    }),
+    }, setPhase) },
     enabled: !!fitted && lgdReady,
     staleTime: Infinity,
     // Aligned with the app-wide hour: this query's shorter 30-minute
@@ -201,7 +203,7 @@ export default function ScenarioSurface() {
       )}
 
       {(busy || justRan) && (
-        <FitProgress done={!busy} doneLabel="Projected"
+        <FitProgress done={!busy} doneLabel="Projected" phase={phase}
           phases={ECL_PHASES(res?.scenarios?.[0]?.n_accounts, res?.timings)} />
       )}
 
@@ -415,7 +417,7 @@ export default function ScenarioSurface() {
           <div className="space-y-3">
             <Card>
               <CardHead title="Exposure at default" subtitle={`Method: ${res.ead.method}`}
-                caption="The exposure assumption applied to every account, and the parameters it was estimated from. It is carried into each ECL figure on this page." />
+                caption="The exposure assumption applied to every account, carried into each ECL figure on this page." />
               <div className="max-w-[88ch] px-4 py-3 text-xs leading-relaxed text-ink-secondary">
                 {res.ead.plain_english}
                 {res.ead.ccf_note && (
@@ -423,6 +425,18 @@ export default function ScenarioSurface() {
                 )}
               </div>
             </Card>
+            {res.lgd.n_defaults === 0 && res.lgd.drivers.length === 0 ? (
+              /* A declared severity was never estimated: no fitting
+                 population, no drivers, no zero-loss share to report. */
+              <Card>
+                <CardHead title="Loss given default"
+                  subtitle="Declared assumption, not estimated"
+                  caption="A flat severity applied to every exposure and every scenario. Stress moves the default rate; the severity is the number declared on the LGD stage." />
+                <div className="grid grid-cols-1">
+                  <StatTile label="Assumed severity" value={pct(res.lgd.mean_lgd * 100, 0)} />
+                </div>
+              </Card>
+            ) : (
             <Card>
               <CardHead title="Loss given default"
                 subtitle={`Fractional logit · fitted on ${num(res.lgd.n_defaults)} defaults`}
@@ -435,10 +449,11 @@ export default function ScenarioSurface() {
                   value={res.lgd.mean_severity_given_loss.toFixed(3)} />
               </div>
               <div className="border-t border-hairline px-4 py-2 text-micro text-ink-muted">
-                Drivers: {res.lgd.drivers.join(', ')} · mean workout{' '}
-                {res.lgd.mean_workout_months.toFixed(1)} months
+                {res.lgd.drivers.length > 0 && <>Drivers: {res.lgd.drivers.join(', ')} · </>}
+                mean workout {res.lgd.mean_workout_months.toFixed(1)} months
               </div>
             </Card>
+            )}
           </div>
           </div>
         </>
@@ -482,7 +497,7 @@ function SeverityWhatIf({ declared, baseline, severe, weighted }: {
     <Card>
       <CardHead title="Severity what-if"
         subtitle={`This book runs on an assumed severity of ${Math.round(declared * 100)}%`}
-        caption="With a flat severity the lifetime loss is exactly proportional to it, so these figures are arithmetic on the projection above, not a new projection. The declared value remains the number of record; to change it, edit the assumption on the LGD stage."
+        caption="Lifetime loss is proportional to a flat severity, so these figures rescale the projection above. The declared value remains the number of record; change it on the LGD stage."
         right={off ? (
           <button onClick={() => setPct(Math.round(declared * 100))}
             className="rounded-ctl border border-hairline px-2 py-0.5 text-tiny text-ink-secondary hover:text-ink">

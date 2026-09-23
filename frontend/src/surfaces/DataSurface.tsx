@@ -2,7 +2,8 @@ import { useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, type ColumnProfile } from '../lib/api'
-import { Card, CardHead, Skeleton, StatTile, StatusPill } from '../components/ui'
+import { blessFingerprintChange } from '../lib/fingerprint'
+import { Card, CardHead, QueryError, Skeleton, StatTile, StatusPill } from '../components/ui'
 import { useUi } from '../lib/store'
 import EChart from '../charts/EChart'
 import { baseOption, crosshairTooltip, lineSeries, markLineAt, xName, gridFor } from '../charts/base'
@@ -68,7 +69,11 @@ export default function DataSurface() {
         ...(baseOption().xAxis as object),
         ...xName('Reporting month'),
         type: 'time' as const,
-        axisLabel: { color: k.muted, fontSize: 11, formatter: '{yyyy}' },
+        // Level-aware labels: a year at a year boundary, month and year at the
+        // half-year ticks a short tape gets. A year-only template printed
+        // every year twice on a four-year book.
+        axisLabel: { color: k.muted, fontSize: 11,
+                     formatter: { year: '{yyyy}', month: "{MMM} '{yy}" } },
       },
       yAxis: {
         ...(baseOption().yAxis as object),
@@ -92,14 +97,19 @@ export default function DataSurface() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ts.data, theme, story])
 
-  if (!info || health.isLoading) {
+  // A failed request must say so. Guarding on `!info` alone rendered the
+  // skeletons forever after a transient failure: with staleTime Infinity and
+  // no focus refetch, nothing ever retried, and the page pulsed indefinitely.
+  if (pf.isError || health.isError || ts.isError) {
+    const failed = pf.isError ? pf : health.isError ? health : ts
     return (
-      <div className="space-y-3 p-4">
-        <Skeleton className="h-20" />
-        <Skeleton className="h-64" />
-        <Skeleton className="h-96" />
-      </div>
+      <QueryError what="This book's panel" error={failed.error}
+        retry={() => { pf.refetch(); health.refetch(); ts.refetch() }} />
     )
+  }
+
+  if (!info || health.isLoading) {
+    return <FirstLoad pk={portfolio} />
   }
 
   const failing = health.data?.issues.filter((i) => !i.passed) ?? []
@@ -152,7 +162,7 @@ export default function DataSurface() {
           <CardHead
             title="Panel integrity"
             subtitle={`${health.data?.n_rows.toLocaleString()} rows · ${health.data?.n_columns} columns`}
-            caption="Structural checks on the panel: duplicate keys, gaps in the observation grid, rows after a terminal event, and target definition consistency. A model will fit despite these failures."
+            caption="Duplicate keys, observation-grid gaps, rows after a terminal event, and target definition consistency. Failures do not block fitting; they qualify it."
             methodology="data-health"
             right={
               <StatusPill severity={failing.some((f) => f.severity === 'critical') ? 'critical'
@@ -268,7 +278,7 @@ function SampleRows({ pk }: { pk: string }) {
     <Card>
       <CardHead title="Data structure"
         subtitle={`Three accounts of ${num(q.data.total)} account-months · grouped by account, sorted by month`}
-        caption="A small example of what the panel looks like, for quick reference: one row per account per month, each account's history in order. Column names are exactly as stored — canonical for mapped columns, the seller's own for everything that rode along. Read-only." />
+        caption="One row per account per month, each account's history in order. Column names are as stored: canonical where mapped, the seller's otherwise. Read-only." />
       <div className="thin-scroll overflow-x-auto px-4 pb-4">
         <table className="w-full text-left text-micro">
           <thead className="text-tiny text-ink-muted">
@@ -328,18 +338,17 @@ function BookRecord({ pk, info }: {
       api.tapeRemap(pk, body),
     onSuccess: () => {
       // The stored data changed, so everything derived from it is stale.
+      // This tab caused the change; the shell adopts the new fingerprint
+      // rather than reloading mid-correction.
+      blessFingerprintChange()
       ;['tapes', 'portfolios', 'health', 'sample', 'ts', 'screen']
         .forEach((k) => qc.invalidateQueries({ queryKey: [k] }))
     },
   })
-  if (info.source !== 'ingested') {
-    return (
-      <Card>
-        <CardHead title="About this book" subtitle="Generated demonstration data"
-          caption={`A synthetic book, generated on this machine; no real borrower data is present. Default definition: ${info.target.description}. Exposure: ${info.ead_note}`} />
-      </Card>
-    )
-  }
+  // A generated book has no loading record to show. Its target definition is
+  // on the default-rate chart and its exposure treatment is on the model's
+  // own specification, so a card restating both was duplication.
+  if (info.source !== 'ingested') return null
   const rec = tapes.data?.tapes.find((t) => t.key === pk)
   // The dropdown offers the SELLER's column names, which is how the mapping
   // records them — but a mapped column is stored under its canonical name,
@@ -355,7 +364,7 @@ function BookRecord({ pk, info }: {
     <Card>
       <CardHead title="How this book was loaded"
         subtitle={`Ingested ${rec.ingested_at.slice(0, 10)} \u00b7 fingerprint ${rec.fingerprint}`}
-        caption="What was stated at ingestion, and how the seller's columns map onto the canonical schema. Every column of the upload is in this book — mapped ones under their canonical name, the rest under the seller's — so a mis-mapped column is corrected here, in place. The three structural fields need a replacement upload, because the duplicate, date and 0/1 checks ran against them."
+        caption="The declarations made at ingestion, and the column mapping onto the canonical schema. A mis-mapped column is corrected here in place; the three structural fields require a replacement upload because the integrity checks ran against them."
         right={
           <div className="flex gap-2">
             <button onClick={() => setEditing((v) => !v)}
@@ -375,6 +384,8 @@ function BookRecord({ pk, info }: {
               that wraps (a stated default definition is a sentence, not a
               number) reads as ragged nonsense against its own label. */}
           {[['Default definition', info.target.description],
+            ...(rec.lgd_definition
+              ? [['LGD definition', rec.lgd_definition]] : []),
             ['Exposure method', info.ead_method === 'ccf'
               ? 'Revolving commitments (CCF)' : 'Amortising loans'],
             ['Out-of-time window from', rec.default_oot_from],
@@ -441,5 +452,69 @@ function BookRecord({ pk, info }: {
         </div>
       </div>
     </Card>
+  )
+}
+
+/** What a book's first visit is doing, said out loud.
+ *
+ *  Reading a 22 million row tape, joining its account attributes and screening
+ *  its columns takes the better part of a minute. The page used to show three
+ *  pulsing skeletons for all of it, which is indistinguishable from a hang —
+ *  the server narrates the stages, so the page reports them. */
+function FirstLoad({ pk }: { pk: string }) {
+  const warm = useQuery({
+    queryKey: ['warm', pk],
+    queryFn: () => api.warmStatus(pk),
+    refetchInterval: 700, gcTime: 0, staleTime: 0,
+  })
+  const w = warm.data
+  const at = w?.stages.findIndex((s) => s.key === w.stage) ?? -1
+  return (
+    <div className="space-y-3 p-4">
+      <Card>
+        <div className="px-4 py-3">
+          <div className="flex items-baseline justify-between gap-3">
+            <span className="text-sm font-medium text-ink">
+              {w?.error ? 'This book could not be opened'
+                : `${w?.label || 'Opening the book'} …`}
+            </span>
+            {w?.elapsed_s != null && !w.error && (
+              <span className="tnum text-tiny text-ink-muted">
+                {Math.round(w.elapsed_s)}s
+              </span>
+            )}
+          </div>
+          {w?.error ? (
+            <p className="mt-1.5 text-xs" style={{ color: 'var(--status-critical)' }}>
+              {w.error}
+            </p>
+          ) : (
+            <>
+              <div className="mt-2 h-1 overflow-hidden rounded-full bg-sunken">
+                <div className="h-1 rounded-full bg-accent transition-all duration-500"
+                     style={{ width: `${Math.max(6, ((at + 1) / ((w?.stages.length ?? 3) + 1)) * 100)}%` }} />
+              </div>
+              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-tiny">
+                {(w?.stages ?? []).map((s, i) => (
+                  <span key={s.key} className="flex items-center gap-1.5"
+                        style={{ color: i < at ? 'var(--ink-secondary)'
+                          : i === at ? 'var(--accent)' : 'var(--ink-muted)' }}>
+                    <span className="h-1.5 w-1.5 rounded-full"
+                          style={{ background: i <= at ? 'currentColor' : 'var(--chrome-axis)' }} />
+                    {s.label}
+                  </span>
+                ))}
+              </div>
+              <p className="mt-2 text-tiny text-ink-muted">
+                The panel is read once per book and held, so this is paid on the
+                first visit only.
+              </p>
+            </>
+          )}
+        </div>
+      </Card>
+      <Skeleton className="h-64" />
+      <Skeleton className="h-96" />
+    </div>
   )
 }

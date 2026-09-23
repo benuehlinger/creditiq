@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -71,27 +72,44 @@ def _account_split(accounts: np.ndarray, test_fraction: float, seed: int) -> np.
     refits — otherwise a coefficient change could be a change in the split rather
     than a change in the model.
     """
+    # An account id is TEXT as often as it is a number. The generated books
+    # number their accounts, and this split was written against them: it cast
+    # ids to int for the cache key, for the hash, and for the lookup array.
+    # A real tape keyed on something like "1934902-13277016" — a trust and a
+    # loan number — crashed the fit outright.
+    #
+    # Numeric ids keep hashing through `int` so that every model already
+    # fitted keeps the same train/test assignment. Text ids hash as
+    # themselves. np.unique returns sorted values whatever the dtype, so the
+    # vectorised lookup works for both without the intermediate dict.
     uniq = np.unique(accounts)
-    ck = (int(uniq[0]), int(uniq[-1]), len(uniq), round(test_fraction, 6), seed)
-    lookup = _SPLIT_CACHE.get(ck)
-    if lookup is None:
+    numeric = np.issubdtype(uniq.dtype, np.number)
+    ck = (str(uniq[0]), str(uniq[-1]), len(uniq), round(test_fraction, 6), seed,
+          bool(numeric))
+    got = _SPLIT_CACHE.get(ck)
+    if got is None:
         salt = str(seed).encode()
-        h = np.array([int(hashlib.blake2b(salt + str(int(a)).encode(),
-                                          digest_size=8).hexdigest(), 16) % 10_000
-                      for a in uniq])
-        lookup = dict(zip(uniq.tolist(), (h < int(test_fraction * 10_000)).tolist()))
-        _SPLIT_CACHE[ck] = lookup
-    # Vectorised lookup. A generator expression here ran once per ROW — 2.3M
-    # Python-level calls per refit, which showed up as a measurable slice of the
-    # budget in the profile.
-    keys = np.fromiter(lookup.keys(), dtype=np.int64, count=len(lookup))
-    vals = np.fromiter(lookup.values(), dtype=bool, count=len(lookup))
-    order = np.argsort(keys)
-    keys, vals = keys[order], vals[order]
+        h = np.array([int(hashlib.blake2b(
+            salt + (str(int(a)) if numeric else str(a)).encode(),
+            digest_size=8).hexdigest(), 16) % 10_000 for a in uniq])
+        got = (uniq, h < int(test_fraction * 10_000))
+        _SPLIT_CACHE[ck] = got
+    keys, vals = got
     return vals[np.searchsorted(keys, accounts)]
 
 
-def run(spec: ModelSpec, force: bool = False) -> ModelRun:
+def run(spec: ModelSpec, force: bool = False,
+        progress: Callable[[str], None] | None = None) -> ModelRun:
+    """Fit, score, diagnose and backtest one specification.
+
+    `progress` is called with the name of each phase as it STARTS. The names
+    are the same six the progress bar knows about, so a caller that runs this
+    on a background thread can report where it actually is instead of pacing a
+    bar off the previous run's timings. On the synthetic panels a fit is a few
+    seconds and nobody needs this; on an ingested tape of twenty million
+    account-months it is minutes, and a bar that guesses is a bar that lies.
+    """
+    say = progress or (lambda _phase: None)
     key = spec.hash()
     if not force and key in _CACHE:
         return _CACHE[key]
@@ -108,6 +126,7 @@ def run(spec: ModelSpec, force: bool = False) -> ModelRun:
             return prev
 
     t = {}
+    say("prepare")
     t0 = time.perf_counter()
     df = store.analysis_frame(spec.portfolio)
     n_full = len(df)
@@ -134,6 +153,7 @@ def run(spec: ModelSpec, force: bool = False) -> ModelRun:
     # Masks first, on cheap columns only. Then the binning, standardisation and
     # WoE maps are fitted on TRAIN ALONE and applied to everything else — fitting
     # them on the whole in-time slice would leak the test side into the transform.
+    say("design")
     t1 = time.perf_counter()
     train_mask = ~_account_split(fit_df["account_id"].to_numpy(),
                                  spec.sample.test_fraction, spec.sample.seed)
@@ -143,9 +163,10 @@ def run(spec: ModelSpec, force: bool = False) -> ModelRun:
     # largest cost in the refit.
     des_all = D.build(df, spec, woe_maps=des_train.woe_maps,
                       means=des_train.means, stds=des_train.stds,
-                      basis_maps=des_train.basis_maps)
+                      basis_maps=des_train.basis_maps, columns=des_train.columns)
     t["design"] = time.perf_counter() - t1
 
+    say("fit")
     t2 = time.perf_counter()
     res = run_fit(des_train, spec)
     t["fit"] = time.perf_counter() - t2
@@ -159,6 +180,7 @@ def run(spec: ModelSpec, force: bool = False) -> ModelRun:
                                   (true_rate / (1 - true_rate)))
 
     # score every account-month in the FULL panel
+    say("score")
     t3 = time.perf_counter()
     p_all = predict(des_all.X, res.beta)
     t["score"] = time.perf_counter() - t3
@@ -172,6 +194,7 @@ def run(spec: ModelSpec, force: bool = False) -> ModelRun:
         "oot": ~all_in_time,
     }
 
+    say("diagnostics")
     t4 = time.perf_counter()
     diag = {}
     for name, mask in slices.items():
@@ -196,6 +219,7 @@ def run(spec: ModelSpec, force: bool = False) -> ModelRun:
     diag["reference_slice"] = ref
     t["diagnostics"] = time.perf_counter() - t4
 
+    say("backtest")
     t5 = time.perf_counter()
     seg_col = next((c for c in df.columns
                     if c in getattr(store.load(spec.portfolio).spec,

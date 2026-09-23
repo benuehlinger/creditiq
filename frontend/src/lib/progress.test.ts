@@ -50,8 +50,13 @@ describe('building a model from scratch', () => {
     expect(computeProgress(s).next?.to).toBe('lgd')
 
     s = { ...s, lgd: lgdOf('L1', ['current_ltv']) }
-    const r = computeProgress(s)
+    // Both halves fitted: the payoff step comes before the save.
+    let r = computeProgress(s)
     expect(r.complete).toBe(true)
+    expect(r.next?.to).toBe('scenarios')
+    expect(r.next?.label).toMatch(/project/i)
+
+    r = computeProgress({ ...s, projected: 'h1:L1' })
     expect(r.next?.to).toBe('versions')
     expect(r.next?.label).toMatch(/save/i)
   })
@@ -112,7 +117,10 @@ describe('opening a saved version', () => {
     expect(r.mode).toBe('clean')
     expect(r.changed).toBe(0)
     expect(stage(r, 'versions').state).toBe('done')
-    expect(r.next).toBeNull()
+    // An opened model not yet projected THIS session is offered the
+    // projection; once projected, nothing is owed.
+    expect(r.next?.to).toBe('scenarios')
+    expect(computeProgress({ ...opened, projected: 'V1:L1' }).next).toBeNull()
   })
 
   it('reads as EDITED, not as an error, once something changes', () => {
@@ -435,7 +443,14 @@ describe('the selection stage', () => {
     })
     expect(r.complete).toBe(true)
     expect(stage(r, 'screen').state).toBe('todo')
-    expect(r.next?.to).toBe('versions')
+    // The search never gates: with both halves fitted the chain moves on to
+    // the projection, then the save.
+    expect(r.next?.to).toBe('scenarios')
+    expect(computeProgress({
+      ...EMPTY, picked: ['fico_orig'],
+      fitted: fit('a', 'h1', ['fico_orig']),
+      lgd: lgdOf('L1', ['current_ltv']), projected: 'h1:L1',
+    }).next?.to).toBe('versions')
   })
 
   it('an empty search result does not read as done', () => {

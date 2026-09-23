@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, type TapeInspection } from '../lib/api'
+import { blessFingerprintChange } from '../lib/fingerprint'
 import { num } from '../lib/format'
 import { Card, CardHead, Field, Notice } from '../components/ui'
 
@@ -24,6 +25,7 @@ export default function TapeSurface() {
   const [key, setKey] = useState('')
   const [keyTouched, setKeyTouched] = useState(false)
   const [definition, setDefinition] = useState('')
+  const [lgdDefinition, setLgdDefinition] = useState('')
   const [ead, setEad] = useState<'amortizing' | 'ccf'>('amortizing')
   const [oot, setOot] = useState('2023-01-01')
 
@@ -65,13 +67,30 @@ export default function TapeSurface() {
   const ingest = useMutation({
     mutationFn: () => api.tapeIngest({
       token: report!.token, key, label, mapping,
-      default_definition: definition.trim(), ead_method: ead, oot_from: oot,
+      default_definition: definition.trim(),
+      lgd_definition: lgdDefinition.trim(),
+      ead_method: ead, oot_from: oot,
     }),
     onSuccess: (rec) => {
+      // This tab caused the fingerprint to change; the shell adopts it
+      // rather than reloading out from under the arrival on the new book.
+      blessFingerprintChange()
       qc.invalidateQueries({ queryKey: ['portfolios'] })
       qc.invalidateQueries({ queryKey: ['health'] })
       nav(`/${rec.key}/panel`)
     },
+  })
+
+  // What the running ingest is doing right now. A 20-million-row tape spends
+  // real seconds reading, checking and writing; naming the stage (with the
+  // row counts) is what separates visible work from an apparent hang.
+  const progress = useQuery({
+    queryKey: ['ingest-progress', report?.token],
+    queryFn: () => api.tapeIngestProgress(report!.token),
+    enabled: ingest.isPending && !!report?.token,
+    refetchInterval: 700,
+    gcTime: 0,
+    staleTime: 0,
   })
 
   const missing = useMemo(() => {
@@ -83,12 +102,23 @@ export default function TapeSurface() {
   const taken = useMemo(() => new Set(Object.values(mapping).filter(Boolean)),
                         [mapping])
 
+  // Everything the ingest button is waiting on, by name. The button being
+  // disabled is a state; WHY it is disabled must be on screen.
+  const outstanding = [
+    ...(missing.length ? [`map ${missing.join(', ')}`] : []),
+    ...(label ? [] : ['a display name']),
+    ...(key ? [] : ['a key']),
+    ...(definition.trim() ? [] : ['the default definition']),
+    ...(mapping.lgd_realised && !lgdDefinition.trim()
+      ? ['what lgd_realised means on this tape'] : []),
+  ]
+
   return (
     <div className="mx-auto max-w-[1100px] space-y-3 px-4 py-4">
       <Card>
         <CardHead title="Load a loan tape"
           subtitle="CSV or parquet, already at monthly account grain"
-          caption="The file must be a panel: one row per account per month, with a 0/1 default flag. Column names are mapped below; nothing is renamed or recoded without being shown here first. This gate validates a panel; it does not build one. Converting a snapshot or raw performance file into account-months takes judgement, and judgement belongs in a workflow that documents it." />
+          caption="One row per account per month, with a 0/1 default flag. This surface validates a panel; converting a snapshot or raw performance file into account-months is a documented data-preparation step outside it." />
         {/* A drop target as well as a picker: a tape arrives as a file on
             someone's desktop, and dragging it here is the shorter path. */}
         <div className="px-4 pb-4">
@@ -98,34 +128,44 @@ export default function TapeSurface() {
               const f = e.target.files?.[0]
               if (f) inspect.mutate(f)
             }} />
-          <div
-            onDragOver={(e) => { e.preventDefault(); setDragging(true) }}
-            onDragLeave={() => setDragging(false)}
-            onDrop={(e) => {
-              e.preventDefault()
-              setDragging(false)
-              const f = e.dataTransfer.files?.[0]
-              if (f) inspect.mutate(f)
-            }}
-            onClick={() => fileRef.current?.click()}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') fileRef.current?.click() }}
-            className={`flex cursor-pointer flex-col items-center gap-1 rounded-card border border-dashed px-4 py-7 text-center transition-colors ${
-              dragging ? 'border-accent bg-accent-soft' : 'border-hairline hover:border-accent'
-            }`}>
-            <span className="text-sm font-medium text-ink">
-              {inspect.isPending ? 'Reading the file…'
-                : dragging ? 'Drop to read it'
-                : 'Drag a tape here, or click to choose one'}
-            </span>
-            <span className="text-tiny text-ink-muted">CSV or parquet</span>
-          </div>
-          {report && (
-            <p className="mt-2 text-xs text-ink-secondary">
-              <span className="font-mono">{report.filename}</span>
-              {' · '}{num(report.n_rows)} rows · {report.n_columns} columns
-            </p>
+          {/* Once a file is read, the tall drop target has done its job: it
+              collapses to one line naming the file, and the mapping below is
+              what the eye should land on. A different file is one click away. */}
+          {report && !inspect.isPending ? (
+            <div className="flex items-center justify-between gap-3 rounded-card border border-hairline px-3 py-2">
+              <p className="min-w-0 truncate text-xs text-ink-secondary">
+                <span className="font-mono text-ink">{report.filename}</span>
+                {' · '}{num(report.n_rows)} rows · {report.n_columns} columns
+              </p>
+              <button onClick={() => fileRef.current?.click()}
+                className="shrink-0 rounded-ctl border border-hairline px-2 py-1 text-tiny text-ink-secondary hover:text-ink">
+                Choose a different file
+              </button>
+            </div>
+          ) : (
+            <div
+              onDragOver={(e) => { e.preventDefault(); setDragging(true) }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={(e) => {
+                e.preventDefault()
+                setDragging(false)
+                const f = e.dataTransfer.files?.[0]
+                if (f) inspect.mutate(f)
+              }}
+              onClick={() => fileRef.current?.click()}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') fileRef.current?.click() }}
+              className={`flex cursor-pointer flex-col items-center gap-1 rounded-card border border-dashed px-4 py-7 text-center transition-colors ${
+                dragging ? 'border-accent bg-accent-soft' : 'border-hairline hover:border-accent'
+              }`}>
+              <span className="text-sm font-medium text-ink">
+                {inspect.isPending ? 'Reading the file…'
+                  : dragging ? 'Drop to read it'
+                  : 'Drag a tape here, or click to choose one'}
+              </span>
+              <span className="text-tiny text-ink-muted">CSV or parquet</span>
+            </div>
           )}
           {inspect.isError && (
             <p className="mt-2 text-xs" style={{ color: 'var(--status-critical)' }}>
@@ -140,7 +180,7 @@ export default function TapeSurface() {
           <Card>
             <CardHead title="Column mapping"
               subtitle="Their names, onto the canonical schema"
-              caption="Suggestions are preselected from common seller conventions; confirm or correct them. Columns left unmapped ride along under their own names as candidate drivers." />
+              caption="Suggested mappings follow common seller conventions; confirm or correct them. Unmapped columns are retained under their own names as candidate drivers." />
             {missing.length > 0 && (
               <p className="px-4 pb-2 text-xs" style={{ color: 'var(--status-warning)' }}>
                 Still required: {missing.join(', ')}
@@ -192,7 +232,7 @@ export default function TapeSurface() {
           <div className="space-y-3">
             <Card>
               <CardHead title="About this book"
-                caption="The four things the synthetic books hardcode, asked out loud because this is someone else's data." />
+                caption="Definitions the analysis depends on. Each is stated at ingestion and recorded with the book." />
               <div className="space-y-3 px-4 pb-4">
                 <Field label="Display name">
                   <input value={label} onChange={(e) => {
@@ -213,6 +253,15 @@ export default function TapeSurface() {
                     placeholder="90+ days past due or charge-off"
                     className="w-full rounded-ctl border border-hairline bg-surface px-2 py-1.5 text-xs" />
                 </Field>
+                {mapping.lgd_realised && (
+                  <Field label="How is LGD calculated on this tape?"
+                    hint="Recoveries to date or to resolution, gross or net of costs, discounted or not. The app takes your figure as given and records how you arrived at it.">
+                    <input value={lgdDefinition}
+                      onChange={(e) => setLgdDefinition(e.target.value)}
+                      placeholder="net of repossession costs, to resolution, undiscounted"
+                      className="w-full rounded-ctl border border-hairline bg-surface px-2 py-1.5 text-xs" />
+                  </Field>
+                )}
                 <Field label="Exposure method">
                   <select value={ead}
                     onChange={(e) => setEad(e.target.value as 'amortizing' | 'ccf')}
@@ -231,26 +280,39 @@ export default function TapeSurface() {
             <Card>
               <div className="space-y-2 px-4 py-4">
                 <button
-                  disabled={ingest.isPending || missing.length > 0 || !key || !label
-                            || !definition.trim()}
-                  title={missing.length
-                    ? `Map ${missing.join(', ')} first. A panel cannot be modelled without them.`
-                    : undefined}
+                  disabled={ingest.isPending || outstanding.length > 0}
                   onClick={() => ingest.mutate()}
                   className="w-full rounded-ctl bg-accent px-3 py-2 text-xs font-semibold text-white disabled:opacity-40">
                   {ingest.isPending ? 'Validating and registering…' : 'Validate and add this book'}
                 </button>
+                {ingest.isPending && (
+                  <p className="flex items-center gap-2 text-xs text-ink-secondary">
+                    <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-accent" />
+                    {progress.data?.stage ?? 'Validating the file'}
+                    {progress.data?.elapsed_s != null && (
+                      <span className="text-ink-muted">· {Math.round(progress.data.elapsed_s)}s</span>
+                    )}
+                  </p>
+                )}
+                {/* A disabled button with no reason reads as broken. The one
+                    line under it names exactly what is still required. */}
+                {outstanding.length > 0 && !ingest.isPending && (
+                  <p className="text-xs" style={{ color: 'var(--status-warning)' }}>
+                    Still needed: {outstanding.join(' · ')}
+                  </p>
+                )}
                 {ingest.isError && (
                   <Notice severity="critical" label="The tape was refused">
                     {String((ingest.error as Error).message)}
                   </Notice>
                 )}
-                <p className="text-micro leading-relaxed text-ink-muted">
-                  Validation refuses duplicates on the account-month key,
-                  unparseable dates and a non-0/1 default flag. Judgement
-                  findings (gaps, negative balances, an implausible default
-                  rate) land on the Panel surface instead, where they belong.
-                </p>
+                {outstanding.length === 0 && (
+                  <p className="text-micro leading-relaxed text-ink-muted">
+                    Validation refuses duplicate account-months, unparseable
+                    dates and a non-0/1 default flag. Judgement findings land
+                    on the Panel surface.
+                  </p>
+                )}
               </div>
             </Card>
           </div>

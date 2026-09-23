@@ -2971,3 +2971,216 @@ The guard now requires proof: it skips while a fetch is in flight, and
 ignores any list whose `dataUpdatedAt` precedes the marker's `loadedAt`.
 Only a list fetched after the marker appeared can show that the version
 is genuinely gone.
+
+## The automatic account-age baseline is removed (2026-09-20)
+
+Every fit used to add a seasoning spline on `months_on_book` unless the
+analyst switched it off: nine basis columns entered the design by default,
+in the workbench, in every Screen-search core, and in the documented
+default specification. The developer's rule is that nothing enters a
+specification automatically — a term the analyst did not choose is a term
+the model documentation cannot defend, whatever it does for AUC. Age enters
+a model the way every other driver does: select `months_on_book`, spline
+treatment if the hump matters.
+
+Measured effect of removal on a four-variable consumer specification:
+test AUC 0.787 → 0.771, out-of-time AUC 0.740 → 0.719, Hosmer–Lemeshow
+p 0.66 → 0.13, cohort-level backtest MAE and bias unchanged. Real, and
+recoverable by selecting the variable deliberately.
+
+`seasoning_spline` survives as a spec field, default `false`, because
+versions saved while the default was `true` recorded it and must replay
+to their stored numbers. `design.build` still honours it; nothing in the
+UI can set it. The browser store migration (v5) strips the flag from
+persisted working drafts, so a draft fitted under the old default shows
+"PD fit out of date" and refits clean rather than carrying the baseline
+silently.
+
+## fit/start answers in milliseconds, and lock waits are finite (2026-09-22)
+
+The failure: clicking Fit timed out after 45 seconds at /api/fit/start while
+every other request answered normally, and the wedge survived for hours. The
+mechanism had two halves. First, the start endpoint ran real work inside the
+request — column validation reads the analysis frame and the cache probe
+unpickles a stored run, about a minute each on a large cold book — so the
+"start" call itself could outlive the client's timeout while the server was
+merely busy. Second, waits on a book's load lock were unbounded: one loader
+thread that never returned (observed at 0% CPU, parked in the parquet
+reader's thread pool) collected every later request for that book behind it
+forever. Eight parked handlers made Fit dead while health answered; enough
+parked handlers exhausts the worker pool and the whole server goes silent,
+which is what the earlier total wedges were.
+
+Three changes, none touching a number. fit/start now only validates the
+cheap fields and registers the job; the frame read, the cache probe and the
+fit itself all run on the job's thread, and a bad column comes back through
+the poll as the job's error in the same words. Store lock waits time out at
+180 seconds and fail with a message naming the book instead of parking
+forever. And uvicorn runs with --timeout-graceful-shutdown 15, because its
+default waits indefinitely for in-flight requests, which made a wedged
+worker unrestartable short of kill -9.
+
+/api/debug/stacks (every thread's Python stack, read-only) stays in as the
+way to identify the next hang in place without attaching a debugger.
+
+## Correction: the wedge's seed was a self-deadlock, caught live (2026-09-22)
+
+The entry above attributed the parked loader thread to the parquet reader's
+thread pool. /api/debug/stacks caught the real seed in the act the same day:
+`_start_job` held `_FITS_LOCK` and, on finding the same fit already running,
+called `_fit_state()` — which acquires `_FITS_LOCK` again. `threading.Lock`
+is not reentrant, so the thread deadlocked on the lock it already held, and
+every fit start and status poll in the process then queued behind it
+forever. The trigger is any duplicate start for a running fit: a double
+click, a client retry, a second tab. That is why the failure recurred no
+matter what else improved, and why it always looked like "the server died".
+
+Fix: the running-branch snapshot is built from the entry already in hand
+(`_job_snapshot`, no lock), and `_fit_state` wraps the same helper behind
+one acquire. An audit found no other function that re-acquires a lock its
+caller holds. Verified live: three starts of the same running specification
+answered in 1.5s, 1ms and 1ms as "running · join", with an unrelated fit
+starting in 5ms alongside. The earlier changes stand on their own merits —
+start stays instant, lock waits stay finite, shutdown stays bounded — and
+the graceful-shutdown timeout is what let the reloader replace the wedged
+worker without a manual kill.
+
+## The change list is measured, not collected (2026-09-22)
+
+The fork gate recorded `fork.change` — the label of the ONE edit that tripped
+it. Rebinning a variable and then adding another produced a record naming
+only the rebinning; the second change existed nowhere, and the lineage arrow
+said something true but incomplete.
+
+Asking for a rationale per edit was considered and rejected: a fork is one
+departure with one reason, and a dialog per keystroke would make iterating
+unbearable. The two halves of the record are different kinds of thing. WHY is
+a judgement, and is still captured once at the gate. WHAT changed is
+arithmetic on two specifications, so `versions.spec_changes(parent, child)`
+derives it at save time — variables added, removed and retreated, bin edges
+and knots moved, macro terms, estimator, the out-of-time boundary, and the
+severity half including a changed or replaced assumption. Collecting it from
+interface events was a second, lossy copy of a fact the specifications
+already hold.
+
+The gate's own label is kept on records written before this, and the lineage
+falls back to it, so old versions still explain themselves. An arrow names a
+single change and counts several; the side panel lists them all.
+
+## A dead column no longer crashes the search (2026-09-22)
+
+Screening an ingested tape failed with "IndexError: index 2 is out of bounds
+for axis 1 with size 2" — a shape error from the variance-inflation routine,
+naming no variable.
+
+`design.build` drops columns with no variation, because a dead column's
+standard error comes back as the reciprocal of the ridge and reads as a
+numerical failure. It dropped them from `X` and from `names` but NOT from
+`terms`, so `term_groups()` handed `generalised_vif` a column index past the
+end of the matrix. `terms` is now filtered in lockstep, and `own("vintage")`
+moved above the filter so every column is tagged before anything is removed.
+
+The trigger was a narrow fitting window. Search fits see only rows BEFORE the
+out-of-time date, and the date defaulted to 2023-01-01 — right for an
+eighteen-year synthetic panel, wrong for a tape whose history starts in June
+2022, where it left 11,064 of 300,000 rows. On those rows
+`chargedoffPrincipalAmount` and `recoveredAmount` are empty, so both columns
+died. The search now refuses by name: which columns, how many rows, which
+date, and the two ways to fix it. An ingested book proposes the out-of-time
+date it was ingested with, and the setup reports when a boundary leaves too
+little history behind it. The synthetic books keep the compiled default —
+deriving one from the window would move their out-of-time split and every
+statistic measured on it.
+
+A ValueError from the search is a sentence written for the analyst, so the
+status no longer prefixes it with the exception type. Anything else keeps the
+type, which is part of the evidence.
+
+## A book's first load narrates itself (2026-09-22)
+
+Opening a 22-million-row tape showed three pulsing skeletons for the better
+part of a minute, which is indistinguishable from a hang. `prepare` already
+warmed the book on a thread; it now records the stage it is in — reading the
+panel, joining account attributes, screening the columns — and the Panel
+polls it and reports. The card says the cost is paid on the first visit only,
+because it is: the frame is held afterwards.
+
+## The ingested-tape path, walked end to end (2026-09-22)
+
+The three synthetic books had been walked many times; an ingested tape had
+not, and it broke in places the synthetic books never reach. Each fix below
+changes what the reader sees, not what any number means.
+
+- **MEV series took 15 seconds a click.** `series_for` rebuilt the monthly
+  default-rate target from the 22-million-row panel on every request. The
+  target builders are cached per book and cleared with the store.
+- **The MEV axis read "Jun ... Jun".** Tick spacing was fixed at 36 months
+  with a year label only in January, sized for an eighteen-year panel. On
+  a 46-month tape that left two June ticks. `monthAxis()` picks spacing and
+  a month-and-year label from the number of months plotted; the Panel's
+  time axis prints month and year at its half-year ticks the same way.
+- **A book with no realised severity.** The MEV tile said "0 defaults", the
+  LGD ranking drew a severity line that did not exist, the LGD screening
+  tab showed a blank table (the 400 behind it was never rendered), the
+  Scenarios page described the assumption as "fractional logit fitted on
+  0 defaults", and the call to action said "Select LGD drivers". Every one
+  now says what the book is: severity declared, not estimated.
+- **A constant candidate aborted the whole screening.** `recoveredAmount`
+  held one value on the rows before the boundary and the run refused by
+  name. It is now set aside by name, with the row count and the boundary,
+  in the core's construction trace, and the run continues. A column with
+  one value cannot be estimated by any fit, so nothing enters or leaves
+  the candidate set on a judgement.
+- **Saving turned the Scenarios stage orange.** The save moved the fit
+  record onto the saved hash but left the projection marker on the
+  pre-save one, so a projection run seconds earlier read as stale. The
+  marker follows the fit record when it matches it.
+- **A term shortlisted after the screening draft was seeded arrived
+  unticked** beside a disabled run button whose only explanation was a
+  tooltip. An empty term list now takes the shortlist on arrival; a list
+  the reader has already shaped is left alone.
+- **A small book showed an MEV window of "NaT to NaT".** `pd_target`
+  keeps only months with 500 or more account-months, and a 400-account
+  test tape had none. The floor is unchanged (it gates what enters, so it
+  is the developer's to move); the surface now states it and that no
+  month reached it. The floor is exported as `MIN_MONTH_ROWS`.
+- **The Panel opened mid-page after a validate.** `<main>` is the scrolling
+  element, so the browser's own scroll reset on navigation never fired.
+  It scrolls to the top on every route change.
+- **Draft seeding.** An untouched PD draft on an ingested book takes the
+  out-of-time date stated at ingestion; a draft with variables or a fit is
+  never moved. The Screen setup carries the same date as an editable field
+  with the fit-window warning beside it.
+
+Open with the developer, not decided here: the rule for the out-of-time
+date proposed at ingestion (the Santander tape carries 2022-06-01, its own
+first month, which leaves nothing to fit on), the leakage/candidate rule
+(`recoveredAmount`, `interest_rate`, `months_on_book` and `remaining_term`
+carry a "leakage review" note yet stay candidates because their IV is under
+1.5; `trust_cik`, an issuer identifier, and `loanMaturityDate` entered a
+core), and the 500-row month floor.
+
+## Scoring aligns to the fitted columns (2026-09-22)
+
+The screening failed with "operands could not be broadcast together with
+shapes (300000,93) (91,)". Search fits use the rows before the out-of-time
+boundary; a level that first appears after it (a vintage, a category) emits
+a dummy column on the full frame that had no rows on the fit frame and was
+dropped there. Scoring then multiplied 93 columns by 91 coefficients. The
+same shape mismatch waited in the workbench fit, the projection and the
+partial-dependence endpoint, all of which score a frame with a fit's
+statistics.
+
+`design.build` now takes the fitted `columns` whenever it is given a fit's
+means and stds, and aligns to them: an unseen column is left out, so a row
+carrying that level scores at the reference level, the contribution of a
+coefficient that was never estimated; a fitted column absent from the frame
+is all zeros, which is what a dummy for a level nobody holds is. Verified
+on the consumer book with vintage bins and a 2010 boundary: fitted rows
+score identically before and after; the screening that failed completes.
+
+Turning the out-of-time split off in favour of train/test alone was asked
+about and declined: the out-of-time AUC is the leaderboard's headline
+metric, 30% of the composite, and the workbench's fit-for-purpose check.
+The boundary is the analyst's to move; on the Santander tape the last six
+months is 2025-10-01.

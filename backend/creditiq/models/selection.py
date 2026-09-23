@@ -220,6 +220,18 @@ def _frames(cfg: SelectionConfig) -> tuple[pd.DataFrame, pd.DataFrame]:
 
 def _lean_fit(fit_df: pd.DataFrame, spec: ModelSpec) -> Lean:
     des = D.build(fit_df, spec)
+    if des.dropped:
+        # A candidate that holds one value — or none — on the fitting window
+        # cannot be estimated, and the failure used to surface as an index
+        # error from the variance-inflation routine with no variable named.
+        # Say which column, and on how many rows, so the fix is obvious.
+        raise ValueError(
+            f"{', '.join(des.dropped)} "
+            f"{'hold' if len(des.dropped) > 1 else 'holds'} a single value on "
+            f"the {len(fit_df):,} rows before the out-of-time date "
+            f"({spec.sample.oot_from}), so it cannot be estimated. Move the "
+            "out-of-time date later to widen the fitting window, or drop the "
+            "variable from the candidates.")
     res = F.fit(des, spec)
     return Lean(fit=res, ll=res.log_likelihood, k=len(res.columns),
                 n_events=res.n_events_train, design=des)
@@ -301,8 +313,7 @@ def build_cores(cfg: SelectionConfig, progress=None, cancel=None) -> list[Core]:
     cores: list[Core] = []
     steps: list[dict] = []
 
-    # Forward stepwise. The null model is the account-age baseline alone, so a
-    # candidate has to explain something age does not.
+    # Forward stepwise from the intercept-only null model.
     #
     # The VIF cap is part of the entry rule, not a post-hoc filter: a candidate
     # that improves the criterion but pushes any term's VIF over the reviewer's
@@ -316,7 +327,18 @@ def build_cores(cfg: SelectionConfig, progress=None, cancel=None) -> list[Core]:
     vif_blocked: dict[str, float] = {}
     selected: list[str] = []
     current = fit_columns(selected)
-    remaining = list(by_col)
+    # A candidate that holds one value on the fitting window (before the
+    # out-of-time date) cannot be estimated by any fit, so it never enters
+    # the pass. It is set aside by name, with the row count, rather than
+    # aborting the whole run — that is the reader's cue to widen the window
+    # or drop the column. Nothing else about the candidate set changes.
+    remaining: list[str] = []
+    for col in by_col:
+        if col in fit_df.columns and fit_df[col].nunique(dropna=True) < 2:
+            steps.append({"action": "unfit", "column": col,
+                          "n_rows": int(len(fit_df)), "oot_from": cfg.oot_from})
+        else:
+            remaining.append(col)
     n_fits = 0
     passnum = 0
     while remaining:
@@ -710,7 +732,8 @@ def joint_fit_rows(cfg: SelectionConfig, cores: list[Core],
                            woe_maps=core.lean.fit.woe_maps,
                            means=core.lean.fit.means,
                            stds=core.lean.fit.stds,
-                           basis_maps=core.lean.fit.basis_maps)
+                           basis_maps=core.lean.fit.basis_maps,
+                           columns=core.lean.fit.columns)
         bank_all = MevBank(full_df, stats=bank.stats)
         for combo in combos.get(core.name, []):
             step += 1
@@ -1025,7 +1048,10 @@ def run_finalists(cfg: SelectionConfig, rows: list[dict],
 
 
 # ── the whole search ─────────────────────────────────────────────────────────
-N_STAGES = 4
+# Three stages: cores, macro combinations, ranking. The fourth used to be a
+# full re-fit of the top rows on the unthinned panel; see the note at the end
+# of `search` for why it is gone.
+N_STAGES = 3
 
 
 def combo_bound(cfg: SelectionConfig) -> int:
@@ -1130,5 +1156,24 @@ def run_search(cfg: SelectionConfig, progress=None, cancel=None,
     }
     if checkpoint:
         checkpoint(payload)
-    run_finalists(cfg, rows, progress=stage(4), cancel=cancel)
+    # No automatic finalist stage.
+    #
+    # It used to take the top rows and give each a real service.run on the
+    # FULL panel, which is the one part of the search that leaves the
+    # screening frame. On a 22-million-row tape that was five fits at three
+    # minutes each: fifteen minutes, on top of a search that had already
+    # finished, for models nobody had chosen yet.
+    #
+    # Nothing the board RANKS on came from it. Out-of-time AUC, significance,
+    # collinearity, sign checks, core stability and the stress direction are
+    # all computed on the thinned frame for every row. The finalist pass only
+    # pre-computed the backtest and decile capture shown in the detail pane of
+    # the top few — and opening any row as a draft refits on full data anyway,
+    # discarding that work.
+    #
+    # `run_finalists` is kept for an on-demand caller: full statistics for the
+    # ONE model somebody asks about is a reasonable three minutes, where five
+    # speculative ones were not.
+    for r in rows:
+        r.setdefault("finalist", False)
     return payload

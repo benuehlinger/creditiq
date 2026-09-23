@@ -80,6 +80,8 @@ export default function RollUpSurface() {
   // stress it separates from the run-rate as losses emerge, then contracts as
   // the stressed cohorts resolve. Both shapes of the same series.
   const [emergence, setEmergence] = useState<'cumulative' | 'monthly'>('cumulative')
+  // Which half's macro exposures the what-the-models-respond-to view shows.
+  const [mevLens, setMevLens] = useState<'pd' | 'lgd'>('pd')
   useEffect(() => {
     if (isFetching) { setJustRan(true); return }
     if (!justRan) return
@@ -152,7 +154,8 @@ export default function RollUpSurface() {
     const membership: Record<string, string[]> = {}
     const terms: string[] = []
     for (const p of data?.portfolios ?? []) {
-      for (const t of p.mev_terms ?? []) {
+      const src = mevLens === 'lgd' ? (p.lgd_mev_terms ?? []) : (p.mev_terms ?? [])
+      for (const t of src) {
         if (!membership[t]) { membership[t] = []; terms.push(t) }
         membership[t].push(p.portfolio)
       }
@@ -162,7 +165,7 @@ export default function RollUpSurface() {
       label: p.label, color: portfolioColor(p.portfolio, m),
     }))
     return { terms, membership, books }
-  }, [data, theme])
+  }, [data, theme, mevLens])
 
   const tornado = useMemo(() => {
     if (!data?.tornado.length) return null
@@ -229,7 +232,7 @@ export default function RollUpSurface() {
       <div className="space-y-3 p-4">
         <Card>
           <CardHead title="Portfolio roll-up"
-            caption="No book has a promoted model yet. Promote a champion on a book's Versions page, or report a book on a saved version below, and the roll-up assembles from your choices." />
+            caption="No book has a promoted model. Promote a champion on a book's Versions page, or report on a saved version below." />
           <div className="grid gap-px border-t border-hairline bg-hairline sm:grid-cols-3">
             {uncovered.map((u) => {
               const options = data.available[u.portfolio] ?? []
@@ -271,6 +274,11 @@ export default function RollUpSurface() {
                 </div>
               )
             })}
+            {/* The hairline-gap grid shows its backing through any unfilled
+                cell; pad the last row so it reads as surface, not a hole. */}
+            {Array.from({ length: (3 - (uncovered.length % 3)) % 3 }).map((_, i) => (
+              <div key={`pad-${i}`} aria-hidden className="bg-surface" />
+            ))}
           </div>
         </Card>
       </div>
@@ -351,7 +359,7 @@ export default function RollUpSurface() {
 
       <Card>
         <CardHead title="Position by portfolio"
-          caption="Each book, the model it is reported on, and its stressed figure. The picker swaps the model this book is projected with; the book's name opens its workspace." />
+          caption="Each book, the model it is reported on, and its stressed figure. The picker changes the reporting model; the book's name opens its workspace." />
         <div className="grid gap-px bg-hairline sm:grid-cols-3">
           {data.portfolios.map((p) => {
             const s = p.by_scenario.severely_adverse
@@ -499,6 +507,13 @@ export default function RollUpSurface() {
               </div>
             )
           })}
+          {/* Pad the last row: the hairline-gap grid shows its backing through
+              any unfilled cell. */}
+          {Array.from({
+            length: (3 - ((data.portfolios.length + uncovered.length) % 3)) % 3,
+          }).map((_, i) => (
+            <div key={`pad-${i}`} aria-hidden className="bg-surface" />
+          ))}
         </div>
         {!data.is_adopted && (
           <p className="max-w-[88ch] border-t border-hairline px-4 py-2 text-micro leading-relaxed text-ink-muted">
@@ -547,10 +562,28 @@ export default function RollUpSurface() {
 
       <Card>
         <CardHead title="What the models respond to"
-          caption="One row per macro term. The dot columns say which book's model carries it: a factor shared across books is one exposure however many models load on it, and the gaps say what a book is NOT exposed to. The path is history to the projection date, then the two Federal Reserve branches; the figures are the break-off."
-          right={<MevLegend />} />
-        <MevPathRows terms={mevUnion.terms} books={mevUnion.books}
-                     membership={mevUnion.membership} />
+          caption="One row per macro term; the dot columns mark which book's model carries it. Each path shows history to the projection date, then the two Federal Reserve branches."
+          right={
+            <div className="flex items-center gap-3">
+              <ViewTabs value={mevLens} onChange={setMevLens} tabs={[
+                { key: 'pd' as const, label: 'PD',
+                  title: 'Macro terms in the adopted PD specifications' },
+                { key: 'lgd' as const, label: 'LGD',
+                  title: 'Macro terms in the adopted severity specifications' },
+              ]} />
+              <MevLegend />
+            </div>
+          } />
+        {mevUnion.terms.length === 0 ? (
+          <p className="px-4 py-6 text-center text-xs text-ink-muted">
+            {mevLens === 'lgd'
+              ? 'No adopted severity model carries a macro term. Severity on these books does not move with the scenario.'
+              : 'No adopted model carries a macro term.'}
+          </p>
+        ) : (
+          <MevPathRows terms={mevUnion.terms} books={mevUnion.books}
+                       membership={mevUnion.membership} />
+        )}
       </Card>
 
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
@@ -570,7 +603,7 @@ export default function RollUpSurface() {
         <Card>
           <CardHead title="Risk parameters under stress"
             subtitle="12-month PD and LGD per book, baseline against severely adverse"
-            caption="The two halves of every loss number, shown as the distance stress moves them. PD is the exposure-weighted 12-month default probability; LGD is the mean predicted severity over the same window. The books whose dumbbells stretch furthest are where the stress number comes from."
+            caption="PD is the exposure-weighted 12-month default probability; LGD is the mean predicted severity over the same window. Segment length is the movement under stress."
             right={<Legend items={[
               { name: 'Supervisory Baseline', color: ordinal(0, 2) },
               { name: 'Supervisory Severely Adverse', color: ordinal(1, 2) },
@@ -626,50 +659,18 @@ export default function RollUpSurface() {
       <Card>
         <CardHead title="Concentration"
             subtitle="Share of each book's drawn balance, at the latest performance date"
-            caption="Each book is cut along the dimension its committee actually watches: origination FICO for consumer, current LTV for mortgage, property type for commercial. Bar length is the band's share of that book's balance; the figure is the balance itself. A property of the book, not of a model — changing the adopted model above moves nothing here." />
+            caption="Each book opens on its primary risk dimension; the picker beside a book's name cuts its drawn balance along any column, in round bands." />
           <div className="grid gap-x-8 gap-y-4 px-4 py-3"
                style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}>
-            {Object.entries(data.concentration).map(([p, bands]) => {
-              const maxShare = Math.max(...bands.map((b) => b.share), 0.01)
-              const DIM: Record<string, string> = {
-                consumer: 'by origination FICO', mortgage: 'by current LTV',
-                cre: 'by property type',
-              }
-              return (
-                <div key={p}>
-                  <div className="flex items-baseline gap-2 text-tiny">
-                    <span className="h-2 w-2 self-center rounded-full"
-                          style={{ background: portfolioColor(p as any, m) }} />
-                    <span className="font-medium text-ink">
-                      {data.portfolios.find((x) => x.portfolio === p)?.label ?? p}
-                    </span>
-                    <span className="text-micro text-ink-muted">{DIM[p] ?? ''}</span>
-                  </div>
-                  <div className="mt-1.5 space-y-1">
-                    {bands.map((b) => (
-                      <div key={b.band} className="flex items-center gap-2"
-                           title={`${b.band}: ${usd(b.exposure)} drawn, ${(b.share * 100).toFixed(1)}% of the book`}>
-                        <span className="w-20 shrink-0 text-right font-mono text-micro text-ink-muted">
-                          {b.band}
-                        </span>
-                        <div className="h-3 flex-1 rounded-sm bg-sunken">
-                          <div className="h-3 rounded-sm"
-                               style={{ width: `${(b.share / maxShare) * 100}%`,
-                                        background: portfolioColor(p as any, m),
-                                        opacity: 0.85 }} />
-                        </div>
-                        <span className="w-9 shrink-0 text-right tnum text-micro text-ink-secondary">
-                          {(b.share * 100).toFixed(0)}%
-                        </span>
-                        <span className="w-14 shrink-0 text-right tnum text-micro text-ink-muted">
-                          {usd(b.exposure)}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )
-            })}
+            {Object.entries(data.concentration).map(([p, bands]) => (
+              <ConcentrationBook key={p} p={p}
+                label={data.portfolios.find((x) => x.portfolio === p)?.label ?? p}
+                color={portfolioColor(p as any, m)}
+                defaultDim={{ consumer: 'by origination FICO',
+                              mortgage: 'by current LTV',
+                              cre: 'by property type' }[p] ?? 'default view'}
+                defaultBands={bands} />
+            ))}
           </div>
         </Card>
     </div>
@@ -782,6 +783,75 @@ function Welcome() {
       <p className="mt-10 border-t border-hairline pt-4 text-xs text-ink-muted">
         This page becomes the portfolio roll-up as books gain promoted models.
       </p>
+    </div>
+  )
+}
+
+/** One book's concentration column, with the dimension the user chooses.
+ *
+ *  The default is the roll-up's committee dimension for the book; picking any
+ *  other column bands the drawn balance along it server-side, in round bands
+ *  for numeric columns and largest-first levels for categorical ones. */
+function ConcentrationBook({ p, label, color, defaultDim, defaultBands }: {
+  p: string
+  label: string
+  color: string
+  defaultDim: string
+  defaultBands: { band: string; exposure: number; share: number }[]
+}) {
+  const [col, setCol] = useState('')
+  const books = useQuery({ queryKey: ['portfolios'], queryFn: api.portfolios })
+  const info = books.data?.find((b) => b.key === p)
+  const options = useMemo(() => {
+    const cand = [...(info?.drivers ?? []), ...(info?.categorical_drivers ?? [])]
+    return [...new Set(cand)].sort()
+  }, [info])
+  const custom = useQuery({
+    queryKey: ['concentration', p, col],
+    queryFn: () => api.concentration(p, col),
+    enabled: !!col, staleTime: Infinity,
+  })
+  const bands = col ? (custom.data?.bands ?? []) : defaultBands
+  const maxShare = Math.max(...bands.map((b) => b.share), 0.01)
+  return (
+    <div>
+      <div className="flex items-baseline gap-2 text-tiny">
+        <span className="h-2 w-2 self-center rounded-full" style={{ background: color }} />
+        <span className="font-medium text-ink">{label}</span>
+        <select value={col} onChange={(e) => setCol(e.target.value)}
+          className="max-w-[170px] cursor-pointer truncate border-none bg-transparent text-micro text-ink-muted outline-none hover:text-ink"
+          title="Cut this book's drawn balance along a different column.">
+          <option value="">{defaultDim}</option>
+          {options.map((c) => <option key={c} value={c}>by {c}</option>)}
+        </select>
+      </div>
+      <div className="mt-1.5 space-y-1">
+        {col && custom.isLoading && <div className="skeleton h-24" />}
+        {col && custom.isError && (
+          <p className="text-micro" style={{ color: 'var(--status-critical)' }}>
+            {String((custom.error as Error).message)}
+          </p>
+        )}
+        {bands.map((b) => (
+          <div key={b.band} className="flex items-center gap-2"
+               title={`${b.band}: ${usd(b.exposure)} drawn, ${(b.share * 100).toFixed(1)}% of the book`}>
+            <span className="w-20 shrink-0 truncate text-right font-mono text-micro text-ink-muted">
+              {b.band}
+            </span>
+            <div className="h-3 flex-1 rounded-sm bg-sunken">
+              <div className="h-3 rounded-sm"
+                   style={{ width: `${(b.share / maxShare) * 100}%`,
+                            background: color, opacity: 0.85 }} />
+            </div>
+            <span className="w-9 shrink-0 text-right tnum text-micro text-ink-secondary">
+              {(b.share * 100).toFixed(0)}%
+            </span>
+            <span className="w-14 shrink-0 text-right tnum text-micro text-ink-muted">
+              {usd(b.exposure)}
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

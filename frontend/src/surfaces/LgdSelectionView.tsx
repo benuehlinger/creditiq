@@ -27,14 +27,21 @@ export default function LgdSelectionView({ pk, view }: {
   const run = useUi((s) => s.lgdSelectionRun[pk])
   const setRun = useUi((s) => s.setLgdSelectionRun)
   const editLgd = useUi((s) => s.editLgd)
+  const setLgdOrigin = useUi((s) => s.setLgdOrigin)
   const fittedLgd = useUi((s) => s.fittedLgd[pk])
 
   // The severity SCREEN, not the raw column list: candidates arrive ranked
   // by their rank correlation with realised severity, and the proposed seed
   // is the book's documented default specification — never an alphabetical
   // accident.
+  // A book with no realised severity has nothing to screen: no target for
+  // the rank correlations, no population for the search. The screen query
+  // is not sent for it, and the stage shows the one thing that applies.
+  const books = useQuery({ queryKey: ['portfolios'], queryFn: api.portfolios })
+  const hasSeverity = books.data?.find((b) => b.key === pk)?.has_severity
   const defaults = useQuery({ queryKey: ['lgdscreen', pk, ''],
-                              queryFn: () => api.lgdScreen(pk, []) })
+                              queryFn: () => api.lgdScreen(pk, []),
+                              enabled: hasSeverity !== false })
   // Driver candidates are tape columns only: macro terms reach the search
   // through the MEV surface's LGD shortlist, never as level columns.
   const numeric = (defaults.data?.rows ?? [])
@@ -63,15 +70,25 @@ export default function LgdSelectionView({ pk, view }: {
   const [corrCap, setCorrCap] = useState(0.7)
   const [minMevs, setMinMevs] = useState(1)
   const [maxMevs, setMaxMevs] = useState(3)
-  const [topN, setTopN] = useState(10)
   const [ootFrom, setOotFrom] = useState('2023-01-01')
+  // The book's own boundary, once known. A fixed date belongs to the
+  // eighteen-year synthetic panels; on a short tape it left weeks to fit on.
+  const bookDefaults = useQuery({ queryKey: ['lgdseldefaults', pk],
+                                  queryFn: () => api.lgdSelectionDefaults(pk),
+                                  staleTime: Infinity })
+  const seededOot = useRef(false)
+  useEffect(() => {
+    if (seededOot.current || !bookDefaults.data?.oot_from) return
+    seededOot.current = true
+    setOotFrom(bookDefaults.data.oot_from)
+  }, [bookDefaults.data?.oot_from])
 
   const config = () => ({
     candidates: picked ?? [],
     mev_terms: [...shortlist],
     rules: { max_vif: maxVif, vif_rule: vifRule, mev_screen_p: screenP,
              mev_corr_cap: corrCap, min_mevs: minMevs, max_mevs: maxMevs,
-             top_n_full: topN },
+             },
     oot_from: ootFrom,
   })
 
@@ -119,11 +136,36 @@ export default function LgdSelectionView({ pk, view }: {
       treatments: spec.treatments ?? {}, edges: spec.edges ?? {},
       knots: spec.knots ?? {}, n_knots: spec.n_knots, max_bins: spec.max_bins,
     }), 'the severity screening selection',
-    { drivers: [], categoricals: [] })
+    { drivers: [], categoricals: [] }, { adopt: true })
+    // The draft's provenance: the first edit of this severity specification
+    // is a departure from the search row and asks for a rationale, exactly
+    // as the PD side's open-as-draft does.
+    setLgdOrigin(pk, {
+      kind: 'selection', name: r.name, hash: r.hash,
+      rank: (r as any).auto_rank ?? null,
+      configHash: run?.configHash ?? '',
+    })
     nav(`/${pk}/lgd`)
   }
 
   const vifFlag = maxVif > 0 ? maxVif : 5
+
+  if (hasSeverity === false) {
+    return (
+      <Card>
+        <EmptyState title="This book carries no realised severity"
+          action={<button onClick={() => nav(`/${pk}/lgd`)}
+            className="rounded-ctl bg-accent px-3 py-1.5 text-xs font-semibold text-white">
+            Open the LGD model stage</button>}>
+          No realised-LGD column was mapped when the tape was loaded, so there
+          is no severity to rank drivers against and nothing for the severity
+          screening to fit. The PD screening is unaffected. Declare an assumed
+          severity on the LGD model stage; the projection applies it to every
+          exposure.
+        </EmptyState>
+      </Card>
+    )
+  }
 
   return (
     <div className="space-y-3">
@@ -207,7 +249,7 @@ export default function LgdSelectionView({ pk, view }: {
         <div className="space-y-3">
           <Card>
             <CardHead title="Screening rules"
-              caption="The same discipline as the PD screening: the VIF cap applies to core entry, macro terms come 1 to 3 per model from the shortlist, and the headline is out-of-time MAE in loss points." />
+              caption="The VIF cap applies at core entry, each model carries 1 to 3 macro terms from the shortlist, and the headline metric is out-of-time MAE in loss points." />
             <div className="grid grid-cols-2 gap-3 px-4 pb-4">
               <Field label="MEV terms per model">
                 <div className="flex items-center gap-1">
@@ -227,6 +269,11 @@ export default function LgdSelectionView({ pk, view }: {
                   onChange={(e) => setOotFrom(e.target.value)}
                   className="w-full rounded-ctl border border-hairline bg-surface px-1.5 py-1 text-xs" />
               </Field>
+            {bookDefaults.data?.fit_window_note && ootFrom === bookDefaults.data.oot_from && (
+              <p className="col-span-2 text-xs" style={{ color: 'var(--status-warning)' }}>
+                {bookDefaults.data.fit_window_note}
+              </p>
+            )}
               <Field label="MEV screen p">
                 <input type="number" step="0.01" value={screenP}
                   onChange={(e) => setScreenP(+e.target.value)}
@@ -250,11 +297,7 @@ export default function LgdSelectionView({ pk, view }: {
                     className="w-16 rounded-ctl border border-hairline bg-surface px-1.5 py-1 text-xs" />
                 </div>
               </Field>
-              <Field label="Finalists">
-                <input type="number" step="1" min={1} max={12} value={topN}
-                  onChange={(e) => setTopN(+e.target.value)}
-                  className="w-full rounded-ctl border border-hairline bg-surface px-1.5 py-1 text-xs" />
-              </Field>
+
             </div>
           </Card>
 
@@ -363,7 +406,7 @@ export default function LgdSelectionView({ pk, view }: {
                       <th className="px-2 py-2 text-right font-medium"
                           title="Mean absolute error on the fitted rows.">MAE in</th>
                       <th className="px-2 py-2 text-right font-medium"
-                          title="Quasi-likelihood analogue of pseudo R². Finalists only.">
+                          title="Quasi-likelihood analogue of pseudo R². Computed when a model is opened and fitted.">
                         Dev R²
                       </th>
                       <th className="px-2 py-2 text-right font-medium"
@@ -513,7 +556,7 @@ export default function LgdSelectionView({ pk, view }: {
                 )}
                 {!detail.finalist && (
                   <p className="text-micro text-ink-muted">
-                    Board statistics only. Finalists carry deviance R², the
+                    Search statistics only. Opening a model computes deviance R², the
                     link test and the refit backtest.
                   </p>
                 )}

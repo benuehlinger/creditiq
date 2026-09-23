@@ -25,7 +25,7 @@ import LgdSelectionView from './LgdSelectionView'
  *    versions/selection, never in this component
  */
 
-const STAGE_LABELS = ['Cores', 'Macro screen', 'Combinations', 'Finalists']
+const STAGE_LABELS = ['Cores', 'MEV screen', 'Combinations']
 
 const REASON_LABELS: Record<string, string> = {
   counterintuitive_mev_sign: 'Counterintuitive MEV sign',
@@ -248,9 +248,23 @@ function SetupView({ pk, running, onStarted }: {
       expert_core: null,
       mev_terms: [...shortlist],
       rules: {},
-      oot_from: '2023-01-01',
+      oot_from: d.oot_from ?? '2023-01-01',
     })
   }, [draft, d, pk, shortlist])
+
+  // A draft seeded before anything was shortlisted holds no macro term, and
+  // a term shortlisted later on the MEV surface arrived here as an unticked
+  // chip beside a disabled run button. On arrival, an empty term list takes
+  // the current shortlist; a list the reader has already shaped is left
+  // alone, so dropping a term stays dropped.
+  const filledOnArrival = useRef<string | null>(null)
+  useEffect(() => {
+    if (!draft || !draft.mev_terms || filledOnArrival.current === pk) return
+    filledOnArrival.current = pk
+    if (draft.mev_terms.length === 0 && shortlist.length > 0) {
+      setDraft(pk, { ...draft, mev_terms: [...shortlist] })
+    }
+  }, [draft, pk, shortlist, setDraft])
 
   const preview = useQuery({
     queryKey: ['selpreview', pk, JSON.stringify(draft)],
@@ -300,7 +314,7 @@ function SetupView({ pk, running, onStarted }: {
       <Card>
         <CardHead title="Candidate variables"
           subtitle="What the stepwise screening may build the borrower core from"
-          caption="Each variable enters with the treatment chosen here. A spline or a set of bin indicators enters and leaves the model as one block. Columns the leakage check flagged, and columns below the information-value null floor, arrive excluded; include one only deliberately."
+          caption="Each variable enters with the treatment chosen here; a spline or bin set enters and leaves the model as one block. Columns flagged for leakage, or below the information-value null floor, are excluded by default."
           right={<button onClick={() => setDraft(pk, null)}
             title="Discard this setup and reseed it from the variable screen."
             className="rounded-ctl border border-hairline px-2 py-0.5 text-tiny text-ink-secondary hover:text-ink">
@@ -455,11 +469,18 @@ function SetupView({ pk, running, onStarted }: {
                   e.target.value ? Number(e.target.value) : null)}
                 className="w-full rounded-ctl border border-hairline bg-surface px-2 py-1 text-xs tnum" />
             </Field>
-            <Field label="Finalists" hint="How many top models get the full fit, backtest and error decomposition. The rest carry lean statistics until promoted.">
-              <input type="number" min="1" max="12" value={rules.top_n_full ?? 10}
-                onChange={(e) => setRule('top_n_full', Number(e.target.value))}
-                className="w-full rounded-ctl border border-hairline bg-surface px-2 py-1 text-xs tnum" />
+            <Field label="Out of time from"
+                   hint="Search fits use only the rows BEFORE this date; the months after it are the out-of-time yardstick. Defaults to the date this book was ingested with.">
+              <input type="date" value={draft.oot_from ?? ''}
+                onChange={(e) => setDraft(pk, { ...draft, oot_from: e.target.value })}
+                className="w-full rounded-ctl border border-hairline bg-surface px-2 py-1 text-xs" />
             </Field>
+            {d.fit_window_note && draft.oot_from === d.oot_from && (
+              <p className="col-span-2 text-xs" style={{ color: 'var(--status-warning)' }}>
+                {d.fit_window_note}
+              </p>
+            )}
+
           </div>
         </Card>
 
@@ -789,8 +810,8 @@ function Board({ pk, res, review, selected, onSelect }: {
         <CardHead title="Leaderboard"
           subtitle={`${num(live.length)} models from ${num(res.n_combos)} fitted combinations`}
           caption={grouping === 'rank'
-            ? 'Two rankings, kept side by side: the automated rank from the stated composite, and yours. Drag a row (or use the arrows) to set the user rank; moving a model away from its automated rank requires a justification, which the audit trail records.'
-            : 'The same models, grouped by the core each was built on. Every group states its construction method and entry trace, with any candidate the VIF cap refused. Ranks keep their meaning; review actions live in the Rank view.'}
+            ? 'The automated rank from the stated composite beside the user rank. Reordering a model away from its automated rank requires a justification, recorded in the audit trail.'
+            : 'The same models, grouped by originating core. Each group states its construction method and entry sequence, with any candidate refused by the VIF cap.'}
           methodology="selection-composite"
           right={
             <div className="flex items-center gap-2">
@@ -878,7 +899,7 @@ function Board({ pk, res, review, selected, onSelect }: {
                 <th className="px-2 py-2 text-right font-medium" title="Worst term-level generalised VIF.">VIF</th>
                 <th className="px-2 py-2 text-center font-medium" title="Whether a core coefficient flipped sign or shifted materially when the macro terms joined.">Shift</th>
                 <th className="px-2 py-2 text-center font-medium" title="Peak PD ordered baseline then severe, and the severe peak, from the fitted macro response.">Stress</th>
-                <th className="px-2 py-2 text-right font-medium" title="Backtest error on the annualised default rate, out of time, percentage points. Finalists only; promote a model to compute it.">RMSE</th>
+                <th className="px-2 py-2 text-right font-medium" title="Backtest error on the annualised default rate, out of time, percentage points. Computed when a model is opened and fitted, not during the search.">RMSE</th>
                 <th className="px-2 py-2 font-medium">Status</th>
               </tr>
             </thead>
@@ -943,11 +964,11 @@ function Board({ pk, res, review, selected, onSelect }: {
                     </td>
                     <td className="px-2 py-1.5"
                         title={`${r.name} — ${r.lineage.map((l) => l.core).join(', ')} core${
-                          r.finalist ? '' : ' (lean statistics only)'}`}>
+                          r.finalist ? '' : ' (search statistics)'}`}>
                       <span className="font-medium text-ink">{r.name}</span>
                       <span className="ml-1.5 text-micro text-ink-muted">
                         {r.lineage.map((l) => l.core).join(', ')} core
-                        {r.finalist ? '' : ' · lean'}
+
                       </span>
                     </td>
                     <td className="px-2 py-1.5"
@@ -1153,6 +1174,7 @@ export function CoreConstruction({ core, entryMetric, vifFlag }: {
   const drops = steps.filter((s) => s.action === 'drop')
   const blocks = steps.filter((s) => s.action === 'vif_block')
   const rejected = steps.filter((s) => s.action === 'rejected')
+  const unfit = steps.filter((s) => s.action === 'unfit')
   // The entry steps say which rule actually ran; the config's metric is only
   // the fallback (the severity search always enters on the robust Wald p).
   const stepMetric = String(entries[0]?.metric ?? entryMetric)
@@ -1231,6 +1253,23 @@ export function CoreConstruction({ core, entryMetric, vifFlag }: {
               <span className="font-mono">{String(b.column)}</span>
               {' '}improved the criterion but would carry VIF{' '}
               {Number(b.vif).toFixed(1)}, over the cap of {String(b.cap)}.
+            </p>
+          ))}
+        </div>
+      )}
+      {unfit.length > 0 && (
+        <div className="mb-2 rounded-ctl border px-2.5 py-1.5"
+             style={{ borderColor: 'color-mix(in srgb, var(--status-warning) 50%, transparent)' }}>
+          <h4 className="mb-0.5 text-micro font-medium uppercase tracking-wide"
+              style={{ color: 'var(--status-warning)' }}>
+            Set aside — not estimable on the fitting window
+          </h4>
+          {unfit.map((b) => (
+            <p key={String(b.column)} className="text-micro text-ink-secondary">
+              <span className="font-mono">{String(b.column)}</span>
+              {' '}holds a single value on the {num(Number(b.n_rows))} rows before{' '}
+              {String(b.oot_from)}, so it was never tested. Move the out-of-time
+              date later to widen the window, or drop it from the candidates.
             </p>
           ))}
         </div>

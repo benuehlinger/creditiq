@@ -76,15 +76,33 @@ SCHEMA: list[dict] = [
      "about": "Needed to project amortising exposure at default."},
     {"name": "committed_amount", "role": "exposure", "required": False,
      "about": "Facility commitment. Needed for the CCF exposure method."},
+    # ONE severity field, already calculated.
+    #
+    # LGD is not a column anyone holds, it is the ANSWER to questions only
+    # the person holding the book can settle: recoveries to date or to
+    # resolution, gross or net of repossession and legal costs, discounted to
+    # the default date at what rate, open workouts excluded or counted at
+    # whatever has come in. Every choice is defensible and they give
+    # materially different numbers on the same loans.
+    #
+    # So the app asks for the finished figure and for a line saying how it
+    # was worked out — the same move as the default definition. Deriving it
+    # from components would mean inventing someone's loss policy, and
+    # offering every combination would turn this screen into the data-prep
+    # tool this product exists not to be.
+    #
+    # `recovery_amount` used to sit here and nothing ever read it: an
+    # uploader could map recoveries, reasonably expect a severity model, and
+    # get silence.
     {"name": "lgd_realised", "role": "severity", "required": False,
-     "about": "Realised loss severity on resolved defaults, 0 to 1. "
-              "Without it this book cannot have a severity model."},
+     "about": "Loss given default at the default month, already calculated, "
+              "as a fraction from 0 to 1. Required to FIT a severity model; "
+              "without it the book runs on a declared assumption instead."},
     {"name": "exposure_at_default", "role": "severity", "required": False,
-     "about": "Exposure at the default month, for severity weighting."},
-    {"name": "recovery_amount", "role": "severity", "required": False,
-     "about": "Recovered amount on resolved defaults."},
+     "about": "Balance owed at the default month. Exposure-weights the loss "
+              "figure; not used to derive severity."},
     {"name": "workout_months", "role": "severity", "required": False,
-     "about": "Months from default to resolution."},
+     "about": "Months from default to resolution. Times the discounting."},
 ]
 REQUIRED = [c["name"] for c in SCHEMA if c["required"]]
 
@@ -109,7 +127,6 @@ ALIASES: dict[str, list[str]] = {
     "lgd_realised": ["lgd", "realised_lgd", "realized_lgd", "loss_severity",
                      "severity", "lgd_actual"],
     "exposure_at_default": ["ead", "default_balance", "balance_at_default"],
-    "recovery_amount": ["recoveries", "recovery", "recovered", "net_recovery"],
     "workout_months": ["workout_period", "resolution_months", "months_to_resolve"],
 }
 
@@ -135,11 +152,33 @@ ABS_EE_ALIASES: dict[str, list[str]] = {
     "interest_rate": ["reporting_period_interest_rate_percentage",
                       "original_interest_rate_percentage"],
     "remaining_term": ["remaining_term_to_maturity_number"],
-    "recovery_amount": ["recovered_amount", "liquidation_proceeds_amount"],
     "exposure_at_default": ["charged_off_principal_amount"],
 }
 for _canon, _names in ABS_EE_ALIASES.items():
     ALIASES.setdefault(_canon, []).extend(_names)
+
+
+def _peek(path: Path, n: int = 50_000) -> tuple[pd.DataFrame, int, bool]:
+    """A sample of the file, plus its exact row count.
+
+    Returns (sample, n_rows, sampled). Parquet answers both from the footer
+    and one row group; CSV needs a read, so the count comes from counting
+    newlines, which is far cheaper than parsing.
+    """
+    if path.suffix.lower() in (".parquet", ".pq"):
+        import pyarrow.parquet as pq
+        f = pq.ParquetFile(path)
+        n_rows = f.metadata.num_rows
+        if n_rows == 0:
+            return pd.DataFrame(columns=f.schema_arrow.names), 0, False
+        batch = next(f.iter_batches(batch_size=min(n, n_rows)))
+        df = batch.to_pandas()
+        return df, int(n_rows), bool(n_rows > len(df))
+    df = pd.read_csv(path, low_memory=False, nrows=n)
+    with open(path, "rb") as fh:                      # header line excluded
+        n_rows = max(sum(chunk.count(b"\n") for chunk in
+                         iter(lambda: fh.read(1 << 20), b"")) - 1, len(df))
+    return df, int(n_rows), bool(n_rows > len(df))
 
 
 def _read_table(path: Path) -> pd.DataFrame:
@@ -201,20 +240,31 @@ def stage(filename: str, content: bytes) -> dict:
                          f".parquet export of the panel")
     p = STAGING / f"{token}{suffix}"
     p.write_bytes(content)
+    # A SAMPLE, not the file.
+    #
+    # This step exists to show column names and let someone confirm a
+    # mapping. It used to read every row and then call nunique() on every
+    # column — 38 full passes over 22 million rows — which took 210 seconds
+    # on a 390MB tape while the interface showed a motionless "Reading the
+    # file" label. Parquet keeps the row count and the schema in its footer,
+    # so the exact size is free and one row group is enough to show types and
+    # values. Validation still reads the whole file; it just happens at
+    # ingest, where the user has already committed to waiting.
     try:
-        df = _read_table(p)
+        df, n_rows, sampled = _peek(p)
     except Exception as e:                                              # noqa: BLE001
         p.unlink(missing_ok=True)
         raise ValueError(f"could not read {filename}: {type(e).__name__}: {e}")
-    if len(df) == 0:
+    if n_rows == 0:
         p.unlink(missing_ok=True)
         raise ValueError(f"{filename} parsed but holds no rows")
     suggestion = suggest_mapping(list(df.columns))
     return {
         "token": token,
         "filename": filename,
-        "n_rows": int(len(df)),
+        "n_rows": int(n_rows),
         "n_columns": int(df.shape[1]),
+        "sampled": bool(sampled),
         "columns": [{"name": c, "dtype": str(df[c].dtype),
                      "n_unique": int(df[c].nunique(dropna=True)),
                      "sample": [str(v) for v in df[c].dropna().head(3)]}
@@ -234,10 +284,83 @@ def _staged_path(token: str) -> Path:
     return hits[0]
 
 
+# Live progress for a running ingest, keyed by staging token and polled by the
+# frontend. A large tape takes a while at several of the steps below, and a
+# button that says only "validating" for a minute reads as a hang; the stage
+# on screen is what tells the user the work is real and moving. Plain dict
+# writes under the GIL; the polling endpoint only reads.
+_PROGRESS: dict[str, dict] = {}
+
+
+def _note(token: str, stage: str) -> None:
+    import time
+    e = _PROGRESS.get(token)
+    _PROGRESS[token] = {"stage": stage, "at": time.time(),
+                        "started": e["started"] if e else time.time()}
+
+
+def ingest_progress(token: str) -> dict | None:
+    import time
+    e = _PROGRESS.get(token)
+    if not e:
+        return None
+    return {"stage": e["stage"], "elapsed_s": round(time.time() - e["started"], 1)}
+
+
 # ── ingest ───────────────────────────────────────────────────────────────────
+# A text column needs at least this many distinct values before being read as
+# a mis-typed number. Codes and flags — new/used, verification level, a trust
+# id — are text holding digits too, and they are CORRECTLY categorical. What
+# separates a score from a code is the count: an obligor credit score on a real
+# tape carries hundreds of distinct values, a code carries a handful.
+MIN_DISTINCT_FOR_NUMERIC = 20
+
+
+def _numbers_stored_as_text(df: pd.DataFrame) -> list[tuple[str, int, str]]:
+    """Columns stored as text whose every value is a number.
+
+    This is the one data-type fault the app can call on its own, because
+    judging it needs no idea what the column MEANS. Text has no order, so a
+    column of quoted numbers is handled as unrelated labels: on a real auto
+    tape `obligorCreditScore` arrived as '540', became 527 categories, had 525
+    of them folded into a single Other, and reported an information value of
+    0.0001 — the strongest variable in consumer lending, reported as worthless.
+    Nothing warned, and the number on screen was wrong rather than missing.
+
+    The faults it deliberately does NOT call are the ones that need to know
+    what the column is. Whether `originalLoanTerm`'s four values are a term to
+    average or four categories, and whether a zero in a payment column means
+    "nothing collected" or "not reported", are questions only the person
+    holding the book can answer. Those stay on the variable screen, which
+    already shows the zero share and the concentration, for a human to read.
+
+    Canonical columns are skipped: they have their own gates above, and
+    `account_id` is legitimately text.
+    """
+    canonical = {c["name"] for c in SCHEMA}
+    out: list[tuple[str, int, str]] = []
+    for col in df.columns:
+        if col in canonical or df[col].dtype != object:
+            continue
+        s = df[col].dropna()
+        if s.empty:
+            continue
+        text = s.astype(str)
+        n_distinct = int(text.nunique())
+        if n_distinct < MIN_DISTINCT_FOR_NUMERIC:
+            continue
+        # Every value, not most of them. A column that is numbers with a
+        # handful of 'N/A's is a different fault with a different remedy, and
+        # guessing which rows to discard is not this gate's business.
+        if pd.to_numeric(text, errors="coerce").notna().all():
+            out.append((col, n_distinct, str(text.iloc[0])))
+    return out
+
+
 def ingest(token: str, key: str, label: str, mapping: dict[str, str],
            default_definition: str, ead_method: str, oot_from: str,
-           dpd_state: int = 0, replace: bool = False) -> dict:
+           dpd_state: int = 0, replace: bool = False,
+           lgd_definition: str = "") -> dict:
     """Validate the staged file as a panel and register it as a book.
 
     Refuses, with the reason, when: the key is taken or malformed, a required
@@ -264,8 +387,10 @@ def ingest(token: str, key: str, label: str, mapping: dict[str, str],
     if not label:
         raise ValueError("give the book a display name")
 
+    _note(token, "Reading the file")
     src = _staged_path(token)
     df = _read_table(src)
+    _note(token, f"Read {len(df):,} rows · applying the column mapping")
 
     # Apply the confirmed mapping: seller's name -> canonical name.
     rename = {theirs: ours for ours, theirs in mapping.items()
@@ -290,6 +415,7 @@ def ingest(token: str, key: str, label: str, mapping: dict[str, str],
     for col in ("performance_date", "origination_date"):
         if col not in df.columns:
             continue
+        _note(token, f"Parsing {col} on {len(df):,} rows")
         parsed = pd.to_datetime(df[col], errors="coerce")
         bad = int(parsed.isna().sum()) - int(df[col].isna().sum())
         if bad > 0.02 * len(df):
@@ -298,6 +424,7 @@ def ingest(token: str, key: str, label: str, mapping: dict[str, str],
                 f"dates (e.g. {df[col][parsed.isna()].dropna().iloc[0]!r})")
         df[col] = parsed.dt.to_period("M").dt.to_timestamp()
 
+    _note(token, "Checking the default flag is 0/1")
     flag = pd.to_numeric(df["default_flag"], errors="coerce")
     # Values that refuse to be numbers ('Y', 'CO', a status word) coerce to
     # NaN — and an all-NaN column would sail through a bare subset check and
@@ -313,11 +440,24 @@ def ingest(token: str, key: str, label: str, mapping: dict[str, str],
             "as a default is a judgement this tool will not make.")
     df["default_flag"] = flag.fillna(0).astype("int8")
 
+    _note(token, "Checking one row per account per month")
     dup = int(df.duplicated(["account_id", "performance_date"]).sum())
     if dup:
         raise ValueError(
             f"{dup:,} duplicate account-month rows. A panel has one row per "
             "account per month; deduplicate before uploading.")
+
+    _note(token, "Checking numeric columns are stored as numbers")
+    bad_type = _numbers_stored_as_text(df)
+    if bad_type:
+        raise ValueError(
+            "stored as text but holding only numbers: "
+            + "; ".join(f"{c} ({n:,} distinct, e.g. {ex!r})"
+                        for c, n, ex in bad_type)
+            + ". Text has no order, so the app cannot tell that 540 is below "
+            "596 — each value becomes its own category, the rare ones are "
+            "folded together, and the column reports no predictive power at "
+            "all. Convert these to numbers in the file and upload again.")
 
     if "months_on_book" not in df.columns and "origination_date" in df.columns:
         df["months_on_book"] = (
@@ -359,6 +499,7 @@ def ingest(token: str, key: str, label: str, mapping: dict[str, str],
     # The accounts table: columns constant within account, first value each.
     # Sellers often ship one wide monthly file; the app expects the static
     # attributes split out. Constancy is measured, not assumed.
+    _note(token, "Separating account attributes from monthly rows")
     ids = df["account_id"]
     sample_ids = ids.drop_duplicates().head(5000)
     probe = df[ids.isin(sample_ids)]
@@ -373,6 +514,7 @@ def ingest(token: str, key: str, label: str, mapping: dict[str, str],
         static_cols].first() if len(static_cols) > 1 else \
         df[["account_id"]].drop_duplicates()
 
+    _note(token, f"Writing the panel · {len(df):,} rows, {len(accounts):,} accounts")
     TAPES_DIR.mkdir(parents=True, exist_ok=True)
     panel_path = TAPES_DIR / f"{key}_panel.parquet"
     accounts_path = TAPES_DIR / f"{key}_accounts.parquet"
@@ -393,6 +535,9 @@ def ingest(token: str, key: str, label: str, mapping: dict[str, str],
         "target": {"column": "default_flag",
                    "description": default_definition.strip(),
                    "dpd_state": int(dpd_state), "label": "Default"},
+        # How the uploader worked out the severity figure they supplied.
+        # Only meaningful when lgd_realised was mapped; blank otherwise.
+        "lgd_definition": lgd_definition.strip(),
         "ead_method": ead_method,
         "default_oot_from": str(oot.date()),
         "mapping": {ours: theirs for ours, theirs in mapping.items() if theirs},
@@ -401,13 +546,30 @@ def ingest(token: str, key: str, label: str, mapping: dict[str, str],
         "ingested_at": pd.Timestamp.utcnow().isoformat(timespec="seconds"),
         "source_file": src.name,
         "n_rows": int(len(df)), "n_accounts": int(accounts.shape[0]),
+        # Everything the book list reports, computed once here while the frame
+        # is in hand. Without it, listing the books had to load every panel
+        # from disk just to count defaults — a minute of dead time on a large
+        # tape, paid on the first request after any restart.
+        "summary": {
+            "n_defaults": int(df["default_flag"].sum()),
+            "monthly_default_rate": float(df["default_flag"].mean()),
+            "window": [str(df["performance_date"].min().date()),
+                       str(df["performance_date"].max().date())],
+            "has_severity": bool("lgd_realised" in df.columns
+                                 and df["lgd_realised"].notna().any()),
+        },
         "warnings": warnings,
     }
+    _note(token, "Registering the book")
     (TAPES_DIR / f"{key}.json").write_text(json.dumps(record, indent=2))
     src.unlink(missing_ok=True)
 
     _register(record, accounts)
     return record
+
+
+def clear_progress(token: str) -> None:
+    _PROGRESS.pop(token, None)
 
 
 def _spec_from_record(record: dict, accounts: pd.DataFrame) -> PortfolioSpec:
@@ -584,6 +746,16 @@ def is_ingested(key: str) -> bool:
     generator. The interface labels synthetic data on every data-bearing view,
     and that label must not ride along on real loans."""
     return (TAPES_DIR / f"{key}.json").exists()
+
+
+def record_for(key: str) -> dict | None:
+    p = TAPES_DIR / f"{key}.json"
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text())
+    except Exception:                                                   # noqa: BLE001
+        return None
 
 
 def records() -> list[dict]:

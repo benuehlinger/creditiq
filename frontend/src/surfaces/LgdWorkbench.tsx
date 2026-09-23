@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api, type LgdSpecPayload, type PortfolioKey } from '../lib/api'
-import { Card, CardHead, EmptyState, Skeleton, ViewTabs } from '../components/ui'
+import { Card, CardHead, Skeleton, ViewTabs } from '../components/ui'
 import SpecificationList, { lgdRows } from '../components/SpecificationList'
 import LgdVariableDetail, { LgdTarget } from './LgdVariableDetail'
 import LgdModelPane from './LgdModelPane'
@@ -183,9 +183,9 @@ function AssumedSeverityPane({ pk }: { pk: PortfolioKey }) {
   return (
     <div className="mx-auto max-w-[720px] space-y-3">
       <Card>
-        <CardHead title="No realised losses on this tape"
-          subtitle="A severity model cannot be fitted here"
-          caption="The upload carried no lgd_realised, recovery_amount or exposure_at_default columns, so there is nothing to estimate severity from. Books whose tapes carry workout data get a fitted model; this one runs on a declared assumption instead, and every loss number it produces says so." />
+        <CardHead title="No realised LGD on this tape"
+          subtitle="Declare one to price the book"
+          caption="No lgd_realised column was mapped, so nothing can be estimated. Deal documents and rating-agency recovery assumptions are the usual sources for the figure." />
         <div className="space-y-3 px-4 pb-4">
           {declared != null && fittedLgd?.hash ? (
             <div className="rounded-ctl bg-sunken px-3 py-2.5">
@@ -193,19 +193,13 @@ function AssumedSeverityPane({ pk }: { pk: PortfolioKey }) {
                 Severity assumed at {Math.round(declared * 100)}%
               </p>
               <p className="mt-1 text-tiny leading-relaxed text-ink-secondary">
-                Flat across accounts and scenarios: with no drivers there is
-                nothing for stress to move, so the severe path changes defaults
-                but not severity. The lifetime loss scales one-for-one with
-                this number. Recorded in the specification as
+                Stress moves defaults, not severity. Lifetime loss scales
+                one-for-one with this figure. Recorded as
                 {' '}<span className="font-mono">{fittedLgd.name ?? `assumed ${Math.round(declared * 100)}%`}</span>.
               </p>
             </div>
           ) : (
-            <EmptyState title="No severity declared yet">
-              Declare the flat severity this book should be priced at. Deal
-              documents and rating-agency recovery assumptions are the usual
-              sources for the number.
-            </EmptyState>
+            null
           )}
           <div className="flex items-center gap-2">
             <input type="number" min={1} max={99} value={pctText}
@@ -221,11 +215,9 @@ function AssumedSeverityPane({ pk }: { pk: PortfolioKey }) {
           {err && (
             <p className="text-tiny" style={{ color: 'var(--status-critical)' }}>{err}</p>
           )}
-          <p className="text-micro leading-relaxed text-ink-muted">
-            Changing the assumption on a saved pairing is a specification
-            change: it forks, with a rationale, like any other edit. The
-            Scenarios stage offers a what-if control to explore sensitivities
-            without changing the declared number.
+          <p className="text-micro text-ink-muted">
+            Flat across accounts and scenarios. Changing it on a saved model
+            forks, like any other edit.
           </p>
         </div>
       </Card>

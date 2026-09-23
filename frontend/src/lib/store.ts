@@ -92,6 +92,7 @@ export interface Draft {
   stashedAt: string
   /** Optional: drafts stashed before origins existed have none. */
   origin?: DraftOrigin | null
+  lgdOrigin?: DraftOrigin | null
   forkNote?: ForkNote | null
 }
 
@@ -114,6 +115,10 @@ interface UiState {
    *  Cleared when a saved version is opened over it — a saved model's
    *  provenance is its own record. */
   origin: Record<PortfolioKey, DraftOrigin | null>
+  /** The severity half's own search lineage. Symmetric with `origin`: the
+   *  first edit of a draft taken off the LGD leaderboard is a departure and
+   *  asks for a rationale, exactly as the PD side does. */
+  lgdOrigin: Record<PortfolioKey, DraftOrigin | null>
   /** The pending fork rationale per book, consumed by the next save. */
   forkNote: Record<PortfolioKey, ForkNote | null>
   /** Macro terms promoted out of the transformation search, per target. They are
@@ -194,9 +199,11 @@ interface UiState {
    *  made there has to land somewhere. Without it the first edit on the Explore
    *  stage silently did nothing. */
   editLgd: (p: PortfolioKey, change: (s: LgdSpecPayload) => LgdSpecPayload,
-            label: string, base?: LgdSpecPayload) => void
+            label: string, base?: LgdSpecPayload,
+            opts?: { adopt?: boolean }) => void
   /** An edit waiting on the fork confirmation, with what it would do. */
-  pendingEdit: { portfolio: PortfolioKey; label: string; apply: () => void } | null
+  pendingEdit: { portfolio: PortfolioKey; label: string; apply: () => void
+                 half?: 'pd' | 'lgd' } | null
   confirmEdit: (note?: { reasonCode: string; justification: string }) => void
   cancelEdit: () => void
   setTheme: (t: Theme) => void
@@ -208,6 +215,7 @@ interface UiState {
   setFittedLgd: (p: PortfolioKey, f: FittedLgd | null) => void
   setLoaded: (p: PortfolioKey, v: LoadedModel | null) => void
   setOrigin: (p: PortfolioKey, o: DraftOrigin | null) => void
+  setLgdOrigin: (p: PortfolioKey, o: DraftOrigin | null) => void
   setForkNote: (p: PortfolioKey, n: ForkNote | null) => void
   /** Give a book that did not exist when this store was born — an ingested
    *  tape — an entry in every per-book record. The three synthetic keys are
@@ -270,6 +278,7 @@ export const useUi = create<UiState>()(
       methodologyOpen: null,
       fitted: { consumer: null, mortgage: null, cre: null },
       origin: { consumer: null, mortgage: null, cre: null },
+      lgdOrigin: { consumer: null, mortgage: null, cre: null },
       forkNote: { consumer: null, mortgage: null, cre: null },
       fittedLgd: { consumer: null, mortgage: null, cre: null },
       loaded: { consumer: null, mortgage: null, cre: null },
@@ -301,7 +310,8 @@ export const useUi = create<UiState>()(
         return { draft: { ...s.draft, [p]: {
           pdSpec: s.pdSpec[p], fitted: s.fitted[p], fittedLgd: s.fittedLgd[p],
           projected: s.projected[p], stashedAt: new Date().toISOString(),
-          origin: s.origin[p], forkNote: s.forkNote[p] } } }
+          origin: s.origin[p], lgdOrigin: s.lgdOrigin[p],
+          forkNote: s.forkNote[p] } } }
       }),
       restoreDraft: (p) => set((s) => {
         const d = s.draft[p]
@@ -313,6 +323,7 @@ export const useUi = create<UiState>()(
           projected: { ...s.projected, [p]: d.projected },
           loaded: { ...s.loaded, [p]: null },
           origin: { ...s.origin, [p]: d.origin ?? null },
+          lgdOrigin: { ...s.lgdOrigin, [p]: d.lgdOrigin ?? null },
           forkNote: { ...s.forkNote, [p]: d.forkNote ?? null },
           draft: { ...s.draft, [p]: null },
         }
@@ -328,10 +339,10 @@ export const useUi = create<UiState>()(
         // departure the draft is a draft, and edits are free.
         const gate = get().loaded[p]
           || (get().origin[p] && !get().origin[p]!.revised)
-        if (gate) { set({ pendingEdit: { portfolio: p, label, apply } }); return }
+        if (gate) { set({ pendingEdit: { portfolio: p, label, apply, half: 'pd' } }); return }
         apply()
       },
-      editLgd: (p, change, label, base) => {
+      editLgd: (p, change, label, base, opts) => {
         const cur = get().fittedLgd[p]
         if (!cur && !base) return
         const apply = () => set((s) => {
@@ -342,10 +353,15 @@ export const useUi = create<UiState>()(
           return { fittedLgd: { ...s.fittedLgd, [p]: {
             spec, hash: '', fittedAt: '', meanLgd: NaN, nDefaults: 0 } } }
         })
-        // The origin gate does NOT apply here: the origin records where the
-        // PD half came from, and adjusting the severity half is not a
-        // departure from a PD search result. A SAVED pair still forks.
-        if (get().loaded[p]) { set({ pendingEdit: { portfolio: p, label, apply } }); return }
+        // The same two gates as the PD side: a SAVED pair never changes
+        // silently, and a draft taken off the LGD leaderboard is a recorded
+        // search result whose first edit is a departure. Adoption replaces a
+        // draft rather than editing it, so it passes the origin gate — the
+        // PD side's open-as-draft does the same.
+        const gate = get().loaded[p]
+          || (!opts?.adopt
+              && get().lgdOrigin[p] && !get().lgdOrigin[p]!.revised)
+        if (gate) { set({ pendingEdit: { portfolio: p, label, apply, half: 'lgd' } }); return }
         apply()
       },
       confirmEdit: (note) => {
@@ -353,7 +369,10 @@ export const useUi = create<UiState>()(
         if (!e) return
         const p = e.portfolio
         const parentV = get().loaded[p]
-        const parentO = get().origin[p]
+        // The departing half's own origin is the fork's parent when no saved
+        // model is open; the OTHER half's origin is untouched.
+        const half = e.half ?? 'pd'
+        const parentO = half === 'lgd' ? get().lgdOrigin[p] : get().origin[p]
         // Forking clears the marker first, so the applied edit lands on a
         // working draft rather than appearing to modify the saved model. The
         // rationale is held per book and written into the next saved
@@ -362,9 +381,12 @@ export const useUi = create<UiState>()(
         set((s) => ({
           loaded: { ...s.loaded, [p]: null },
           pendingEdit: null,
-          origin: parentO
+          origin: half === 'pd' && parentO
             ? { ...s.origin, [p]: { ...parentO, revised: true } }
             : s.origin,
+          lgdOrigin: half === 'lgd' && parentO
+            ? { ...s.lgdOrigin, [p]: { ...parentO, revised: true } }
+            : s.lgdOrigin,
           forkNote: note && (parentV || parentO)
             ? { ...s.forkNote, [p]: {
                 from: parentV?.name ?? parentO!.name,
@@ -396,9 +418,11 @@ export const useUi = create<UiState>()(
       setLoaded: (p, v) => set((s) => ({
         loaded: { ...s.loaded, [p]: v },
         origin: v ? { ...s.origin, [p]: null } : s.origin,
+        lgdOrigin: v ? { ...s.lgdOrigin, [p]: null } : s.lgdOrigin,
         forkNote: v ? { ...s.forkNote, [p]: null } : s.forkNote,
       })),
       setOrigin: (p, o) => set((s) => ({ origin: { ...s.origin, [p]: o } })),
+      setLgdOrigin: (p, o) => set((s) => ({ lgdOrigin: { ...s.lgdOrigin, [p]: o } })),
       setForkNote: (p, n) => set((s) => ({ forkNote: { ...s.forkNote, [p]: n } })),
       ensureBook: (p) => {
         const s = get()
@@ -409,6 +433,7 @@ export const useUi = create<UiState>()(
           fittedLgd: { ...st.fittedLgd, [p]: null },
           loaded: { ...st.loaded, [p]: null },
           origin: { ...st.origin, [p]: null },
+          lgdOrigin: { ...st.lgdOrigin, [p]: null },
           forkNote: { ...st.forkNote, [p]: null },
           projected: { ...st.projected, [p]: null },
           draft: { ...st.draft, [p]: null },
@@ -443,6 +468,7 @@ export const useUi = create<UiState>()(
       partialize: (s) => ({ theme: s.theme,
                             fitted: s.fitted, fittedLgd: s.fittedLgd, loaded: s.loaded,
                             origin: s.origin,
+                            lgdOrigin: s.lgdOrigin,
                             forkNote: s.forkNote,
                                                         macroShortlist: s.macroShortlist,
                             pdSpec: s.pdSpec, projected: s.projected, draft: s.draft,
@@ -450,7 +476,7 @@ export const useUi = create<UiState>()(
                             lgdSelectionRun: s.lgdSelectionRun,
                             selectionDraft: s.selectionDraft,
                             brandVariant: s.brandVariant }),
-      version: 4,
+      version: 5,
       // Work in progress must survive the change of shape. The old state held
       // the specification in five store fields plus local component state; the
       // local parts are gone either way, but everything that WAS persisted is
@@ -466,6 +492,16 @@ export const useUi = create<UiState>()(
           for (const k of ['fitted', 'fittedLgd', 'loaded', 'draft',
                            'projected', 'pdSpec', 'macroShortlist']) {
             delete s[k]
+          }
+        }
+        // v5 (2026-09-20): the automatic account-age baseline was removed —
+        // nothing enters a specification unless the analyst selects it. Strip
+        // the flag from persisted working drafts so no draft carries it
+        // silently. A version SAVED with the baseline is untouched: opening it
+        // restores the flag from the record, so it replays to its numbers.
+        if (from < 5 && s.pdSpec) {
+          for (const p of Object.keys(s.pdSpec)) {
+            if (s.pdSpec[p]) delete s.pdSpec[p].seasoningSpline
           }
         }
         // Nothing recorded which model had been projected, so nothing may claim

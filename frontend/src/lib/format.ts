@@ -59,6 +59,16 @@ export const monthShort = (v: string | number | Date) => {
     : d.toLocaleDateString('en-US', { month: 'short' })
 }
 
+/** Tick spacing and label for a monthly category axis, from the number of
+ *  months plotted. A decade or more gets a year label every three years. A
+ *  shorter span gets month-and-year labels every three to twelve months: a
+ *  year-only label on a four-year tape read "Jun ... Jun". */
+export function monthAxis(n: number): { interval: number; formatter: (v: string) => string } {
+  if (n >= 120) return { interval: 35, formatter: monthShort }
+  const step = n > 36 ? 12 : n > 18 ? 6 : 3
+  return { interval: step - 1, formatter: (v: string) => month(v) }
+}
+
 /** Period label for a chart subtitle, so no chart is undated. */
 export const periodLabel = (from: string, to: string) => `${month(from)} – ${month(to)}`
 

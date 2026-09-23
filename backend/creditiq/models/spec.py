@@ -336,6 +336,22 @@ class LgdSpec:
                                          sort_keys=True).encode()).hexdigest()[:12]
 
     @property
+    def is_specified(self) -> bool:
+        """Whether this is a complete severity half.
+
+        TWO ways to be complete: fitted drivers, or a declared flat
+        assumption. The assumption is not a fallback — it is the severity
+        half of a book whose tape carries no realised losses, chosen
+        deliberately and recorded in the hash.
+
+        This lives here because the rule was written out by hand at three
+        separate gates (naming, saving, the severity backtest) and only one
+        learned about assumptions; the other two went on refusing to name a
+        model the interface had already let the user build."""
+        return bool(self.drivers or self.categoricals
+                    or self.assumed_lgd is not None)
+
+    @property
     def macro_drivers(self) -> list[str]:
         """Drivers that move with a scenario: the fixed macro block, plus any
         transformed candidate promoted from the macro search."""
@@ -349,7 +365,11 @@ class ModelSpec:
     mevs: list[MevSpec] = field(default_factory=list)
     estimator: Estimator = "logistic"
     regularization: float = 1.0
-    seasoning_spline: bool = True
+    # Nothing enters a specification automatically (user rule, 2026-09-20).
+    # The flag remains only so versions saved while the automatic account-age
+    # baseline existed replay to the same numbers. Age enters a new model the
+    # same way as any other driver: months_on_book, selected by the analyst.
+    seasoning_spline: bool = False
     vintage_effect: bool = False
     sample: SampleSpec = field(default_factory=SampleSpec)
     # The severity half. A Model is a PD specification AND an LGD specification:

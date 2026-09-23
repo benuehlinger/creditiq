@@ -32,7 +32,17 @@ export function errorText(body: unknown, fallback: string): string {
  *  leaves its promise pending forever, and any mutation waiting on it stays
  *  "in progress" with no way to finish. Every projection and fit goes through
  *  here, so the worst case is an error after `timeoutMs`, never a spinner that
- *  never stops. The caller then shows the error and offers a retry. */
+ *  never stops. The caller then shows the error and offers a retry.
+ *
+ *  Two budgets, because the endpoints differ by two orders of magnitude. The
+ *  default covers anything that reads a cache or a small summary. `ESTIMATE_MS`
+ *  covers the endpoints that actually estimate a model: on the synthetic panels
+ *  a fit is seconds, but on an ingested tape of 22 million account-months it is
+ *  three to five minutes, and the 45s default failed EVERY fit on that book.
+ *  Aborting also loses the work — the request is what drives the computation,
+ *  so the retry starts over rather than collecting a finished result. */
+const ESTIMATE_MS = 900_000
+
 async function post<T>(path: string, body: unknown, timeoutMs = 45_000): Promise<T> {
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), timeoutMs)
@@ -54,16 +64,32 @@ async function post<T>(path: string, body: unknown, timeoutMs = 45_000): Promise
   }
 }
 
-async function get<T>(path: string, params?: Record<string, string | number | undefined>): Promise<T> {
+/** GET with a hard timeout, for the same reason POST has one: a request that
+ *  stalls against a wedged server otherwise never resolves, and with
+ *  staleTime Infinity the query showing a skeleton never re-asks. Generous by
+ *  default because a first visit to a surface computes its panel lazily. */
+async function get<T>(path: string, params?: Record<string, string | number | undefined>,
+                      timeoutMs = 120_000): Promise<T> {
   const q = params
     ? '?' + new URLSearchParams(
         Object.entries(params).filter(([, v]) => v !== undefined && v !== '')
           .map(([k, v]) => [k, String(v)]),
       ).toString()
     : ''
-  const r = await fetch(`${base}${path}${q}`)
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText} at ${path}`)
-  return r.json() as Promise<T>
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs)
+  try {
+    const r = await fetch(`${base}${path}${q}`, { signal: ctrl.signal })
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText} at ${path}`)
+    return await (r.json() as Promise<T>)
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') {
+      throw new Error(`The server did not answer ${path} within ${Math.round(timeoutMs / 1000)}s.`)
+    }
+    throw e
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 export const PORTFOLIO_KEYS = ['consumer', 'mortgage', 'cre'] as const
@@ -99,6 +125,8 @@ export interface TapeInspection {
 export interface TapeRecord {
   key: string; label: string
   target: { column: string; description: string; dpd_state: number; label: string }
+  /** How the uploader calculated the LGD they supplied. Blank when none was. */
+  lgd_definition?: string
   ead_method: string
   default_oot_from: string
   mapping: Record<string, string>
@@ -123,6 +151,9 @@ export interface PortfolioInfo {
   n_defaults: number
   annual_default_rate_pct: number
   window: [string, string]
+  /** The out-of-time boundary this book proposes: its own, stated at
+   *  ingestion, or the compiled default on a synthetic book. */
+  oot_from: string
   target: { column: string; label: string; description: string }
   ead_method: 'amortizing' | 'ccf'
   ead_note: string
@@ -183,6 +214,9 @@ export interface Univariate {
   zero_pct?: number; negative_pct?: number
   n_outliers?: number; outlier_fence?: [number, number]
   log1p_skew?: number
+  range?: number; mad?: number; integral?: boolean
+  p99_over_p50?: number | null
+  top_values?: { value: number; count: number; pct: number }[]
   histogram?: Histogram
   histogram_trimmed?: Histogram
   // categorical
@@ -520,12 +554,34 @@ export interface MacroLibrary {
   lags: number[]
   adf_alpha: number
   pd_months: number; lgd_defaults: number; lgd_months: number
+  min_month_rows?: number
   rows: MacroCandidate[]
 }
 
 export interface MacroSeries {
   column: string; key: string; transform: string; lag_months: number
   points: { month: string; value: number | null; pd: number | null; lgd: number | null }[]
+}
+
+/** A submitted fit, as the server reports it back. `done` means the model is
+ *  in the cache under `hash` and can be read from /models/{hash}. */
+export interface FitJob {
+  hash: string
+  state: 'running' | 'done' | 'error' | 'unknown'
+  phase: string
+  elapsed_s: number
+  error: string
+}
+
+/** A submitted ECL projection. Unlike a fit there is nowhere else to read the
+ *  answer from, so `result` carries the payload once the job is done. */
+export interface EclJob {
+  hash: string
+  state: 'running' | 'done' | 'error' | 'unknown'
+  phase: string
+  elapsed_s: number
+  error: string
+  result?: EclResponse
 }
 
 export interface FitRequest {
@@ -642,7 +698,11 @@ export const VERSION_QUERIES = ['versions', 'lineage', 'rollup', 'compare'] as c
 export interface ForkRecord {
   reason_code?: string
   justification?: string
+  /** The gate's label for the edit that tripped it. Superseded by `changes`,
+   *  kept for records written before the full list was measured. */
   change?: string
+  /** Every difference from the parent specification, measured at save. */
+  changes?: string[]
   from_hash?: string
   from_name?: string
   from_kind?: 'version' | 'selection'
@@ -677,6 +737,7 @@ export interface LineageEdge {
   to: string
   reason_code?: string | null
   justification?: string | null
+  changes?: string[]
   change?: string | null
 }
 
@@ -927,6 +988,8 @@ export interface RollUpResponse {
     by_scenario: Record<string, { ecl: number; ecl_bps: number; pd_12m: number; lgd: number }>
   /** The macro terms this book's model carries, canonical `key@transform@lag`. */
   mev_terms?: string[]
+  /** The severity half's macro terms, same canonical form. */
+  lgd_mev_terms?: string[]
     capped: boolean; extrapolation_flags: string[]; sign_flips: string[]
   }[]
   totals: Record<string, { ecl: number; exposure: number; ecl_bps: number
@@ -945,9 +1008,11 @@ export interface RollUpResponse {
 }
 
 export const api = {
+  // A short timeout on purpose: health is the liveness probe. Everything else
+  // may legitimately take a while; this one answering slowly IS the finding.
   health: () => get<{ status: string; portfolios: PortfolioKey[]; mev_series_resolved: number
                       data_fingerprint?: string
-                      mev_series_failed: number; mev_cache_built_at: string }>('/health'),
+                      mev_series_failed: number; mev_cache_built_at: string }>('/health', undefined, 8_000),
   /** Whether the synthetic panels exist, and generation progress if running. */
   dataStatus: () => get<DataInitStatus>('/data/status'),
   dataGenerate: () => post<{ state: string; total?: number }>('/data/generate', {}),
@@ -966,7 +1031,8 @@ export const api = {
   },
   tapeIngest: (req: { token: string; key: string; label: string
                       mapping: Record<string, string | null>
-                      default_definition: string; ead_method: string; oot_from: string }) =>
+                      default_definition: string; lgd_definition?: string
+                      ead_method: string; oot_from: string }) =>
     post<TapeRecord>('/tapes/ingest', req, 180_000),
   tapes: () => get<{ tapes: TapeRecord[] }>('/tapes'),
   tapeRemap: (key: string, body: {
@@ -981,6 +1047,24 @@ export const api = {
       if (!r.ok) throw new Error(errorText(j, r.statusText))
       return j as TapeRecord
     }),
+  /** The running ingest's current stage; short timeout because it must never
+   *  queue behind the ingest work it is reporting on. */
+  tapeIngestProgress: (token: string) =>
+    get<{ stage: string | null; elapsed_s: number | null }>(
+      `/tapes/ingest-progress/${token}`, undefined, 5_000),
+  /** The book's drawn balance banded along any column, for the roll-up's
+   *  concentration card. Numeric columns come back in round bands. */
+  concentration: (key: string, column: string) =>
+    get<{ portfolio: string; column: string; kind: 'numeric' | 'categorical'
+          bands: { band: string; exposure: number; share: number }[] }>(
+      `/portfolios/${key}/concentration`, { column }),
+  /** What a book's first load is doing. Polled while the Panel waits, so a
+   *  large tape narrates itself instead of showing bare skeletons. */
+  warmStatus: (key: string) =>
+    get<{ portfolio: string; stage: string; label: string
+          stages: { key: string; label: string }[]
+          elapsed_s: number | null; error: string }>(
+      `/portfolios/${key}/warm-status`, undefined, 8_000),
   tapeDelete: (key: string) =>
     fetch(`/api/tapes/${key}`, { method: 'DELETE' }).then((r) => r.json()),
   dataHealth: (k: string) => get<DataHealth>(`/portfolios/${k}/health`),
@@ -1067,19 +1151,75 @@ export const api = {
   /** The friendly name for any hash, for a half restored from a record that
    *  stored the hash only. */
   nameFor: (hash: string) => get<{ hash: string; name: string }>(`/name/${hash}`),
-  fit: (req: FitRequest): Promise<FitResponse> => post('/fit', req),
+  /** Fit a specification: submit, poll, collect.
+   *
+   *  Not one request. A fit on the generated panels takes seconds, but on an
+   *  ingested tape of twenty million account-months it takes minutes, and a
+   *  request held open that long dies to the client timeout, to any proxy in
+   *  front of the server, and to closing the tab — and the abort DISCARDS the
+   *  work, because the request is what drives the computation.
+   *
+   *  So the server starts the fit on a thread and answers with its hash; this
+   *  polls until the job reports done, then reads the finished model from the
+   *  cache under that hash. Nothing is lost if the poll is interrupted: the
+   *  fit keeps running, and asking again joins it rather than restarting it.
+   *
+   *  `onPhase` receives the phase the server is actually in, so the progress
+   *  bar reports rather than guesses. */
+  fit: async (req: FitRequest,
+              onPhase?: (phase: string) => void): Promise<FitResponse> => {
+    const started = await post<FitJob>('/fit/start', req)
+    const deadline = Date.now() + ESTIMATE_MS
+    let s = started
+    while (s.state === 'running') {
+      if (Date.now() > deadline) {
+        throw new Error(`The fit has been running for ${Math.round(ESTIMATE_MS / 60_000)} `
+          + 'minutes and is still going. It has not been cancelled — reopen this '
+          + 'stage to pick it up.')
+      }
+      await new Promise((r) => setTimeout(r, 1000))
+      s = await get<FitJob>(`/fit/status/${started.hash}`)
+      if (s.phase) onPhase?.(s.phase)
+    }
+    if (s.state === 'error') throw new Error(s.error || 'The fit failed.')
+    return get<FitResponse>(`/models/${started.hash}`)
+  },
   /** Report an already-fitted model's backtest at another frequency. No refit —
    *  the scored account-months are held on the cached run. */
   recohort: (req: FitRequest, freq: 'MS' | 'QS' | 'YS') =>
     post<Pick<FitResponse['backtest'], 'cohorts' | 'rank_order' | 'score_psi'>
-      & { period_freq: string }>('/backtest/recohort', { ...req, freq }),
+      & { period_freq: string }>('/backtest/recohort', { ...req, freq }, ESTIMATE_MS),
   segmentBacktest: (portfolio: string, hash: string, column: string) =>
     fetch(`/api/segment-backtest?portfolio=${portfolio}&hash_=${hash}&column=${column}`,
           { method: 'POST' }).then((r) => r.json()) as Promise<{
       column: string
       segments: FitResponse['backtest']['segments']
     }>,
-  ecl: (req: EclRequest): Promise<EclResponse> => post('/ecl', req),
+  /** Project ECL: submit, poll, collect — for the same reasons as `fit`.
+   *
+   *  The projection ran past two minutes on a twenty-two-million-row tape,
+   *  well beyond any sensible request timeout, and an abort threw the work
+   *  away. Unlike a fit there is no hash to read the answer back from, so the
+   *  job carries the payload and the status call returns it when done. */
+  ecl: async (req: EclRequest,
+              onPhase?: (phase: string) => void): Promise<EclResponse> => {
+    const started = await post<EclJob>('/ecl/start', req)
+    const deadline = Date.now() + ESTIMATE_MS
+    let s = started
+    while (s.state === 'running') {
+      if (Date.now() > deadline) {
+        throw new Error(`The projection has been running for `
+          + `${Math.round(ESTIMATE_MS / 60_000)} minutes and is still going. `
+          + 'It has not been cancelled — reopen this stage to pick it up.')
+      }
+      await new Promise((r) => setTimeout(r, 1000))
+      s = await get<EclJob>(`/ecl/status/${started.hash}`)
+      if (s.phase) onPhase?.(s.phase)
+    }
+    if (s.state === 'error') throw new Error(s.error || 'The projection failed.')
+    if (!s.result) throw new Error('The projection finished with no result.')
+    return s.result
+  },
   editableScenario: (name: string, keys: string[]) =>
     fetch(`/api/scenarios/${name}/editable?keys=${keys.join(',')}`).then((r) => r.json()) as
       Promise<{ scenario: string; published: boolean; note: string
@@ -1115,7 +1255,7 @@ export const api = {
            spec: LgdSpecPayload & { portfolio: string } }>(
       '/lgd/assume', { portfolio, value }),
   lgdFit: (portfolio: string, spec: LgdSpecPayload): Promise<LgdFitResult> =>
-    post('/lgd/fit', { portfolio, ...wireLgdSpec(spec) }),
+    post('/lgd/fit', { portfolio, ...wireLgdSpec(spec) }, ESTIMATE_MS),
   lgdBacktest: async (portfolio: string, spec: LgdSpecPayload,
                       ootFrom = '2022-01-01',
                       freq: SeverityFreq = 'MS'): Promise<LgdBacktest> => {
@@ -1273,6 +1413,10 @@ export interface SelectionConfigPayload {
 }
 
 export interface SelectionDefaults {
+  oot_from?: string
+  window?: [string, string]
+  /** Set when the boundary leaves too little history before it to fit on. */
+  fit_window_note?: string
   portfolio: string
   candidates: {
     column: string; kind: string; iv: number | null; iv_band: string | null
@@ -1444,6 +1588,9 @@ export interface LgdSelectionResults {
 }
 
 export interface LgdSelectionDefaults {
+  window?: [string, string]
+  /** Set when the boundary leaves too little history before it to fit on. */
+  fit_window_note?: string
   candidates: {
     numeric: { column: string; filled: number; kind: string; macro: boolean }[]
     categorical: { column: string; filled: number; kind: string

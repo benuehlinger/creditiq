@@ -46,10 +46,11 @@ export interface PdSpec {
   estimator: string
   ootFrom: string
   downsample: number | null
-  /** The account-age baseline: a curve on months on book capturing how default
-   *  risk varies with loan age, so selected variables do not absorb it. The
-   *  analyst's choice, on the fit controls; part of the model's identity.
-   *  Absent on older persisted drafts — read it `?? true` everywhere. */
+  /** Legacy only. The automatic account-age baseline was removed: nothing
+   *  enters a specification unless the analyst selects it (age enters as
+   *  months_on_book, like any other driver). The field survives so versions
+   *  saved with the baseline replay to the same numbers — read it `?? false`
+   *  everywhere; nothing in the UI can set it. */
   seasoningSpline?: boolean
 }
 
@@ -69,7 +70,6 @@ export function emptyPdSpec(portfolio: string): PdSpec {
     estimator: 'logistic',
     ootFrom: '2023-01-01',
     downsample: null,
-    seasoningSpline: true,
   }
 }
 
@@ -140,7 +140,7 @@ export function canonical(s: PdSpec): string {
       .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
     m: [...s.mevs].sort(),
     e: s.estimator, o: s.ootFrom, d: s.downsample,
-    s: s.seasoningSpline ?? true,
+    s: s.seasoningSpline ?? false,
   })
 }
 
@@ -162,7 +162,7 @@ export function toRequest(s: PdSpec, portfolio: string, lgd: unknown) {
       return { key, transform: transform || 'level', lag_months: Number(lag || 0) }
     }),
     estimator: s.estimator,
-    seasoning_spline: s.seasoningSpline ?? true,
+    seasoning_spline: s.seasoningSpline ?? false,
     oot_from: s.ootFrom,
     downsample_rows: s.downsample,
     lgd,
@@ -196,6 +196,21 @@ export function fromRequest(req: Record<string, unknown> | undefined,
     estimator: String(req.estimator ?? base.estimator),
     ootFrom: String(req.oot_from ?? base.ootFrom),
     downsample: (req.downsample_rows as number | null) ?? null,
-    seasoningSpline: (req.seasoning_spline as boolean | undefined) ?? true,
+    seasoningSpline: (req.seasoning_spline as boolean | undefined) ?? false,
   }
+}
+
+
+/** Whether a severity half is complete.
+ *
+ *  TWO ways: fitted drivers, or a declared flat assumption on a book whose
+ *  tape carries no realised losses. Written out by hand at each gate, this
+ *  rule drifted — the save endpoint went on refusing to name a model the
+ *  LGD stage had already let the user specify. */
+export function lgdSpecified(
+  spec?: { drivers: string[]; categoricals: string[]; assumed_lgd?: number | null },
+): boolean {
+  if (!spec) return false
+  return !!(spec.drivers.length || spec.categoricals.length
+            || spec.assumed_lgd != null)
 }

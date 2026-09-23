@@ -348,8 +348,20 @@ def fit_lgd(df: pd.DataFrame, spec: LgdSpec | str,
         spec = LgdSpec.default_for(spec)
     portfolio = spec.portfolio
     d = df.loc[df["default_flag"] == 1].copy()
+    n_defaults_total = len(d)
+    # Severity is estimated on defaults whose severity was OBSERVED. The
+    # synthetic books record a realised severity on every default, so this
+    # filter is a no-op there — but a real tape can carry severity for a
+    # subset (recoveries reported on some accounts only), and the unobserved
+    # rows are NaN, not zero. Fitting through them poisoned the estimation:
+    # every coefficient came back NaN and the mean displayed as 0.0%.
+    if "lgd_realised" in d.columns:
+        d = d.loc[d["lgd_realised"].notna()]
     if len(d) < 60:
-        raise ValueError(f"{portfolio}: only {len(d)} defaults — too few to fit LGD")
+        raise ValueError(
+            f"{portfolio}: only {len(d)} of {n_defaults_total} defaults carry "
+            "an observed severity — too few to fit LGD. Declare an assumed "
+            "severity instead.")
 
     d = attach_macro(d, mev_panel, tuple(c for c in spec.drivers if "@" in c))
     dropped = [c for c in (*spec.drivers, *spec.categoricals) if c not in d.columns]

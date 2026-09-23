@@ -165,13 +165,22 @@ def test_run_search_end_to_end_small():
     assert all(1 <= r["n_mevs"] <= 3 for r in payload["rows"])
     ranked = [r for r in payload["rows"] if r["auto_rank"]]
     assert ranked, "at least one ranked row"
-    finalists = [r for r in payload["rows"] if r["finalist"]]
-    assert len(finalists) == 1
-    f = finalists[0]
-    assert f["auto_rank"] == 1
-    assert f["full"]["errors_oot"] is None or "rmse_pp" in f["full"]["errors_oot"]
+    # NO automatic finalist pass. It was the one stage that left the thinned
+    # screening frame and re-fitted the top rows on the full panel — fifteen
+    # minutes on a 22-million-row tape, for models nobody had chosen. Every
+    # figure the board ranks on is computed for every row on the lean path,
+    # and opening a row as a draft refits on full data anyway.
+    assert not any(r["finalist"] for r in payload["rows"])
+    for r in payload["rows"]:
+        assert r["auc_oot"] is not None or r["filtered"], (
+            "ranking inputs must exist for every row without a full fit")
+    # The top row is ranked on the same statistics as every other row.
+    top = min(ranked, key=lambda r: r["auto_rank"])
+    assert top["auto_rank"] == 1
+    assert top["score"] is not None and top["max_vif"] is not None
+
     # progress was verbose: stages present, labels name what is being fitted
     stages = {s[0] for s in seen}
-    assert stages >= {1, 2, 3, 4}
+    assert stages >= {1, 2, 3}
+    assert 4 not in stages, "the full-panel refit stage is gone"
     assert any("screening" in s[4] for s in seen)
-    assert any("full fit" in s[4] for s in seen)

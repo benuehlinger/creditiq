@@ -112,7 +112,7 @@ export default function VariableViews({
           ? `${data.resolution} quantile buckets · ${num(data.n_events)} defaults`
           : `${data.n_levels} levels ordered by risk · ${num(data.n_events)} defaults`}
         caption={data.kind === 'numeric'
-          ? 'Log-odds of default per bucket, with a 95% interval, and the number of observations behind each bucket on the same axis. The candidate curves are fitted with the estimator the model uses, on the rows the model uses, with the same spline basis, not by least squares through the bucket means.'
+          ? 'Log-odds of default per bucket with a 95% interval, and the observation count per bucket. Candidate curves are fitted with the model estimator and spline basis, not least squares through bucket means.'
           : 'Levels ordered by log-odds of default, with the number of observations beside each. The vertical rule is the book base rate.'}
         right={data.kind === 'numeric' && (
           <div className="flex items-center gap-1">

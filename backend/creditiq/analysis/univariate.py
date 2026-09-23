@@ -85,6 +85,16 @@ def describe_numeric(x: pd.Series, name: str = "",
     mode_share = float(counts[top_i] / n * 100)
 
     fence_lo, fence_hi = q[3] - 3 * iqr, q[5] + 3 * iqr
+    # The values a column actually REPEATS. A histogram spreads a repeated
+    # value across a bar and a percentile table steps over it; this is where
+    # a sentinel code ("0" meaning no score, "-1" meaning unknown) becomes
+    # visible as itself.
+    order = np.argsort(-counts)[:6]
+    top_values = [{"value": float(vals[i]), "count": int(counts[i]),
+                   "pct": float(counts[i] / n * 100)} for i in order]
+    # Median absolute deviation: a spread that a single extreme value cannot
+    # move, unlike the standard deviation beside it.
+    mad = float(np.median(np.abs(v - median)))
     out |= {
         "mean": mean, "std": std, "median": median,
         "min": float(v.min()), "max": float(v.max()),
@@ -99,7 +109,48 @@ def describe_numeric(x: pd.Series, name: str = "",
         "negative_pct": float((v < 0).mean() * 100),
         "n_outliers": int(((v < fence_lo) | (v > fence_hi)).sum()),
         "outlier_fence": [float(fence_lo), float(fence_hi)],
+        "range": float(v.max() - v.min()),
+        "mad": mad,
+        "top_values": top_values,
+        # Whether every value is a whole number, which usually means a code,
+        # a count or a score rather than a measurement.
+        "integral": bool(np.all(v == np.round(v))),
+        # How far the tail runs past the middle, in plain multiples.
+        "p99_over_p50": (float(q[8] / q[4]) if abs(q[4]) > 1e-12 else None),
     }
+
+    # A value sitting well outside the body of the distribution while holding
+    # real mass is almost never a measurement: it is a code. Credit scores of
+    # zero are "no score", not the worst score, and a model told otherwise
+    # puts the unscored population at the bottom of the ranking.
+    # The body is measured with the candidate REMOVED. A sentinel holding
+    # several percent of the column drags the percentiles far enough to
+    # contain itself, so testing it against a body it helped define finds
+    # nothing — which is exactly what happened to a credit score of zero
+    # holding 7.7% of the rows.
+    for tv in top_values:
+        if tv["pct"] < 1.0:
+            continue
+        rest = v[v != tv["value"]]
+        if rest.size < 100:
+            continue
+        r05, r25, r75, r95 = np.percentile(rest, [5, 25, 75, 95])
+        r_iqr = float(r75 - r25) or 1e-9
+        gap = (r05 - tv["value"]) if tv["value"] < r05 else (tv["value"] - r95)
+        if tv["value"] < r05 or tv["value"] > r95:
+            if gap > 1.5 * r_iqr:
+                out["findings"].append({
+                    "severity": "serious", "label": "Possible sentinel value",
+                    "detail": (
+                        f"{tv['value']:,.4g} holds {tv['pct']:.1f}% of rows and sits "
+                        f"{gap / r_iqr:.1f} interquartile ranges outside everything "
+                        f"else in the column (the rest runs {r05:,.4g} to "
+                        f"{r95:,.4g}). A repeated value that far from the body is "
+                        f"usually a code for unknown rather than a measurement. "
+                        f"Read as a number it ranks with the extreme, which is not "
+                        f"what it means — map it to missing, or give it its own "
+                        f"bin, before modelling on this column.")})
+                break
 
     # Histograms on EQUAL-WIDTH bins. The binning panels below use quantile
     # bins, which carry equal counts by construction and draw a flat

@@ -112,6 +112,10 @@ def _frames(cfg: LgdSelectionConfig) -> tuple[pd.DataFrame, pd.DataFrame]:
     after it are the out-of-time yardstick."""
     df = store.analysis_frame(cfg.portfolio)
     d = df.loc[df["default_flag"] == 1].copy()
+    # Only defaults with an OBSERVED severity: on an ingested tape the rest
+    # are NaN (unreported), not zero, and would poison every fit.
+    if "lgd_realised" in d.columns:
+        d = d.loc[d["lgd_realised"].notna()]
     d = LGD.attach_macro(d, mevpanel.monthly_panel(), tuple(cfg.mev_terms))
     cut = pd.Timestamp(cfg.oot_from)
     return d.loc[pd.DatetimeIndex(d["performance_date"]) < cut], d
@@ -411,7 +415,7 @@ def joint_rows(cfg: LgdSelectionConfig, cores: list[Core],
             try:
                 f = _fit(train, spec)
             except (ValueError, KeyError) as e:
-                by_hash[h] = {"hash": h, "name": friendly_name(h),
+                by_hash[h] = {"hash": h, "name": friendly_name(h, kind="lgd"),
                               "spec": spec.to_dict(), "error": str(e),
                               "filtered": True, "filter_reason": "fit_failed",
                               "lineage": [{"core": core.name,
@@ -427,7 +431,7 @@ def joint_rows(cfg: LgdSelectionConfig, cores: list[Core],
                 "hash": h,
                 # The severity half's own name — the same name the LGD surface
                 # and the collated Model name will use for this specification.
-                "name": friendly_name(h),
+                "name": friendly_name(h, kind="lgd"),
                 "spec": spec.to_dict(),
                 "lineage": [{"core": core.name, "method": "stepwise+mev_enum"}],
                 "n_predictors": len(core.drivers) + len(combo),

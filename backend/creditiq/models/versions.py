@@ -109,6 +109,95 @@ class Version:
         return asdict(self)
 
 
+def spec_changes(parent: dict, child: dict) -> list[str]:
+    """Every difference between two saved specifications, in the analyst's terms.
+
+    WHAT changed is a fact about the two specifications, so it is derived from
+    them rather than accumulated from the interface. The fork gate used to
+    record the label of the ONE edit that tripped it: rebinning a variable and
+    then adding another produced a record naming only the rebinning, and the
+    second change existed nowhere. A rationale is still asked for once — that
+    is a judgement, and one departure has one reason — but the change list is
+    measured here, at save, against the parent.
+    """
+    out: list[str] = []
+
+    def var_map(s: dict) -> dict[str, dict]:
+        return {v["column"]: v for v in (s.get("variables") or [])}
+
+    pv, cv = var_map(parent), var_map(child)
+    for col in cv.keys() - pv.keys():
+        t = cv[col].get("treatment")
+        out.append(f"+ {col}{f' ({t})' if t else ''}")
+    for col in pv.keys() - cv.keys():
+        out.append(f"− {col}")
+    for col in sorted(cv.keys() & pv.keys()):
+        a, b = pv[col], cv[col]
+        if a.get("treatment") != b.get("treatment"):
+            out.append(f"{col}: {a.get('treatment')} → {b.get('treatment')}")
+            continue
+        # Same treatment, different shape: the bin edges or the spline knots
+        # were moved by hand. Worth recording, and not visible in a name.
+        for field_, word in (("edges", "bin edges"), ("knots", "knots")):
+            if (a.get(field_) or None) != (b.get(field_) or None):
+                out.append(f"{col}: {word} changed")
+                break
+        else:
+            for field_, word in (("max_bins", "bin count"), ("n_knots", "knot count")):
+                if a.get(field_) != b.get(field_):
+                    out.append(f"{col}: {word} {a.get(field_)} → {b.get(field_)}")
+                    break
+
+    def mev_set(s: dict) -> set[str]:
+        return {f"{m['key']}@{m.get('transform', 'level')}@{m.get('lag_months', 0)}"
+                for m in (s.get("mevs") or [])}
+
+    pm, cm = mev_set(parent), mev_set(child)
+    out += [f"+ macro {t}" for t in sorted(cm - pm)]
+    out += [f"− macro {t}" for t in sorted(pm - cm)]
+
+    if parent.get("estimator") != child.get("estimator"):
+        out.append(f"estimator {parent.get('estimator')} → {child.get('estimator')}")
+    ps, cs = parent.get("sample") or {}, child.get("sample") or {}
+    if ps.get("oot_from") != cs.get("oot_from"):
+        out.append(f"out of time from {ps.get('oot_from')} → {cs.get('oot_from')}")
+    if ps.get("test_fraction") != cs.get("test_fraction"):
+        out.append(f"test fraction {ps.get('test_fraction')} → {cs.get('test_fraction')}")
+
+    # ── the severity half ──
+    pl, cl = parent.get("lgd") or {}, child.get("lgd") or {}
+    pa, ca = pl.get("assumed_lgd"), cl.get("assumed_lgd")
+    if pa != ca:
+        if ca is None:
+            out.append("severity: assumption replaced by a fitted model")
+        elif pa is None:
+            out.append(f"severity: assumed {ca:.0%}")
+        else:
+            out.append(f"severity assumed {pa:.0%} → {ca:.0%}")
+    for field_, word in (("drivers", "LGD"), ("categoricals", "LGD")):
+        a, b = set(pl.get(field_) or []), set(cl.get(field_) or [])
+        out += [f"{word} + {d}" for d in sorted(b - a)]
+        out += [f"{word} − {d}" for d in sorted(a - b)]
+    return out
+
+
+def _with_changes(fork: dict, parent_hash: str | None, child_spec: dict) -> dict:
+    """Attach the measured change list to a fork record.
+
+    The rationale in `fork` is the analyst's; `changes` is arithmetic on the
+    two specifications. A version with a parent but no gate record still gets
+    the list, so the lineage edge can say what moved."""
+    if not parent_hash:
+        return fork
+    parent = load(parent_hash)
+    if parent is None:
+        return fork
+    changes = spec_changes(parent.spec, child_spec)
+    if not changes:
+        return fork
+    return {**fork, "changes": changes}
+
+
 def _path(hash_: str) -> Path:
     return VERSIONS_DIR / f"{hash_}.json"
 
@@ -157,8 +246,12 @@ def save(spec: ModelSpec, metrics: dict, ecl: dict | None = None,
         notes=notes or (inherit.notes if inherit else ""),
         parent_hash=parent_hash or (existing.parent_hash if existing
                                     else prior.parent_hash if prior else None),
-        fork=fork or (existing.fork if existing else
-                      prior.fork if prior else {}),
+        fork=_with_changes(
+            fork or (existing.fork if existing else
+                     prior.fork if prior else {}),
+            parent_hash or (existing.parent_hash if existing
+                            else prior.parent_hash if prior else None),
+            spec.to_dict()),
         origin=origin or (existing.origin if existing else
                           prior.origin if prior else {}),
         replaced_hash=(prior.hash if prior and prior.hash != h else None),
@@ -320,6 +413,10 @@ def lineage(portfolio: str) -> dict:
         "edges": [{"from": parent, "to": v.hash,
                    "reason_code": v.fork.get("reason_code"),
                    "justification": v.fork.get("justification"),
+                   # Every measured difference, and the gate's own label for
+                   # records written before the list was measured.
+                   "changes": v.fork.get("changes")
+                   or ([v.fork["change"]] if v.fork.get("change") else []),
                    "change": v.fork.get("change")}
                   for v in vs
                   if (parent := v.parent_hash

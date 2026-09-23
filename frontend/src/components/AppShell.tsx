@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { api, isPortfolioKey } from '../lib/api'
 import { useUi } from '../lib/store'
 import { STATE_COLOUR, rollUpSummary, useProgress } from '../lib/progress'
+import { consumeFingerprintBlessing } from '../lib/fingerprint'
 import PortfolioSwitcher from './PortfolioSwitcher'
 import { CoBrand, type CoBrandVariant } from './Brand'
 import ForkDialog from './ForkDialog'
@@ -31,6 +32,12 @@ const SURFACES: Surface[] = [
 export default function AppShell() {
   const { portfolio } = useParams()
   const { pathname } = useLocation()
+  // The scrolling element is this <main>, not the window, so the browser's
+  // own scroll reset on navigation never fires. Without this a surface
+  // opened from the bottom of another (validate a tape, land on its Panel)
+  // opened mid-page.
+  const mainRef = useRef<HTMLElement>(null)
+  useEffect(() => { mainRef.current?.scrollTo({ top: 0 }) }, [pathname])
   // Stage state rides on the navigation that already exists rather than on a row
   // of its own: a second row listing the same destinations was duplication, and
   // the state was the only part of it that was not.
@@ -38,13 +45,14 @@ export default function AppShell() {
   const nav = useNavigate()
   const { theme, toggleTheme, setPaletteOpen } = useUi()
   const brandVariant = useUi((s) => s.brandVariant) as CoBrandVariant
-  const { data: health } = useQuery({ queryKey: ['health'], queryFn: api.health,
-                                      refetchInterval: 20_000,
-                                      // the watchdog must run in a background
-                                      // tab too — a rebuild happens in a
-                                      // terminal precisely while this tab is
-                                      // not the one being looked at
-                                      refetchIntervalInBackground: true })
+  const { data: health, isError: healthDown } = useQuery({
+    queryKey: ['health'], queryFn: api.health,
+    refetchInterval: 20_000,
+    // the watchdog must run in a background
+    // tab too — a rebuild happens in a
+    // terminal precisely while this tab is
+    // not the one being looked at
+    refetchIntervalInBackground: true })
   // The panels can be rebuilt under a running session — `make data` in a
   // terminal, or the in-app generate button in another tab. Every result on
   // screen then describes a dataset that no longer exists. The fingerprint
@@ -54,7 +62,11 @@ export default function AppShell() {
   useEffect(() => {
     const fp = health?.data_fingerprint
     if (!fp) return
-    if (fpRef.current && fpRef.current !== fp) window.location.reload()
+    if (fpRef.current && fpRef.current !== fp
+        && !consumeFingerprintBlessing()) {
+      window.location.reload()
+      return
+    }
     fpRef.current = fp
   }, [health?.data_fingerprint])
   // A fresh clone has no panels — they are generated, not shipped. Until they
@@ -80,13 +92,37 @@ export default function AppShell() {
   // Which kind of data the badge below should own up to. Only while a book is
   // open: the roll-up spans several at once and cannot claim either label.
   const books = useQuery({ queryKey: ['portfolios'], queryFn: api.portfolios })
-  const ingested = !!pkey
-    && books.data?.find((b) => b.key === pkey)?.source === 'ingested'
+  // Three states, not two. Until the books load, which kind of data is on
+  // screen is UNKNOWN — and a boolean collapses unknown into "synthetic",
+  // which put the words "Synthetic demonstration data" over a real loan tape
+  // for the whole of a cold start. Wrong in the one direction this badge
+  // exists to prevent. Unknown shows nothing at all.
+  const source = pkey
+    ? books.data?.find((b) => b.key === pkey)?.source ?? null
+    : null
+  const ingested = source === 'ingested'
   // An ingested book has no entry in the persisted per-book records; give it
   // one before any surface reads it. Idempotent, so the three synthetic
   // books pass through untouched.
   const ensureBook = useUi((s) => s.ensureBook)
   useEffect(() => { if (pkey) ensureBook(pkey) }, [pkey, ensureBook])
+  // A draft nobody has touched takes the book's own out-of-time boundary.
+  // The compiled default suits the synthetic panels; an ingested tape stated
+  // its own at ingestion, and a workbench that ignored it split a four-year
+  // tape at a date seven months in. Only an untouched draft is seeded — a
+  // chosen date, or a fitted model, is never moved from under the analyst.
+  const draftSpec = useUi((s) => (pkey ? s.pdSpec[pkey] : undefined))
+  const draftFitted = useUi((s) => (pkey ? s.fitted[pkey] : null))
+  const setPdSpec = useUi((s) => s.setPdSpec)
+  useEffect(() => {
+    if (!pkey || !draftSpec || draftFitted) return
+    const book = books.data?.find((b) => b.key === pkey)
+    if (!book?.oot_from || book.source !== 'ingested') return
+    const untouched = draftSpec.variables.length === 0
+    if (untouched && draftSpec.ootFrom !== book.oot_from) {
+      setPdSpec(pkey, { ...draftSpec, ootFrom: book.oot_from })
+    }
+  }, [pkey, books.data, draftSpec, draftFitted, setPdSpec])
   const loadedMark = useUi((s) => (pkey ? s.loaded[pkey] : null))
   const setLoadedMark = useUi((s) => s.setLoaded)
   const vlist = useQuery({ queryKey: ['versions', portfolio],
@@ -194,14 +230,16 @@ export default function AppShell() {
               actually on screen. A generated book must never be mistaken for a
               real one — and, since tapes can be ingested, a real book must
               never carry the synthetic label either. */}
-          <span className="flex items-center gap-1.5 rounded border border-hairline px-1.5 py-0.5"
-                title={ingested
-                  ? 'This book was ingested from an uploaded loan tape. The loans and their performance are real; the macroeconomic scenarios remain the published supervisory paths.'
-                  : 'This book is generated. No real borrower data is present.'}>
-            <span className="h-1.5 w-1.5 rounded-full"
-                  style={{ background: ingested ? 'var(--status-good)' : 'var(--status-warning)' }} />
-            {ingested ? 'Ingested loan tape' : 'Synthetic demonstration data'}
-          </span>
+          {source && (
+            <span className="flex items-center gap-1.5 rounded border border-hairline px-1.5 py-0.5"
+                  title={ingested
+                    ? 'This book was ingested from an uploaded loan tape. The loans and their performance are real; the macroeconomic scenarios remain the published supervisory paths.'
+                    : 'This book is generated. No real borrower data is present.'}>
+              <span className="h-1.5 w-1.5 rounded-full"
+                    style={{ background: ingested ? 'var(--status-good)' : 'var(--status-warning)' }} />
+              {ingested ? 'Ingested loan tape' : 'Synthetic demonstration data'}
+            </span>
+          )}
         </div>
 
         <div className="ml-auto flex items-center gap-2">
@@ -294,13 +332,25 @@ export default function AppShell() {
       </div>
 
 
+      {/* The server going quiet must be said out loud, once, at the top —
+          the alternative was every surface pulsing skeletons with no
+          explanation. The health query keeps polling, so this clears itself
+          the moment the server answers again. */}
+      {healthDown && (
+        <div className="flex shrink-0 items-center gap-2 border-b border-hairline bg-raised px-4 py-1.5 text-xs text-ink-secondary">
+          <span className="h-1.5 w-1.5 shrink-0 rounded-full"
+                style={{ background: 'var(--status-critical)' }} />
+          The server is not responding. Results on screen are unaffected; new requests will fail until it returns. Retrying automatically.
+        </div>
+      )}
+
       <ForkDialog />
 
       {/* A workspace does not get better by being wider. Past roughly this
           point the columns stop gaining anything and the eye has to travel the
           whole window to pair a label with its value, so the content is capped
           and centred rather than stretched to fill. */}
-      <main className="thin-scroll min-h-0 flex-1 overflow-y-auto">
+      <main ref={mainRef} className="thin-scroll min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-[1560px]">
           <ErrorBoundary>
             {dataReady ? <Outlet /> : <InitSurface />}

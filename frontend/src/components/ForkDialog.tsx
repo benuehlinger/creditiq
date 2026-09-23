@@ -55,7 +55,9 @@ export default function ForkDialog() {
               and a saved model does not change. Changing{' '}
               <span className="font-mono text-tiny text-ink">{pending.label}</span>{' '}
               forks it: a new specification, a new hash, a new name, and{' '}
-              {parentName} recorded as its parent.
+              {parentName} recorded as its parent. One rationale covers the
+              fork; every difference from {parentName} is measured when the
+              model is saved, so keep editing freely after this.
             </>
           ) : (
             <>
@@ -63,8 +65,9 @@ export default function ForkDialog() {
               <span className="font-medium text-ink">{parentName}</span>
               {origin!.rank != null && <> (rank {origin!.rank})</>}. Changing{' '}
               <span className="font-mono text-tiny text-ink">{pending.label}</span>{' '}
-              departs from that recorded result. The departure and your
-              rationale go into the audit record when the model is saved.
+              departs from that recorded result. This rationale covers the
+              departure; every difference from {parentName} is measured when
+              the model is saved, so keep editing freely after this.
             </>
           )}
         </p>
